@@ -1,0 +1,57 @@
+{
+  "name": "formstr-auth",
+  "version": "0.5.4",
+  "description": "Cross-platform Nostr authentication library with NIP-55 support and NIP-46 Remote Signer.",
+  "author": "ashu01304",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/formstr-auth.js",
+  "module": "./dist/formstr-auth.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/formstr-auth.js",
+      "default": "./dist/formstr-auth.js"
+    }
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "qrcode.react": "^4.2.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0",
+    "nostr-tools": ">=2.0.0",
+    "nostr-signer-capacitor-plugin": "^0.0.5"
+  },
+  "peerDependenciesMeta": {
+    "nostr-signer-capacitor-plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.2.1",
+    "nostr-tools": "^2.15.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8",
+    "vite-plugin-css-injected-by-js": "^3.5.1",
+    "vite-plugin-dts": "^3.9.1"
+  }
+}

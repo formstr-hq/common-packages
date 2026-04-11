@@ -1,0 +1,14 @@
+{
+  "name": "formstr-common-packages",
+  "private": true,
+  "description": "Monorepo for shared Formstr packages",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev": "pnpm -r dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}

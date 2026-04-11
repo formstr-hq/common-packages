@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Build
+dist/
+**/dist/
+dist-ssr/
+*.local
+
+# Environment
+.env
+.env.*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Project specific
+android/
+ios/
+capacitor.config.ts
+example/dist/
+**/example/package-lock.json
+packages/formstr-auth/package-lock.json

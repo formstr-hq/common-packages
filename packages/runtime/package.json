@@ -1,0 +1,16 @@
+{
+  "name": "@formstr/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Formstr Shared Nostr Runtime",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.15.0"
+  }
+}

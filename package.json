@@ -1,0 +1,12 @@
+{
+  "name": "common-packages",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Common shared packages for the Formstr ecosystem",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "license": "MIT"
+}

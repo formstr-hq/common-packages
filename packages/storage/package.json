@@ -1,0 +1,42 @@
+{
+  "name": "@formstr/storage",
+  "version": "0.1.0",
+  "description": "Decentralized storage module for Formstr - Blossom blob storage with Nostr kind 24242 auth and NIP-44 v2 encryption",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3"
+  },
+  "keywords": [
+    "nostr",
+    "blossom",
+    "formstr",
+    "storage",
+    "nip-44",
+    "decentralized"
+  ],
+  "license": "MIT"
+}

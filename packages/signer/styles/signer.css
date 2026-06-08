@@ -166,6 +166,25 @@ textarea.nostr-signer__input {
   margin-top: 12px;
 }
 
+.nostr-signer__qr-image {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0;
+}
+
+.nostr-signer__qr-image:empty {
+  display: none;
+}
+
+.nostr-signer__qr-image svg {
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  background: #ffffff;
+  padding: 8px;
+  border-radius: 6px;
+}
+
 .nostr-signer__qr-uri,
 .nostr-signer__ncryptsec-display {
   background: #f4f4f5;

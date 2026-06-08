@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { Signer } from '../core/signer.js';
 import type { RelayMismatchHandler, StoredAccount } from '../core/types.js';
@@ -84,6 +85,7 @@ export function renderLoginHtml(): string {
         </form>
         <div class="nostr-signer__qr" data-region="nostrconnect-qr" hidden>
           <p class="nostr-signer__hint">Scan or paste this into your remote signer:</p>
+          <div class="nostr-signer__qr-image" data-region="nostrconnect-qr-image" aria-hidden="true"></div>
           <pre class="nostr-signer__qr-uri" data-region="nostrconnect-uri"></pre>
           <p class="nostr-signer__status" data-region="nostrconnect-status">Waiting for remote signer to pair...</p>
           <button class="nostr-signer__button nostr-signer__button--secondary" type="button" data-action="nostrconnect-cancel">Cancel</button>
@@ -289,13 +291,31 @@ export function attachLoginListeners(
   const ncForm = q<HTMLFormElement>('[data-form="nostrconnect"]');
   const ncQrRegion = q<HTMLDivElement>('[data-region="nostrconnect-qr"]');
   const ncQrUri = q<HTMLElement>('[data-region="nostrconnect-uri"]');
+  const ncQrImage = q<HTMLDivElement>('[data-region="nostrconnect-qr-image"]');
   const ncStatus = q<HTMLElement>('[data-region="nostrconnect-status"]');
+  let ncQrToken = 0;
 
   const resetNostrConnect = (): void => {
     ncForm.hidden = false;
     ncQrRegion.hidden = true;
     ncQrUri.textContent = '';
+    ncQrImage.innerHTML = '';
     ncStatus.textContent = 'Waiting for remote signer to pair...';
+    ncQrToken++;
+  };
+
+  const renderNostrConnectQr = async (uri: string): Promise<void> => {
+    const token = ++ncQrToken;
+    try {
+      const svg = await QRCode.toString(uri, {
+        type: 'svg',
+        margin: 1,
+        errorCorrectionLevel: 'M',
+      });
+      if (token === ncQrToken) ncQrImage.innerHTML = svg;
+    } catch {
+      // QR rendering is a nice-to-have — the URI text remains usable.
+    }
   };
 
   on(ncForm, 'submit', async (ev) => {
@@ -326,6 +346,7 @@ export function attachLoginListeners(
         signal: nostrConnectAbort.signal,
         onUri: (uri) => {
           ncQrUri.textContent = uri;
+          void renderNostrConnectQr(uri);
         },
       });
       handlers.onLogin?.(account);

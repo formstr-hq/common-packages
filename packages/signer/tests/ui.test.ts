@@ -362,6 +362,65 @@ describe('attachLoginListeners', () => {
       expect(onLogin).toHaveBeenCalledWith(account);
     });
 
+    it('renders an SVG QR code for the URI alongside the text', async () => {
+      const signer = makeSignerStub();
+      // Keep the flow pending so we can inspect the QR region while it's live.
+      signer.loginWithNostrConnect.mockImplementation(
+        (opts) =>
+          new Promise<StoredAccount>(() => {
+            opts.onUri('nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc');
+          }),
+      );
+      attachLoginListeners(root, asSigner(signer));
+      const form = root.querySelector<HTMLFormElement>('[data-form="nostrconnect"]')!;
+      (form.elements.namedItem('relays') as HTMLInputElement).value = 'wss://a.test';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      // qrcode.toString resolves on microtasks — flush a couple of times to settle.
+      await flush();
+      await flush();
+      const qrRegion = root.querySelector<HTMLDivElement>(
+        '[data-region="nostrconnect-qr-image"]',
+      )!;
+      const svg = qrRegion.querySelector('svg');
+      expect(svg).toBeTruthy();
+      // QR SVGs always have a viewBox covering the module grid.
+      expect(svg!.getAttribute('viewBox')).toMatch(/^0 0 \d+ \d+$/);
+      // The URI text remains visible alongside the QR for copy-paste.
+      expect(root.querySelector('[data-region="nostrconnect-uri"]')!.textContent).toBe(
+        'nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc',
+      );
+    });
+
+    it('clears the QR image when the user cancels', async () => {
+      const signer = makeSignerStub();
+      signer.loginWithNostrConnect.mockImplementation(
+        (opts) =>
+          new Promise<StoredAccount>((_, reject) => {
+            opts.onUri('nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc');
+            opts.signal!.addEventListener('abort', () => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      attachLoginListeners(root, asSigner(signer));
+      const form = root.querySelector<HTMLFormElement>('[data-form="nostrconnect"]')!;
+      (form.elements.namedItem('relays') as HTMLInputElement).value = 'wss://a.test';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+      await flush();
+      const qrRegion = root.querySelector<HTMLDivElement>(
+        '[data-region="nostrconnect-qr-image"]',
+      )!;
+      expect(qrRegion.querySelector('svg')).toBeTruthy();
+      root
+        .querySelector<HTMLButtonElement>('[data-action="nostrconnect-cancel"]')!
+        .click();
+      await flush();
+      expect(qrRegion.innerHTML).toBe('');
+    });
+
     it('omits perms when the perms field is empty', async () => {
       const signer = makeSignerStub();
       signer.loginWithNostrConnect.mockResolvedValue(fakeAccount('nip46'));

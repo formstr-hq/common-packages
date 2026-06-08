@@ -1,0 +1,178 @@
+import { getEventHash, nip19, type Event as NostrEvent, type EventTemplate } from 'nostr-tools';
+import type { ActiveSigner } from './core/types.js';
+
+/**
+ * Subset of `nostr-signer-capacitor-plugin`'s exported `NostrSignerPlugin`
+ * that we depend on. Signatures intentionally mirror that library
+ * (positional args, per-call `packageName`) so the real plugin is
+ * structurally assignable here — and any mock written against this
+ * interface is a faithful stand-in. The conformance is enforced by a
+ * compile-time guard in `tests/helpers/mockAndroidPlugin.ts`.
+ */
+export interface AndroidSignerAppInfo {
+  name: string;
+  packageName: string;
+  iconUrl?: string;
+}
+
+export interface AndroidSignerPlugin {
+  setPackageName(packageName: string): Promise<void>;
+  getInstalledSignerApps(): Promise<{ apps: AndroidSignerAppInfo[] }>;
+  getPublicKey(
+    packageName?: string,
+    permissions?: string,
+  ): Promise<{ npub: string; package: string }>;
+  signEvent(
+    packageName: string,
+    eventJson: string,
+    id: string,
+    npub: string,
+  ): Promise<{ signature: string; id: string; event: string }>;
+  nip04Encrypt(
+    packageName: string,
+    plainText: string,
+    id: string,
+    pubKey: string,
+    npub: string,
+  ): Promise<{ result: string; id: string }>;
+  nip04Decrypt(
+    packageName: string,
+    encryptedText: string,
+    id: string,
+    pubKey: string,
+    npub: string,
+  ): Promise<{ result: string; id: string }>;
+  nip44Encrypt(
+    packageName: string,
+    plainText: string,
+    id: string,
+    pubKey: string,
+    npub: string,
+  ): Promise<{ result: string; id: string }>;
+  nip44Decrypt(
+    packageName: string,
+    encryptedText: string,
+    id: string,
+    pubKey: string,
+    npub: string,
+  ): Promise<{ result: string; id: string }>;
+}
+
+export interface AndroidLoginOptions {
+  /** The Android package name of the external signer app (e.g. com.greenart7c3.nostrsigner). */
+  packageName?: string;
+  /** Override the plugin for this call. Falls back to SignerConfig.androidSignerPlugin. */
+  plugin?: AndroidSignerPlugin;
+}
+
+export class AndroidSigner implements ActiveSigner {
+  readonly #plugin: AndroidSignerPlugin;
+  readonly #packageName: string;
+  readonly #npub: string;
+  readonly #pubkey: string;
+
+  constructor(
+    plugin: AndroidSignerPlugin,
+    packageName: string,
+    npub: string,
+    pubkey: string,
+  ) {
+    this.#plugin = plugin;
+    this.#packageName = packageName;
+    this.#npub = npub;
+    this.#pubkey = pubkey;
+  }
+
+  async getPublicKey(): Promise<string> {
+    return this.#pubkey;
+  }
+
+  async signEvent(event: EventTemplate): Promise<NostrEvent> {
+    const unsigned = { ...event, pubkey: this.#pubkey };
+    const eventId = getEventHash(unsigned);
+    const result = await this.#plugin.signEvent(
+      this.#packageName,
+      JSON.stringify(unsigned),
+      eventId,
+      this.#npub,
+    );
+    return JSON.parse(result.event) as NostrEvent;
+  }
+
+  async nip04Encrypt(peerPubkey: string, plaintext: string): Promise<string> {
+    const { result } = await this.#plugin.nip04Encrypt(
+      this.#packageName,
+      plaintext,
+      '',
+      peerPubkey,
+      this.#npub,
+    );
+    return result;
+  }
+
+  async nip04Decrypt(peerPubkey: string, ciphertext: string): Promise<string> {
+    const { result } = await this.#plugin.nip04Decrypt(
+      this.#packageName,
+      ciphertext,
+      '',
+      peerPubkey,
+      this.#npub,
+    );
+    return result;
+  }
+
+  async nip44Encrypt(peerPubkey: string, plaintext: string): Promise<string> {
+    const { result } = await this.#plugin.nip44Encrypt(
+      this.#packageName,
+      plaintext,
+      '',
+      peerPubkey,
+      this.#npub,
+    );
+    return result;
+  }
+
+  async nip44Decrypt(peerPubkey: string, ciphertext: string): Promise<string> {
+    const { result } = await this.#plugin.nip44Decrypt(
+      this.#packageName,
+      ciphertext,
+      '',
+      peerPubkey,
+      this.#npub,
+    );
+    return result;
+  }
+}
+
+export interface AndroidLoginResult {
+  signer: AndroidSigner;
+  pubkey: string;
+  npub: string;
+  packageName: string;
+}
+
+export async function loginWithAndroidSigner(
+  plugin: AndroidSignerPlugin,
+  packageName?: string,
+): Promise<AndroidLoginResult> {
+  if (packageName) {
+    await plugin.setPackageName(packageName);
+  }
+  const { npub, package: pluginPackage } = await plugin.getPublicKey(packageName);
+  const resolvedPackage = pluginPackage || packageName;
+  if (!resolvedPackage) {
+    throw new Error(
+      '@formstr/signer: android signer did not return a package name and none was supplied',
+    );
+  }
+  const decoded = nip19.decode(npub);
+  if (decoded.type !== 'npub') {
+    throw new Error('@formstr/signer: android signer returned a non-npub identifier');
+  }
+  return {
+    signer: new AndroidSigner(plugin, resolvedPackage, npub, decoded.data),
+    pubkey: decoded.data,
+    npub,
+    packageName: resolvedPackage,
+  };
+}

@@ -75,6 +75,36 @@ describe('NIP-46 (bunker URI flow)', () => {
     expect(verifyEvent(signed)).toBe(true);
   });
 
+  it('sends the connect request with the bunker URI secret and an empty perms slot by default', async () => {
+    const pool = new MockPool();
+    const bunker = new MockBunker({ pool, relays: [RELAY] });
+    const s = createSigner({ storage: makeMockStorage() });
+    await s.loginWithBunkerUri(bunker.buildBunkerUri('uri-secret-xyz'), {
+      pool: pool.asPool(),
+    });
+    // [pubkey, secret, perms] — perms is an empty string when not requested.
+    expect(bunker.lastConnectParams).toEqual([
+      bunker.bunkerPubkey,
+      'uri-secret-xyz',
+      '',
+    ]);
+  });
+
+  it('forwards the requested perms as the 3rd param of the connect request', async () => {
+    const pool = new MockPool();
+    const bunker = new MockBunker({ pool, relays: [RELAY] });
+    const s = createSigner({ storage: makeMockStorage() });
+    await s.loginWithBunkerUri(bunker.buildBunkerUri(), {
+      pool: pool.asPool(),
+      perms: ['sign_event:1', 'nip44_encrypt', 'nip44_decrypt'],
+    });
+    expect(bunker.lastConnectParams).toEqual([
+      bunker.bunkerPubkey,
+      '',
+      'sign_event:1,nip44_encrypt,nip44_decrypt',
+    ]);
+  });
+
   it('round-trips nip44 in both directions between the bunker-backed signer and a peer', async () => {
     const pool = new MockPool();
     const userSecretKey = generateSecretKey();
@@ -381,6 +411,7 @@ describe('NIP-46 (nostrconnect QR flow)', () => {
       onUri: (uri) => bunker.scanNostrConnectURI(uri),
       pool: pool.asPool(),
       onRelayMismatch,
+      metadata: { name: 'tester' },
     });
 
     const account = await loginPromise;
@@ -390,7 +421,7 @@ describe('NIP-46 (nostrconnect QR flow)', () => {
 
   it('times out when no bunker pairs within the timeout window', async () => {
     const pool = new MockPool();
-    const s = createSigner({ storage: makeMockStorage() });
+    const s = createSigner({ storage: makeMockStorage(), appName: 'tester' });
     await expect(
       s.loginWithNostrConnect({
         relays: [RELAY],
@@ -399,5 +430,95 @@ describe('NIP-46 (nostrconnect QR flow)', () => {
         timeoutMs: 50,
       }),
     ).rejects.toThrow();
+  });
+
+  describe('app metadata in the nostrconnect URI', () => {
+    it('emits the SignerConfig appName/appUrl/appImage as URI metadata when no per-call metadata is given', async () => {
+      const pool = new MockPool();
+      const s = createSigner({
+        storage: makeMockStorage(),
+        appName: 'config-app',
+        appUrl: 'https://config.example',
+        appImage: 'https://config.example/icon.png',
+      });
+      const onUri = vi.fn();
+      // Don't await — we just want the URI; cancel before resolving.
+      const ac = new AbortController();
+      const loginPromise = s
+        .loginWithNostrConnect({
+          relays: [RELAY],
+          onUri,
+          pool: pool.asPool(),
+          signal: ac.signal,
+        })
+        .catch(() => undefined);
+      const uri: string = onUri.mock.calls[0][0];
+      const qs = new URL(uri.replace('nostrconnect://', 'https://placeholder/?').replace('?', '&')).searchParams;
+      // URI is nostrconnect://<pubkey>?... — normalize by stripping the scheme/pubkey.
+      const params = new URLSearchParams(uri.split('?')[1]);
+      expect(params.get('name')).toBe('config-app');
+      expect(params.get('url')).toBe('https://config.example');
+      expect(params.get('image')).toBe('https://config.example/icon.png');
+      void qs; // silence unused
+      ac.abort();
+      await loginPromise;
+    });
+
+    it('per-call metadata wins over the SignerConfig defaults', async () => {
+      const pool = new MockPool();
+      const s = createSigner({
+        storage: makeMockStorage(),
+        appName: 'config-app',
+        appUrl: 'https://config.example',
+      });
+      const onUri = vi.fn();
+      const ac = new AbortController();
+      const loginPromise = s
+        .loginWithNostrConnect({
+          relays: [RELAY],
+          onUri,
+          pool: pool.asPool(),
+          signal: ac.signal,
+          metadata: { name: 'per-call-app', image: 'https://per-call.example/icon.png' },
+        })
+        .catch(() => undefined);
+      const uri: string = onUri.mock.calls[0][0];
+      const params = new URLSearchParams(uri.split('?')[1]);
+      // Per-call name + image override; per-call url is undefined so the
+      // config default for url should win.
+      expect(params.get('name')).toBe('per-call-app');
+      expect(params.get('image')).toBe('https://per-call.example/icon.png');
+      expect(params.get('url')).toBe('https://config.example');
+      ac.abort();
+      await loginPromise;
+    });
+
+    it('throws when neither config nor per-call metadata supplies a name', async () => {
+      const pool = new MockPool();
+      const s = createSigner({ storage: makeMockStorage() });
+      await expect(
+        s.loginWithNostrConnect({
+          relays: [RELAY],
+          onUri: () => {},
+          pool: pool.asPool(),
+        }),
+      ).rejects.toThrow(/requires an app name/);
+    });
+
+    it('the standalone initiateNostrConnect does not enforce a name (lower-level API)', async () => {
+      // Sanity check that the enforcement lives at the Signer layer — the
+      // nostr-tools-backed primitive still accepts a metadata-less call so
+      // it stays usable for non-Amber bunkers or test fixtures.
+      const init = initiateNostrConnect({
+        relays: [RELAY],
+        timeoutMs: 50,
+      });
+      expect(init.uri).toMatch(/^nostrconnect:\/\//);
+      const params = new URLSearchParams(init.uri.split('?')[1]);
+      expect(params.has('name')).toBe(false);
+      // Drain the pairing promise so the timeout's rejection doesn't escape
+      // the test as an unhandled rejection.
+      await init.complete.catch(() => undefined);
+    });
   });
 });

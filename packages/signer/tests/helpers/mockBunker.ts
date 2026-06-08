@@ -54,6 +54,8 @@ export class MockBunker {
   readonly failGetRelays: boolean;
   readonly getRelaysResultJson: string | undefined;
   readonly pool: MockPool;
+  /** Params (post-pubkey/secret) of the most recent `connect` request. */
+  lastConnectParams: string[] | null = null;
   private readonly user: LocalSigner;
   private readonly convKeyCache = new Map<string, Uint8Array>();
 
@@ -150,6 +152,7 @@ export class MockBunker {
     try {
       switch (request.method) {
         case 'connect':
+          this.lastConnectParams = request.params;
           return { id: request.id, result: 'ack' };
         case 'ping':
           return { id: request.id, result: 'pong' };

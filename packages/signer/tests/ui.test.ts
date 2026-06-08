@@ -285,8 +285,25 @@ describe('attachLoginListeners', () => {
       expect(signer.loginWithBunkerUri).toHaveBeenCalledWith('bunker://abc', {
         pool,
         onRelayMismatch,
+        perms: undefined,
       });
       expect(onLogin).toHaveBeenCalledWith(account);
+    });
+
+    it('forwards the perms field when populated', async () => {
+      const signer = makeSignerStub();
+      signer.loginWithBunkerUri.mockResolvedValue(fakeAccount('nip46'));
+      attachLoginListeners(root, asSigner(signer));
+      const form = root.querySelector<HTMLFormElement>('[data-form="bunker"]')!;
+      (form.elements.namedItem('uri') as HTMLTextAreaElement).value = 'bunker://abc';
+      (form.elements.namedItem('perms') as HTMLInputElement).value =
+        'sign_event:1, nip44_encrypt';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+      expect(signer.loginWithBunkerUri).toHaveBeenCalledWith(
+        'bunker://abc',
+        expect.objectContaining({ perms: ['sign_event:1', 'nip44_encrypt'] }),
+      );
     });
 
     it('shows an error when bunker login fails', async () => {

@@ -55,6 +55,13 @@ export interface BunkerLoginOptions {
   clientSecretKey?: Uint8Array;
   /** Notified when the bunker's preferred relays differ from the URI's. */
   onRelayMismatch?: RelayMismatchHandler;
+  /**
+   * NIP-46 permissions to request as the 3rd `connect` param
+   * (e.g. `['sign_event:1', 'nip44_encrypt']`). When omitted, the
+   * connect request carries no perms — bunker UIs may then skip the
+   * approval prompt entirely, leaving the user with nothing to tap.
+   */
+  perms?: string[];
 }
 
 async function fetchBunkerRelays(tools: ToolsBunkerSigner): Promise<string[] | null> {
@@ -120,7 +127,15 @@ export async function connectWithBunkerUri(
     pool: options.pool,
     onauth: options.onAuth,
   });
-  await tools.connect();
+  // nostr-tools' BunkerSigner.connect() hardcodes only [pubkey, secret],
+  // dropping the optional 3rd `perms` arg defined by NIP-46. Without it
+  // bunker UIs (Amber, etc.) have no permissions to authorize and may
+  // skip the approval prompt entirely. We send the request directly.
+  await tools.sendRequest('connect', [
+    pointer.pubkey,
+    pointer.secret ?? '',
+    (options.perms ?? []).join(','),
+  ]);
   const pubkey = await tools.getPublicKey();
   const resolvedRelays = await resolveRelayChoice(
     tools,

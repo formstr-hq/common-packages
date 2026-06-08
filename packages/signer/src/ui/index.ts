@@ -69,6 +69,8 @@ export function renderLoginHtml(): string {
         <form class="nostr-signer__form" data-form="bunker">
           <label class="nostr-signer__label" for="nostr-signer-bunker-uri">bunker:// URI</label>
           <textarea class="nostr-signer__input nostr-signer__input--bunker-uri" id="nostr-signer-bunker-uri" name="uri" placeholder="bunker://&lt;pubkey&gt;?relay=wss://..." required></textarea>
+          <label class="nostr-signer__label" for="nostr-signer-bunker-perms">Permissions (optional, comma-separated)</label>
+          <input class="nostr-signer__input nostr-signer__input--perms" id="nostr-signer-bunker-perms" name="perms" placeholder="sign_event:1, nip44_encrypt">
           <button class="nostr-signer__button nostr-signer__button--primary" type="submit">Connect</button>
         </form>
       </section>
@@ -267,10 +269,15 @@ export function attachLoginListeners(
     const uri = (
       bunkerForm.elements.namedItem('uri') as HTMLTextAreaElement
     ).value.trim();
+    const perms = (bunkerForm.elements.namedItem('perms') as HTMLInputElement).value
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     try {
       const account = await signer.loginWithBunkerUri(uri, {
         pool: handlers.pool,
         onRelayMismatch: handlers.onRelayMismatch,
+        perms: perms.length > 0 ? perms : undefined,
       });
       handlers.onLogin?.(account);
     } catch (err) {

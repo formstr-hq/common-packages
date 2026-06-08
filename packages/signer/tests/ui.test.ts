@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import QRCode from 'qrcode';
 import { renderLoginHtml, attachLoginListeners } from '../src/ui/index.js';
 import type { Signer } from '../src/core/signer.js';
 import type { StoredAccount } from '../src/core/types.js';
@@ -389,6 +390,34 @@ describe('attachLoginListeners', () => {
       expect(root.querySelector('[data-region="nostrconnect-uri"]')!.textContent).toBe(
         'nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc',
       );
+    });
+
+    it('keeps the URI text visible when QR rendering fails', async () => {
+      const qrSpy = vi
+        .spyOn(QRCode, 'toString')
+        .mockRejectedValueOnce(new Error('qr boom'));
+      const signer = makeSignerStub();
+      signer.loginWithNostrConnect.mockImplementation(
+        (opts) =>
+          new Promise<StoredAccount>(() => {
+            opts.onUri('nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc');
+          }),
+      );
+      attachLoginListeners(root, asSigner(signer));
+      const form = root.querySelector<HTMLFormElement>('[data-form="nostrconnect"]')!;
+      (form.elements.namedItem('relays') as HTMLInputElement).value = 'wss://a.test';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await flush();
+      await flush();
+      const qrRegion = root.querySelector<HTMLDivElement>(
+        '[data-region="nostrconnect-qr-image"]',
+      )!;
+      expect(qrRegion.querySelector('svg')).toBeNull();
+      expect(qrRegion.innerHTML).toBe('');
+      expect(root.querySelector('[data-region="nostrconnect-uri"]')!.textContent).toBe(
+        'nostrconnect://relay=wss%3A%2F%2Fa.test&secret=abc',
+      );
+      qrSpy.mockRestore();
     });
 
     it('clears the QR image when the user cancels', async () => {

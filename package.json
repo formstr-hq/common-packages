@@ -1,0 +1,19 @@
+{
+  "name": "common-packages",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared packages used across Formstr / Nostr ecosystem apps",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=18"
+  }
+}

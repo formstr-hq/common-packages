@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@formstr/signer tester</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --bg: #fafafa;
+        --muted: #6b7280;
+        --border: #d4d4d8;
+        --accent: #2563eb;
+        --danger: #b91c1c;
+        --ok: #047857;
+        --surface: #fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e7eb;
+          --bg: #0b0b0b;
+          --muted: #9ca3af;
+          --border: #2a2a2a;
+          --accent: #60a5fa;
+          --danger: #f87171;
+          --ok: #34d399;
+          --surface: #18181b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        line-height: 1.5;
+      }
+      .app {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .app__header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+        margin-bottom: 16px;
+      }
+      .app__header h1 { margin: 0; font-size: 1rem; font-weight: 600; }
+      .app__active { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .app__active-info { display: flex; flex-direction: column; min-width: 0; }
+      .app__active-info code {
+        font-size: 0.85rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .app__active-info .muted { font-size: 0.75rem; }
+      .app__btn {
+        font: inherit;
+        font-size: 0.85rem;
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .app__btn:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+      .app__btn--primary {
+        background: var(--accent);
+        color: white;
+        border-color: var(--accent);
+      }
+      .app__btn--primary:hover { background: color-mix(in srgb, var(--accent) 85%, black); }
+      .app__btn--danger { color: var(--danger); }
+      .switcher { position: relative; }
+      .switcher__menu {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        margin-top: 4px;
+        min-width: 280px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+        z-index: 10;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      .switcher__menu[hidden] { display: none; }
+      .switcher__item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--border);
+      }
+      .switcher__item:last-of-type { border-bottom: none; }
+      .switcher__item:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+      .switcher__item--active { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+      .switcher__item code { font-size: 0.8rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .switcher__item .muted { font-size: 0.7rem; }
+      .switcher__item-remove {
+        background: transparent;
+        border: none;
+        color: var(--danger);
+        cursor: pointer;
+        padding: 2px 6px;
+        font-size: 1rem;
+        line-height: 1;
+      }
+      .switcher__add {
+        padding: 8px 12px;
+        cursor: pointer;
+        color: var(--accent);
+        font-weight: 500;
+        border-top: 1px solid var(--border);
+      }
+      .switcher__add:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+      section {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+        background: var(--surface);
+      }
+      section h2 { margin: 0 0 8px 0; font-size: 0.95rem; font-weight: 600; }
+      label { display: block; margin: 8px 0 4px; font-size: 0.8rem; color: var(--muted); }
+      input, textarea {
+        width: 100%;
+        font: inherit;
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+      }
+      textarea { min-height: 80px; resize: vertical; }
+      pre {
+        background: color-mix(in srgb, var(--fg) 5%, transparent);
+        padding: 8px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin: 8px 0 0 0;
+      }
+      ul { padding-left: 0; list-style: none; margin: 0; }
+      .log__item {
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.8rem;
+      }
+      .log__item:last-child { border-bottom: none; }
+      .muted { color: var(--muted); }
+      .danger { color: var(--danger); }
+      .ok { color: var(--ok); }
+      .compose__disabled { opacity: 0.55; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="app__header" id="app-header"></header>
+
+      <section class="compose" id="compose">
+        <h2>Compose</h2>
+        <label for="post-content">Content (kind 1)</label>
+        <textarea id="post-content" placeholder="gm"></textarea>
+        <label for="post-relays">Relays (comma-separated, leave empty to just sign)</label>
+        <input id="post-relays" placeholder="wss://relay.damus.io, wss://nos.lol" />
+        <button id="post-btn" class="app__btn app__btn--primary" style="margin-top: 12px;">
+          Sign &amp; publish
+        </button>
+        <div id="post-status" class="muted" style="margin-top: 8px;" hidden></div>
+        <pre id="post-output" hidden></pre>
+      </section>
+
+      <section>
+        <h2>Event log</h2>
+        <ul id="event-log"><li class="log__item muted">no events yet</li></ul>
+      </section>
+    </div>
+
+    <div id="login-modal" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

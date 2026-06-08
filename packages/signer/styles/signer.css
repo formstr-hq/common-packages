@@ -1,0 +1,244 @@
+/*
+ * @formstr/signer default stylesheet. Opt-in: `import '@formstr/signer/styles.css'`.
+ * Override any class in your own CSS to restyle. See README for the full BEM
+ * class catalog.
+ */
+
+.nostr-signer__root {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+.nostr-signer__modal {
+  background: #fff;
+  color: #1a1a1a;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 480px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-sizing: border-box;
+}
+
+.nostr-signer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 16px 0;
+}
+
+.nostr-signer__title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.nostr-signer__close {
+  background: transparent;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: inherit;
+}
+.nostr-signer__close:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.nostr-signer__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 1px solid #e4e4e7;
+  margin-bottom: 16px;
+}
+
+.nostr-signer__tab {
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: #6b7280;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.nostr-signer__tab:hover {
+  color: #1a1a1a;
+}
+.nostr-signer__tab--active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+  font-weight: 600;
+}
+
+.nostr-signer__panel {
+  margin: 0;
+}
+
+.nostr-signer__form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nostr-signer__hint {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin: 0 0 12px 0;
+}
+
+.nostr-signer__label {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-top: 8px;
+}
+
+.nostr-signer__input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  background: #fff;
+  color: inherit;
+  box-sizing: border-box;
+}
+.nostr-signer__input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+textarea.nostr-signer__input {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.nostr-signer__button {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  margin-top: 12px;
+}
+.nostr-signer__button--primary {
+  background: #2563eb;
+  color: #fff;
+}
+.nostr-signer__button--primary:hover {
+  background: #1d4ed8;
+}
+.nostr-signer__button--secondary {
+  background: transparent;
+  color: inherit;
+  border-color: #d4d4d8;
+}
+.nostr-signer__button--secondary:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.nostr-signer__error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
+.nostr-signer__qr {
+  margin-top: 12px;
+}
+
+.nostr-signer__qr-uri,
+.nostr-signer__ncryptsec-display {
+  background: #f4f4f5;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0 0 0;
+}
+
+.nostr-signer__ncryptsec-display {
+  background: #fef3c7;
+}
+
+.nostr-signer__status {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .nostr-signer__modal {
+    background: #18181b;
+    color: #e5e7eb;
+  }
+  .nostr-signer__tabs {
+    border-bottom-color: #2a2a2a;
+  }
+  .nostr-signer__tab {
+    color: #9ca3af;
+  }
+  .nostr-signer__tab:hover {
+    color: #f4f4f5;
+  }
+  .nostr-signer__tab--active {
+    color: #60a5fa;
+    border-bottom-color: #60a5fa;
+  }
+  .nostr-signer__input {
+    background: #0b0b0b;
+    border-color: #2a2a2a;
+    color: inherit;
+  }
+  .nostr-signer__input:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+  }
+  .nostr-signer__hint,
+  .nostr-signer__label,
+  .nostr-signer__tab,
+  .nostr-signer__status {
+    color: #9ca3af;
+  }
+  .nostr-signer__qr-uri {
+    background: #1f1f23;
+  }
+  .nostr-signer__ncryptsec-display {
+    background: #2a2003;
+    color: #fde68a;
+  }
+  .nostr-signer__button--primary {
+    background: #2563eb;
+  }
+  .nostr-signer__button--secondary {
+    border-color: #2a2a2a;
+  }
+  .nostr-signer__close:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .nostr-signer__error {
+    background: rgba(248, 113, 113, 0.12);
+    color: #fca5a5;
+  }
+}

@@ -11,9 +11,19 @@ import {
   type LoginUiBinding,
 } from '@formstr/signer/ui';
 import '@formstr/signer/styles.css';
+import { Capacitor } from '@capacitor/core';
 import { SimplePool } from 'nostr-tools';
 
-const signer = createSigner({ appName: 'signer-tester' });
+async function resolveAndroidPlugin() {
+  if (Capacitor.getPlatform() !== 'android') return undefined;
+  const { NostrSignerPlugin } = await import('nostr-signer-capacitor-plugin');
+  return NostrSignerPlugin;
+}
+
+const signer = createSigner({
+  appName: 'signer-tester',
+  androidSignerPlugin: await resolveAndroidPlugin(),
+});
 const pool = new SimplePool();
 
 const $ = <T extends HTMLElement>(id: string): T => {

@@ -11,6 +11,7 @@ interface MockSigner {
   loginWithBunkerUri: ReturnType<typeof vi.fn>;
   loginWithNostrConnect: ReturnType<typeof vi.fn>;
   loginWithAndroidSigner: ReturnType<typeof vi.fn>;
+  listAndroidSignerApps: ReturnType<typeof vi.fn>;
   getActiveAccount: ReturnType<typeof vi.fn>;
 }
 
@@ -22,6 +23,7 @@ function makeSignerStub(): MockSigner {
     loginWithBunkerUri: vi.fn(),
     loginWithNostrConnect: vi.fn(),
     loginWithAndroidSigner: vi.fn(),
+    listAndroidSignerApps: vi.fn().mockResolvedValue([]),
     getActiveAccount: vi.fn(),
   };
 }
@@ -54,9 +56,9 @@ afterEach(() => {
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 describe('renderLoginHtml', () => {
-  it('renders all five tabs and their panels', () => {
+  it('renders all six tabs and their panels', () => {
     const tabs = root.querySelectorAll('[data-tab]');
-    expect(tabs.length).toBe(5);
+    expect(tabs.length).toBe(6);
     const panelIds = Array.from(root.querySelectorAll<HTMLElement>('[data-panel]')).map(
       (p) => p.dataset.panel,
     );
@@ -67,6 +69,7 @@ describe('renderLoginHtml', () => {
         'extension',
         'bunker',
         'nostrconnect',
+        'android',
         'created',
       ]),
     );
@@ -75,6 +78,20 @@ describe('renderLoginHtml', () => {
   it('includes the error region and the close button', () => {
     expect(root.querySelector('[data-region="error"]')).toBeTruthy();
     expect(root.querySelector('[data-action="cancel"]')).toBeTruthy();
+  });
+
+  it('renders the android panel with a status region and an empty apps list', () => {
+    const panel = root.querySelector<HTMLElement>('[data-panel="android"]');
+    expect(panel).toBeTruthy();
+    const status = panel!.querySelector<HTMLElement>('[data-region="android-status"]');
+    const list = panel!.querySelector<HTMLUListElement>('[data-region="android-apps"]');
+    expect(status).toBeTruthy();
+    expect(list).toBeTruthy();
+    // List starts hidden — it's populated dynamically when the tab activates.
+    expect(list!.hidden).toBe(true);
+    expect(list!.children.length).toBe(0);
+    // The panel itself starts hidden (only 'create' is visible by default).
+    expect(panel!.hidden).toBe(true);
   });
 });
 
@@ -382,6 +399,165 @@ describe('attachLoginListeners', () => {
       expect(
         root.querySelector<HTMLDivElement>('[data-region="error"]')!.textContent,
       ).toContain('bunker timeout');
+    });
+  });
+
+  describe('android flow', () => {
+    const clickAndroidTab = (): void => {
+      root.querySelector<HTMLButtonElement>('[data-tab="android"]')!.click();
+    };
+
+    it('does not fetch installed apps until the android tab is activated', async () => {
+      const signer = makeSignerStub();
+      attachLoginListeners(root, asSigner(signer));
+      await flush();
+      expect(signer.listAndroidSignerApps).not.toHaveBeenCalled();
+    });
+
+    it('fetches apps eagerly when defaultTab is android', async () => {
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockResolvedValue([
+        { name: 'Amber', packageName: 'com.greenart7c3.nostrsigner' },
+      ]);
+      attachLoginListeners(root, asSigner(signer), { defaultTab: 'android' });
+      await flush();
+      expect(signer.listAndroidSignerApps).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders a button per installed app and hides the loading status', async () => {
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockResolvedValue([
+        { name: 'Amber', packageName: 'com.greenart7c3.nostrsigner' },
+        { name: 'Nostrum', packageName: 'com.example.nostrum' },
+      ]);
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab();
+      await flush();
+      const list = root.querySelector<HTMLUListElement>('[data-region="android-apps"]')!;
+      const status = root.querySelector<HTMLElement>('[data-region="android-status"]')!;
+      expect(list.hidden).toBe(false);
+      expect(status.hidden).toBe(true);
+      const buttons = list.querySelectorAll<HTMLButtonElement>('button[data-package-name]');
+      expect(buttons.length).toBe(2);
+      expect(buttons[0]!.dataset.packageName).toBe('com.greenart7c3.nostrsigner');
+      expect(buttons[0]!.textContent).toContain('Amber');
+      expect(buttons[1]!.dataset.packageName).toBe('com.example.nostrum');
+    });
+
+    it('shows an empty-state message when no signer apps are installed', async () => {
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockResolvedValue([]);
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab();
+      await flush();
+      const status = root.querySelector<HTMLElement>('[data-region="android-status"]')!;
+      const list = root.querySelector<HTMLUListElement>('[data-region="android-apps"]')!;
+      expect(status.hidden).toBe(false);
+      expect(status.textContent).toContain('No NIP-55 signer apps installed');
+      expect(list.hidden).toBe(true);
+    });
+
+    it('surfaces a listing error in the status region', async () => {
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockRejectedValue(
+        new Error('no Android signer plugin configured'),
+      );
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab();
+      await flush();
+      const status = root.querySelector<HTMLElement>('[data-region="android-status"]')!;
+      expect(status.textContent).toContain('no Android signer plugin configured');
+    });
+
+    it('clicking an app button calls loginWithAndroidSigner with its packageName', async () => {
+      const account = fakeAccount('android');
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockResolvedValue([
+        { name: 'Amber', packageName: 'com.greenart7c3.nostrsigner' },
+      ]);
+      signer.loginWithAndroidSigner.mockResolvedValue(account);
+      const onLogin = vi.fn();
+      attachLoginListeners(root, asSigner(signer), { onLogin });
+      clickAndroidTab();
+      await flush();
+      const btn = root.querySelector<HTMLButtonElement>(
+        'button[data-package-name="com.greenart7c3.nostrsigner"]',
+      )!;
+      btn.click();
+      await flush();
+      expect(signer.loginWithAndroidSigner).toHaveBeenCalledWith({
+        packageName: 'com.greenart7c3.nostrsigner',
+      });
+      expect(onLogin).toHaveBeenCalledWith(account);
+    });
+
+    it('re-enables the clicked button and shows the error when login fails', async () => {
+      const signer = makeSignerStub();
+      signer.listAndroidSignerApps.mockResolvedValue([
+        { name: 'Amber', packageName: 'com.greenart7c3.nostrsigner' },
+      ]);
+      signer.loginWithAndroidSigner.mockRejectedValue(new Error('user rejected'));
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab();
+      await flush();
+      const btn = root.querySelector<HTMLButtonElement>(
+        'button[data-package-name="com.greenart7c3.nostrsigner"]',
+      )!;
+      btn.click();
+      await flush();
+      expect(btn.disabled).toBe(false);
+      expect(
+        root.querySelector<HTMLDivElement>('[data-region="error"]')!.textContent,
+      ).toContain('user rejected');
+    });
+
+    it('discards a stale error when the tab is re-activated mid-flight', async () => {
+      const signer = makeSignerStub();
+      let rejectFirst!: (err: Error) => void;
+      signer.listAndroidSignerApps
+        .mockImplementationOnce(
+          () =>
+            new Promise((_, rej) => {
+              rejectFirst = rej;
+            }),
+        )
+        .mockResolvedValueOnce([{ name: 'Latest', packageName: 'com.latest.signer' }]);
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab(); // slow fetch starts
+      await flush();
+      clickAndroidTab(); // second fetch bumps token; first becomes stale
+      await flush();
+      rejectFirst(new Error('stale failure should be ignored'));
+      await flush();
+      const status = root.querySelector<HTMLElement>('[data-region="android-status"]')!;
+      // Second fetch resolved with a single app → list shown, status hidden.
+      // If the stale error had leaked through, status would show its message.
+      expect(status.hidden).toBe(true);
+      expect(status.textContent).not.toContain('stale failure');
+    });
+
+    it('discards a stale fetch when the tab is re-activated mid-flight', async () => {
+      const signer = makeSignerStub();
+      let resolveFirst!: (apps: Array<{ name: string; packageName: string }>) => void;
+      signer.listAndroidSignerApps
+        .mockImplementationOnce(
+          () =>
+            new Promise((res) => {
+              resolveFirst = res;
+            }),
+        )
+        .mockResolvedValueOnce([{ name: 'Latest', packageName: 'com.latest.signer' }]);
+      attachLoginListeners(root, asSigner(signer));
+      clickAndroidTab(); // starts first (slow) fetch
+      await flush();
+      clickAndroidTab(); // starts second (fast) fetch, bumps token
+      await flush();
+      // Now resolve the first one — it should be ignored.
+      resolveFirst([{ name: 'Stale', packageName: 'com.stale.signer' }]);
+      await flush();
+      const list = root.querySelector<HTMLUListElement>('[data-region="android-apps"]')!;
+      const labels = Array.from(list.querySelectorAll('button')).map((b) => b.textContent);
+      expect(labels).toEqual(['Latest (com.latest.signer)']);
     });
   });
 

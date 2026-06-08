@@ -159,40 +159,35 @@ describe('NIP-55 (Android external signer)', () => {
     const fakeNsec = nip19.nsecEncode(generateSecretKey());
     const badPlugin = {
       setPackageName: async () => undefined,
-      getPublicKey: async () => ({ npub: fakeNsec }),
-      signEvent: async () => ({ signature: '', event: '' }),
-      nip04Encrypt: async () => ({ result: '' }),
-      nip04Decrypt: async () => ({ result: '' }),
-      nip44Encrypt: async () => ({ result: '' }),
-      nip44Decrypt: async () => ({ result: '' }),
+      getInstalledSignerApps: async () => ({ apps: [] }),
+      getPublicKey: async () => ({ npub: fakeNsec, package: 'com.fake.signer' }),
+      signEvent: async (_p: string, _e: string, id: string) => ({ signature: '', id, event: '' }),
+      nip04Encrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip04Decrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip44Encrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip44Decrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
     };
     await expect(loginWithAndroidSigner(badPlugin)).rejects.toThrow(/non-npub/);
   });
 
-  it('records androidPackageName as undefined when neither plugin nor caller supplies one', async () => {
+  it('rejects when neither plugin nor caller supplies a package name', async () => {
     const sk = generateSecretKey();
     const npub = nip19.npubEncode(getPublicKey(sk));
-    const local = new LocalSigner(sk);
     const minimalPlugin = {
       setPackageName: async () => undefined,
+      getInstalledSignerApps: async () => ({ apps: [] }),
       // No `package` field in the response, and we won't pass packageName.
-      getPublicKey: async () => ({ npub }),
-      signEvent: async (opts: { eventJson: string }) => {
-        const tpl = JSON.parse(opts.eventJson);
-        const signed = await local.signEvent(tpl);
-        return { signature: signed.sig, event: JSON.stringify(signed) };
-      },
-      nip04Encrypt: async () => ({ result: '' }),
-      nip04Decrypt: async () => ({ result: '' }),
-      nip44Encrypt: async () => ({ result: '' }),
-      nip44Decrypt: async () => ({ result: '' }),
+      getPublicKey: async () => ({ npub, package: '' }),
+      signEvent: async (_p: string, _e: string, id: string) => ({ signature: '', id, event: '' }),
+      nip04Encrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip04Decrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip44Encrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
+      nip44Decrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
     };
-    const s = createSigner({ storage: makeMockStorage(), androidSignerPlugin: minimalPlugin });
-    const account = await s.loginWithAndroidSigner();
-    expect(account.androidPackageName).toBeUndefined();
+    await expect(loginWithAndroidSigner(minimalPlugin)).rejects.toThrow(/package name/);
 
-    const direct = await loginWithAndroidSigner(minimalPlugin);
-    expect(direct.packageName).toBeNull();
+    const s = createSigner({ storage: makeMockStorage(), androidSignerPlugin: minimalPlugin });
+    await expect(s.loginWithAndroidSigner()).rejects.toThrow(/package name/);
   });
 
   it('loginWithAndroidSigner can be called directly (lower-level API)', async () => {
@@ -202,5 +197,37 @@ describe('NIP-55 (Android external signer)', () => {
     expect(result.npub).toBe(nip19.npubEncode(getPublicKey(sk)));
     expect(result.pubkey).toBe(getPublicKey(sk));
     expect(result.packageName).toBe('com.test.app');
+  });
+
+  describe('listAndroidSignerApps', () => {
+    it('returns the apps reported by the configured plugin', async () => {
+      const sk = generateSecretKey();
+      const plugin = new MockAndroidPlugin(sk, 'com.greenart7c3.nostrsigner');
+      const s = createSigner({ storage: makeMockStorage(), androidSignerPlugin: plugin });
+      const apps = await s.listAndroidSignerApps();
+      expect(apps).toEqual([
+        { name: 'Mock Signer', packageName: 'com.greenart7c3.nostrsigner' },
+      ]);
+    });
+
+    it('throws when no plugin is configured', async () => {
+      const s = createSigner({ storage: makeMockStorage() });
+      await expect(s.listAndroidSignerApps()).rejects.toThrow(/no Android signer plugin/);
+    });
+
+    it('per-call plugin overrides the configured default', async () => {
+      const skDefault = generateSecretKey();
+      const skOverride = generateSecretKey();
+      const defaultPlugin = new MockAndroidPlugin(skDefault, 'com.default.signer');
+      const overridePlugin = new MockAndroidPlugin(skOverride, 'com.override.signer');
+      const s = createSigner({
+        storage: makeMockStorage(),
+        androidSignerPlugin: defaultPlugin,
+      });
+      const apps = await s.listAndroidSignerApps(overridePlugin);
+      expect(apps).toEqual([
+        { name: 'Mock Signer', packageName: 'com.override.signer' },
+      ]);
+    });
   });
 });

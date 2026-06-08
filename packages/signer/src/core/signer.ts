@@ -15,6 +15,7 @@ import { bytesToHex, connectWithBunkerUri, initiateNostrConnect } from '../nip46
 import {
   loginWithAndroidSigner as connectWithAndroidSigner,
   type AndroidLoginOptions,
+  type AndroidSignerAppInfo,
   type AndroidSignerPlugin,
 } from '../nip55.js';
 
@@ -169,6 +170,19 @@ export class Signer {
     return account;
   }
 
+  async listAndroidSignerApps(
+    plugin?: AndroidSignerPlugin,
+  ): Promise<AndroidSignerAppInfo[]> {
+    const p = plugin ?? this.#defaultAndroidPlugin;
+    if (!p) {
+      throw new Error(
+        '@formstr/signer: no Android signer plugin configured (pass `androidSignerPlugin` to createSigner or `plugin` to listAndroidSignerApps)',
+      );
+    }
+    const { apps } = await p.getInstalledSignerApps();
+    return apps;
+  }
+
   async loginWithAndroidSigner(options: AndroidLoginOptions = {}): Promise<StoredAccount> {
     const plugin = options.plugin ?? this.#defaultAndroidPlugin;
     if (!plugin) {
@@ -181,7 +195,7 @@ export class Signer {
       npub: result.npub,
       pubkey: result.pubkey,
       method: 'android',
-      androidPackageName: result.packageName ?? undefined,
+      androidPackageName: result.packageName,
     };
     this.#upsertAccount(account);
     this.#setActive(account, result.signer);

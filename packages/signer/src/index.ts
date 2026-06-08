@@ -24,6 +24,7 @@ export {
   AndroidSigner,
   loginWithAndroidSigner,
   type AndroidSignerPlugin,
+  type AndroidSignerAppInfo,
   type AndroidLoginOptions,
   type AndroidLoginResult,
 } from './nip55.js';

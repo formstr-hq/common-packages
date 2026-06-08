@@ -4,6 +4,13 @@ import { resolve } from 'node:path';
 // Alias workspace imports straight to the signer's source so changes show up
 // instantly with no rebuild step. Order matters — more specific entries first.
 export default defineConfig({
+  // './' for relative asset URLs in the Capacitor Android WebView;
+  // 'es2022' so top-level await (used to lazy-load the Android plugin
+  // only on android) survives the production build.
+  base: './',
+  build: {
+    target: 'es2022',
+  },
   resolve: {
     alias: [
       {

@@ -2,7 +2,7 @@ import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { Signer } from '../core/signer.js';
 import type { RelayMismatchHandler, StoredAccount } from '../core/types.js';
 
-export type LoginTab = 'create' | 'ncryptsec' | 'extension' | 'bunker' | 'nostrconnect';
+export type LoginTab = 'create' | 'ncryptsec' | 'extension' | 'bunker' | 'nostrconnect' | 'android';
 
 export interface LoginUiHandlers {
   onLogin?: (account: StoredAccount) => void;
@@ -27,6 +27,7 @@ const TABS: ReadonlyArray<{ id: LoginTab; label: string }> = [
   { id: 'extension', label: 'Extension' },
   { id: 'bunker', label: 'Bunker URI' },
   { id: 'nostrconnect', label: 'Remote (QR)' },
+  { id: 'android', label: 'Android' },
 ];
 
 export function renderLoginHtml(): string {
@@ -86,6 +87,11 @@ export function renderLoginHtml(): string {
           <button class="nostr-signer__button nostr-signer__button--secondary" type="button" data-action="nostrconnect-cancel">Cancel</button>
         </div>
       </section>
+      <section class="nostr-signer__panel nostr-signer__panel--android" data-panel="android" hidden>
+        <p class="nostr-signer__hint">Sign in with an Android external signer app (NIP-55) such as Amber.</p>
+        <p class="nostr-signer__status" data-region="android-status">Loading installed signers&hellip;</p>
+        <ul class="nostr-signer__android-apps" data-region="android-apps" hidden></ul>
+      </section>
       <section class="nostr-signer__panel nostr-signer__panel--created" data-panel="created" hidden>
         <p class="nostr-signer__hint">Account created. Back up this encrypted secret key — without it (and your passphrase) you cannot sign in again.</p>
         <pre class="nostr-signer__ncryptsec-display" data-region="created-ncryptsec"></pre>
@@ -130,6 +136,58 @@ export function attachLoginListeners(
     errorEl.textContent = '';
   };
 
+  // ---- android (NIP-55) — declared before selectTab so it can be invoked
+  // when the user opens with defaultTab: 'android'.
+  const androidStatus = q<HTMLElement>('[data-region="android-status"]');
+  const androidList = q<HTMLUListElement>('[data-region="android-apps"]');
+  let androidFetchToken = 0;
+
+  const refreshAndroidApps = async (): Promise<void> => {
+    const token = ++androidFetchToken;
+    androidList.hidden = true;
+    androidList.innerHTML = '';
+    androidStatus.hidden = false;
+    androidStatus.textContent = 'Loading installed signers…';
+    try {
+      const apps = await signer.listAndroidSignerApps();
+      if (token !== androidFetchToken) return;
+      if (apps.length === 0) {
+        androidStatus.textContent =
+          'No NIP-55 signer apps installed. Install Amber (or similar) and try again.';
+        return;
+      }
+      androidStatus.hidden = true;
+      for (const app of apps) {
+        const li = document.createElement('li');
+        li.className = 'nostr-signer__android-app';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'nostr-signer__button nostr-signer__button--primary';
+        btn.dataset.packageName = app.packageName;
+        btn.textContent = `${app.name} (${app.packageName})`;
+        on(btn, 'click', async () => {
+          clearError();
+          btn.disabled = true;
+          try {
+            const account = await signer.loginWithAndroidSigner({
+              packageName: app.packageName,
+            });
+            handlers.onLogin?.(account);
+          } catch (err) {
+            btn.disabled = false;
+            showError(err as Error);
+          }
+        });
+        li.appendChild(btn);
+        androidList.appendChild(li);
+      }
+      androidList.hidden = false;
+    } catch (err) {
+      if (token !== androidFetchToken) return;
+      androidStatus.textContent = (err as Error).message;
+    }
+  };
+
   const selectTab = (tab: LoginTab): void => {
     rootEl.querySelectorAll<HTMLElement>('[data-panel]').forEach((panel) => {
       panel.hidden = panel.dataset.panel !== tab;
@@ -138,6 +196,7 @@ export function attachLoginListeners(
       btn.classList.toggle('nostr-signer__tab--active', btn.dataset.tab === tab);
     });
     clearError();
+    if (tab === 'android') void refreshAndroidApps();
   };
 
   selectTab(handlers.defaultTab ?? 'create');

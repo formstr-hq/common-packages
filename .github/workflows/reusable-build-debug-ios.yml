@@ -1,0 +1,207 @@
+name: Reusable Build Debug iOS
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "Pull request number"
+        required: true
+        type: string
+      pr_sha:
+        description: "PR head SHA"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "22"
+      package_manager:
+        description: "Package manager to use: pnpm, npm, or yarn"
+        required: false
+        type: string
+        default: "pnpm"
+      pnpm_version:
+        description: "pnpm version (used only when package_manager is pnpm)"
+        required: false
+        type: string
+        default: "10.26.2"
+      sign_ios:
+        description: "Also build a signed IPA (requires IOS_P12_BASE64, IOS_P12_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, IOS_TEAM_ID secrets)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Enable Corepack (pnpm)
+        if: inputs.package_manager == 'pnpm'
+        run: corepack enable && corepack prepare pnpm@${{ inputs.pnpm_version }} --activate
+
+      - name: Install dependencies
+        run: |
+          if [ "${{ inputs.package_manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          elif [ "${{ inputs.package_manager }}" = "yarn" ]; then
+            yarn install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Build Web App
+        run: |
+          if [ "${{ inputs.package_manager }}" = "pnpm" ]; then
+            pnpm build
+          elif [ "${{ inputs.package_manager }}" = "yarn" ]; then
+            yarn build
+          else
+            npm run build
+          fi
+
+      - name: Sync Capacitor
+        run: |
+          if [ "${{ inputs.package_manager }}" = "pnpm" ]; then
+            pnpm cap sync ios
+          else
+            npx cap sync ios
+          fi
+
+      - name: Install CocoaPods dependencies
+        working-directory: ios/App
+        run: pod install
+
+      # Simulator build — no signing required
+      - name: Build iOS Simulator
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath ios/build \
+            build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-pr-${{ inputs.pr_number }}
+          path: ios/build/Build/Products/Debug-iphonesimulator/App.app
+          retention-days: 30
+
+      # Signed IPA — only when sign_ios is true
+      - name: Import certificate
+        if: inputs.sign_ios
+        env:
+          P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+        run: |
+          echo "$P12_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+      - name: Install provisioning profile
+        if: inputs.sign_ios
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          echo "$PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Archive (signed)
+        if: inputs.sign_ios
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -archivePath ios/build/App.xcarchive \
+            archive \
+            DEVELOPMENT_TEAM="$TEAM_ID"
+
+      - name: Export IPA
+        if: inputs.sign_ios
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          cat > ExportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>teamID</key>
+            <string>${TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild \
+            -exportArchive \
+            -archivePath ios/build/App.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath ios/build/ipa
+
+      - name: Upload IPA
+        if: inputs.sign_ios
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-pr-${{ inputs.pr_number }}
+          path: ios/build/ipa/*.ipa
+          retention-days: 30
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const signed = ${{ inputs.sign_ios }};
+            const runUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`;
+
+            const lines = [
+              "🍎 **iOS Debug build completed**",
+              "",
+              `🔗 Workflow run: ${runUrl}`,
+              "",
+              "📎 Download artifacts:",
+              "- **Simulator app** (`ios-simulator-pr-${{ inputs.pr_number }}`) — load in Xcode Simulator",
+            ];
+
+            if (signed) {
+              lines.push("- **Signed IPA** (`ios-ipa-pr-${{ inputs.pr_number }}`) — install on registered devices");
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ inputs.pr_number }}'),
+              body: lines.join("\n")
+            });

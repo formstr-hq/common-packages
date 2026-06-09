@@ -102,6 +102,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: Upload simulator app
+        id: upload-simulator
         uses: actions/upload-artifact@v4
         with:
           name: ios-simulator-pr-${{ inputs.pr_number }}
@@ -170,6 +171,7 @@ jobs:
             -exportPath ios/build/ipa
 
       - name: Upload IPA
+        id: upload-ipa
         if: inputs.sign_ios
         uses: actions/upload-artifact@v4
         with:
@@ -182,21 +184,17 @@ jobs:
         with:
           script: |
             const signed = ${{ inputs.sign_ios }};
-            const runUrl =
-              `https://github.com/${context.repo.owner}/${context.repo.repo}` +
-              `/actions/runs/${context.runId}`;
+            const simulatorUrl = '${{ steps.upload-simulator.outputs.artifact-url }}';
+            const ipaUrl = '${{ steps.upload-ipa.outputs.artifact-url }}';
 
             const lines = [
-              "🍎 **iOS Debug build completed**",
+              "\u{1F34E} **iOS Debug build ready**",
               "",
-              `🔗 Workflow run: ${runUrl}`,
-              "",
-              "📎 Download artifacts:",
-              "- **Simulator app** (`ios-simulator-pr-${{ inputs.pr_number }}`) — load in Xcode Simulator",
+              `\u{2B07}️ [Download Simulator App](${simulatorUrl})`,
             ];
 
-            if (signed) {
-              lines.push("- **Signed IPA** (`ios-ipa-pr-${{ inputs.pr_number }}`) — install on registered devices");
+            if (signed && ipaUrl) {
+              lines.push(`\u{2B07}️ [Download Signed IPA](${ipaUrl})`);
             }
 
             await github.rest.issues.createComment({

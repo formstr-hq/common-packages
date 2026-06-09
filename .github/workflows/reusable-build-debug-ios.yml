@@ -26,11 +26,9 @@ on:
         required: false
         type: string
         default: "10.26.2"
-      sign_ios:
-        description: "Also build a signed IPA (requires IOS_P12_BASE64, IOS_P12_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, IOS_TEAM_ID secrets)"
-        required: false
-        type: boolean
-        default: false
+    # Signing secrets are read from the org-level secrets via secrets: inherit.
+    # Required: IOS_P12_BASE64, IOS_P12_PASSWORD, IOS_PROVISIONING_PROFILE_BASE64, IOS_TEAM_ID
+    # If absent the signed IPA step is skipped automatically.
 
 permissions:
   contents: read
@@ -109,9 +107,21 @@ jobs:
           path: ios/build/Build/Products/Debug-iphonesimulator/App.app
           retention-days: 30
 
-      # Signed IPA — only when sign_ios is true
+      # Detect whether signing secrets are present
+      - name: Check signing secrets
+        id: signing
+        run: |
+          if [ -n "$IOS_P12_BASE64" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+
+      # Signed IPA — only when signing secrets are present
       - name: Import certificate
-        if: inputs.sign_ios
+        if: steps.signing.outputs.available == 'true'
         env:
           P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
@@ -124,7 +134,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
 
       - name: Install provisioning profile
-        if: inputs.sign_ios
+        if: steps.signing.outputs.available == 'true'
         env:
           PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
@@ -133,7 +143,7 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Archive (signed)
-        if: inputs.sign_ios
+        if: steps.signing.outputs.available == 'true'
         env:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
@@ -146,7 +156,7 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID"
 
       - name: Export IPA
-        if: inputs.sign_ios
+        if: steps.signing.outputs.available == 'true'
         env:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
@@ -172,7 +182,7 @@ jobs:
 
       - name: Upload IPA
         id: upload-ipa
-        if: inputs.sign_ios
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-pr-${{ inputs.pr_number }}
@@ -183,7 +193,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const signed = ${{ inputs.sign_ios }};
+            const signed = '${{ steps.signing.outputs.available }}' === 'true';
             const simulatorUrl = '${{ steps.upload-simulator.outputs.artifact-url }}';
             const ipaUrl = '${{ steps.upload-ipa.outputs.artifact-url }}';
 

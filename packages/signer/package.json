@@ -1,6 +1,6 @@
 {
   "name": "@formstr/signer",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "Nostr signer with login UI for NIP-07, NIP-46, NIP-49 (ncryptsec), and NIP-55",
   "license": "MIT",
   "author": "Abhay <toabhayraizada@gmail.com>",

@@ -133,6 +133,8 @@ const myPlugin: AndroidSignerPlugin = {
 
 The interface signatures intentionally mirror `nostr-signer-capacitor-plugin`'s exported `NostrSignerPlugin` so the real wrapper is directly assignable. If you write a custom plugin, the package's test suite includes a compile-time conformance guard (`tests/helpers/mockAndroidPlugin.ts`) you can model your own check on — wire it up in your CI and you'll catch any drift the moment the upstream wrapper changes shape.
 
+**Identifier shape.** The `npub` field returned by `getPublicKey` is permissive: the package accepts either a bech32 `npub1…` string (the NIP-55 spec shape) or a 32-byte hex pubkey (what current Amber builds actually return). Whichever you hand back, the package normalizes internally — `StoredAccount.npub` is always bech32 and `StoredAccount.pubkey` is always lowercase hex. Anything else surfaces as a debuggable error including a preview of what was received.
+
 ## NIP-46 app identity (required for nostrconnect)
 
 The nostrconnect URI you generate must include a `name` (and ideally `url`/`image`) so remote signer apps can show the user *which app* is asking to pair. Without it:

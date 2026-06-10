@@ -12,6 +12,7 @@ export type {
   BunkerLoginOptions,
   RelayMismatchInfo,
   RelayMismatchHandler,
+  UnlockOptions,
 } from './core/types.js';
 export {
   encryptSecretKey,

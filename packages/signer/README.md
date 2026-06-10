@@ -58,14 +58,38 @@ The single most important thing to understand about this package: **after a fres
 - `getActiveAccount()` returns the account that was active before reload.
 - `getActiveSigner()` returns **`null`**, regardless of method.
 
-To unlock, call the matching `loginWith*` again:
+### `unlock()` — silent rehydration
 
-| Method | Unlock action |
-| --- | --- |
-| `ncryptsec` | prompt for the passphrase, call `loginWithNcryptsec(account.ncryptsec, passphrase)` |
-| `extension` | call `loginWithExtension()` — the extension may auto-grant if previously approved |
-| `nip46` | call `loginWithBunkerUri(account.nip46.uri, { clientSecretKey: hexToBytes(account.nip46.clientSecretKey) })` to resume |
-| `android` | call `loginWithAndroidSigner({ packageName: account.androidPackageName })` |
+For every method except `ncryptsec`, the package has enough persisted state to rebuild the runtime signer without prompting anyone — `unlock()` is the way to actually do that on cold start:
+
+```ts
+const signer = createSigner({ androidSignerPlugin, /* ... */ });
+const active = await signer.unlock({ pool });   // pool only needed for nip46
+if (active) {
+  // signed-in user — proceed
+} else {
+  // either no active account, or method='ncryptsec' (drive the passphrase prompt yourself)
+}
+```
+
+Per-method behavior:
+
+| Method | What `unlock()` does | Prompt on cold start? |
+| --- | --- | --- |
+| `extension` | constructs `ExtensionSigner` (stateless wrapper around `window.nostr`) | no |
+| `nip46` | reuses persisted `clientSecretKey` + `remoteSignerPubkey` + `relays` to attach a `BunkerSigner` — **skips the `connect` request**, which is what triggers a fresh approval prompt every reload | no |
+| `android` | builds the `AndroidSigner` directly from cached `pubkey` + `npub` + `androidPackageName`, **bypassing the plugin's `getPublicKey` content-provider call** | no |
+| `ncryptsec` | returns `null` — the passphrase is not (and must not be) persisted; caller drives the prompt and calls `loginWithNcryptsec(account.ncryptsec, passphrase)` | n/a (by design) |
+
+`unlock()` returns `null` (without emitting an event) when there is no active account, when the account is missing fields it needs to resume, when method is `nip46` but no `pool` was supplied, or when method is `android` but no plugin is configured. On success it emits the same `login`/`switch` event the corresponding `loginWith*` would.
+
+`getPublicKey()` after a successful nip46 unlock is a memory read, not a bunker roundtrip — the cached pubkey is wired into the `BunkerSigner` wrapper so a subsequent call needs no network.
+
+### Why not just re-call `loginWith*`?
+
+You still can. The difference is that the `loginWith*` methods are *first-time pairing* flows — `loginWithBunkerUri` re-sends the `connect` request, `loginWithAndroidSigner` re-queries the external signer for the pubkey — and on signer apps like Amber both of those surface as a permission prompt the user has to approve again. `unlock()` is the resume path: same end state (an active `ActiveSigner`), without re-pairing.
+
+For ncryptsec, `unlock()` returning `null` is the signal to drive the passphrase prompt and call `loginWithNcryptsec(account.ncryptsec, passphrase)` — that's the only method with no silent path, by design.
 
 The pattern in the UI is: **always render off `getActiveAccount()`, gate signing on `getActiveSigner()`**. Show "logged in as @alice" plus an "Unlock" button when the signer is null.
 

@@ -15,15 +15,28 @@ export type { BunkerPointer };
  * Thin wrapper around nostr-tools' BunkerSigner that exposes only the
  * ActiveSigner surface. We keep this layer so callers depend on a stable
  * interface even if we ever swap the underlying implementation.
+ *
+ * Optionally accepts a `cachedUserPubkey`. When supplied, {@link getPublicKey}
+ * returns it without a bunker roundtrip. The user's signer pubkey is fixed
+ * for a given paired account, so caching it after the initial `connect` —
+ * or feeding it back in from persisted storage on unlock — avoids both a
+ * network hop and a potential approval prompt on every cold start. Without
+ * a cached value we fall back to asking the bunker, matching the prior
+ * behavior.
  */
 export class BunkerSigner implements ActiveSigner {
   readonly #delegate: ToolsBunkerSigner;
+  readonly #cachedUserPubkey: string | null;
 
-  constructor(delegate: ToolsBunkerSigner) {
+  constructor(delegate: ToolsBunkerSigner, cachedUserPubkey?: string) {
     this.#delegate = delegate;
+    this.#cachedUserPubkey = cachedUserPubkey ?? null;
   }
 
   getPublicKey(): Promise<string> {
+    if (this.#cachedUserPubkey !== null) {
+      return Promise.resolve(this.#cachedUserPubkey);
+    }
     return this.#delegate.getPublicKey();
   }
   signEvent(event: EventTemplate): Promise<NostrEvent> {
@@ -143,7 +156,7 @@ export async function connectWithBunkerUri(
     options.onRelayMismatch,
   );
   return {
-    signer: new BunkerSigner(tools),
+    signer: new BunkerSigner(tools, pubkey),
     pubkey,
     pointer: { ...pointer, relays: resolvedRelays },
     clientSecretKey,
@@ -214,7 +227,7 @@ export function initiateNostrConnect(options: NostrConnectInitOptions): NostrCon
       options.onRelayMismatch,
     );
     return {
-      signer: new BunkerSigner(tools),
+      signer: new BunkerSigner(tools, pubkey),
       pubkey,
       pointer: { ...tools.bp, relays: resolvedRelays },
       clientSecretKey,

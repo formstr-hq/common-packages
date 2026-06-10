@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools';
+import { BunkerSigner as ToolsBunkerSigner } from 'nostr-tools/nip46';
 import { LocalSigner } from '../src/core/localSigner.js';
 import {
   BunkerSigner,
@@ -155,13 +156,30 @@ describe('NIP-46 (bunker URI flow)', () => {
     await expect(active.close()).resolves.toBeUndefined();
   });
 
-  it('BunkerSigner.getPublicKey() delegates to the underlying signer', async () => {
+  it('BunkerSigner.getPublicKey() returns the cached user pubkey after login', async () => {
     const pool = new MockPool();
     const userSecretKey = generateSecretKey();
     const bunker = new MockBunker({ pool, relays: [RELAY], userSecretKey });
     const s = createSigner({ storage: makeMockStorage() });
     await s.loginWithBunkerUri(bunker.buildBunkerUri(), { pool: pool.asPool() });
     expect(await s.getActiveSigner()!.getPublicKey()).toBe(getPublicKey(userSecretKey));
+  });
+
+  it('BunkerSigner.getPublicKey() falls back to the delegate when no cache is supplied', async () => {
+    // The cache is only populated by `loginWithBunkerUri` / `unlock`. If a
+    // caller constructs `BunkerSigner` directly without the optional cached
+    // pubkey arg, getPublicKey() must still work via a delegate roundtrip.
+    const pool = new MockPool();
+    const userSecretKey = generateSecretKey();
+    const bunker = new MockBunker({ pool, relays: [RELAY], userSecretKey });
+    const clientSk = generateSecretKey();
+    const tools = ToolsBunkerSigner.fromBunker(
+      clientSk,
+      { pubkey: bunker.bunkerPubkey, relays: [RELAY], secret: null },
+      { pool: pool.asPool() },
+    );
+    const signer = new BunkerSigner(tools);
+    expect(await signer.getPublicKey()).toBe(getPublicKey(userSecretKey));
   });
 
   it('persists nip46 metadata and never leaks the user secret', async () => {

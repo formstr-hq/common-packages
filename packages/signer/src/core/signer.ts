@@ -1,4 +1,6 @@
 import { getPublicKey, nip19 } from 'nostr-tools';
+import { BunkerSigner as ToolsBunkerSigner } from 'nostr-tools/nip46';
+import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type {
   ActiveSigner,
   BunkerLoginOptions,
@@ -6,13 +8,21 @@ import type {
   SignerConfig,
   SignerEvent,
   StoredAccount,
+  UnlockOptions,
 } from './types.js';
 import { localStorageAdapter, type StorageAdapter } from './storage.js';
 import { LocalSigner } from './localSigner.js';
 import { decryptNcryptsec, generateAccount } from '../nip49.js';
 import { ExtensionSigner } from '../nip07.js';
-import { bytesToHex, connectWithBunkerUri, initiateNostrConnect } from '../nip46.js';
 import {
+  BunkerSigner,
+  bytesToHex,
+  connectWithBunkerUri,
+  hexToBytes,
+  initiateNostrConnect,
+} from '../nip46.js';
+import {
+  AndroidSigner,
   loginWithAndroidSigner as connectWithAndroidSigner,
   type AndroidLoginOptions,
   type AndroidSignerAppInfo,
@@ -327,6 +337,97 @@ export class Signer {
    */
   getActiveSigner(): ActiveSigner | null {
     return this.#activeSigner;
+  }
+
+  /**
+   * Silently unlock the active account from persisted state — no user
+   * prompt, no fresh pairing. The package already keeps everything it
+   * needs to reconstruct the runtime signer on disk; this method is the
+   * way to actually use that on cold start instead of re-running each
+   * method's first-time login flow.
+   *
+   * Behavior by method:
+   *
+   *  - `extension`: constructs an {@link ExtensionSigner}, which just
+   *    proxies to `window.nostr`. No setup roundtrip — individual
+   *    operations may still prompt depending on the extension's own
+   *    permission state, but unlock itself does not.
+   *
+   *  - `nip46`: reuses the stored `clientSecretKey` to construct a
+   *    {@link BunkerSigner} against the stored bunker pubkey + relays
+   *    via `BunkerSigner.fromBunker`. Deliberately skips the `connect`
+   *    request — the remote signer (Amber etc.) approved this client
+   *    pubkey on first pairing and re-sending `connect` is what surfaces
+   *    a fresh approval prompt every cold start. Requires `options.pool`
+   *    so the BunkerSigner has somewhere to listen for responses.
+   *    The cached user pubkey is fed into the wrapper so a follow-up
+   *    `getPublicKey()` is a memory read, not a relay request.
+   *
+   *  - `android`: constructs an {@link AndroidSigner} directly from the
+   *    stored `androidPackageName` + `pubkey` + `npub`. Skips the
+   *    `getPublicKey` content-provider roundtrip that
+   *    {@link loginWithAndroidSigner} performs and that — on Amber —
+   *    surfaces as a permission prompt every cold start.
+   *
+   *  - `ncryptsec`: returns `null`. There is no silent path — the user's
+   *    passphrase isn't (and shouldn't be) persisted. The caller must
+   *    drive the passphrase prompt and call {@link loginWithNcryptsec}.
+   *
+   * Returns `null` (without emitting any event or mutating state) when
+   * there is no active account, when the account is missing fields
+   * required to unlock, when `nip46` is the method but no `pool` was
+   * supplied, or when `android` is the method but no plugin is
+   * configured. On success emits the same `login` / `switch` event the
+   * corresponding `loginWith*` would.
+   */
+  async unlock(options: UnlockOptions = {}): Promise<ActiveSigner | null> {
+    const account = this.getActiveAccount();
+    if (!account) return null;
+
+    switch (account.method) {
+      case 'extension': {
+        const signer = new ExtensionSigner();
+        this.#setActive(account, signer);
+        return signer;
+      }
+
+      case 'nip46': {
+        if (!account.nip46) return null;
+        if (!options.pool) return null;
+        const { remoteSignerPubkey, relays, clientSecretKey } = account.nip46;
+        if (!remoteSignerPubkey || !relays.length || !clientSecretKey) {
+          return null;
+        }
+        const tools = ToolsBunkerSigner.fromBunker(
+          hexToBytes(clientSecretKey),
+          { pubkey: remoteSignerPubkey, relays, secret: null },
+          { pool: options.pool },
+        );
+        // No tools.connect() — the bunker already approved this client
+        // on first pairing; re-sending `connect` is what triggers the
+        // cold-start approval prompt we are trying to avoid.
+        const signer = new BunkerSigner(tools, account.pubkey);
+        this.#setActive(account, signer);
+        return signer;
+      }
+
+      case 'android': {
+        if (!account.androidPackageName) return null;
+        if (!this.#defaultAndroidPlugin) return null;
+        const signer = new AndroidSigner(
+          this.#defaultAndroidPlugin,
+          account.androidPackageName,
+          account.npub,
+          account.pubkey,
+        );
+        this.#setActive(account, signer);
+        return signer;
+      }
+
+      case 'ncryptsec':
+        // No silent path — passphrase is not (and must not be) persisted.
+        return null;
+    }
   }
 
   /**

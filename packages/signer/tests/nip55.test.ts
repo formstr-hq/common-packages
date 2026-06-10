@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateSecretKey, getPublicKey, nip19, verifyEvent } from 'nostr-tools';
-import { createSigner, loginWithAndroidSigner } from '../src/index.js';
+import { createSigner, loginWithAndroidSigner, type SignerEvent } from '../src/index.js';
 import { LocalSigner } from '../src/core/localSigner.js';
 import type { StorageAdapter } from '../src/core/storage.js';
 import { MockAndroidPlugin } from './helpers/mockAndroidPlugin.js';
@@ -197,6 +197,108 @@ describe('NIP-55 (Android external signer)', () => {
     expect(result.npub).toBe(nip19.npubEncode(getPublicKey(sk)));
     expect(result.pubkey).toBe(getPublicKey(sk));
     expect(result.packageName).toBe('com.test.app');
+  });
+
+  describe('unlock (silent hydrate, android branch)', () => {
+    it('constructs the AndroidSigner from cached state with no plugin roundtrip', async () => {
+      const sk = generateSecretKey();
+      const plugin = new MockAndroidPlugin(sk);
+      const storage = makeMockStorage();
+
+      const first = createSigner({ storage, androidSignerPlugin: plugin });
+      await first.loginWithAndroidSigner({ packageName: 'com.greenart7c3.nostrsigner' });
+
+      const second = createSigner({ storage, androidSignerPlugin: plugin });
+      expect(second.getActiveSigner()).toBeNull();
+
+      // Spy on every plugin entry point that would cause an Amber prompt
+      // on cold start. None of them must be invoked by unlock.
+      const getPk = vi.spyOn(plugin, 'getPublicKey');
+      const setPkg = vi.spyOn(plugin, 'setPackageName');
+
+      const unlocked = await second.unlock();
+      expect(unlocked).not.toBeNull();
+      expect(getPk).not.toHaveBeenCalled();
+      expect(setPkg).not.toHaveBeenCalled();
+      expect(second.getActiveSigner()).toBe(unlocked);
+      expect(await unlocked!.getPublicKey()).toBe(getPublicKey(sk));
+    });
+
+    it('returns null when active account is android but no plugin is configured', async () => {
+      const sk = generateSecretKey();
+      const plugin = new MockAndroidPlugin(sk);
+      const storage = makeMockStorage();
+
+      const first = createSigner({ storage, androidSignerPlugin: plugin });
+      await first.loginWithAndroidSigner();
+
+      // No androidSignerPlugin on the second instance.
+      const second = createSigner({ storage });
+      expect(await second.unlock()).toBeNull();
+      expect(second.getActiveSigner()).toBeNull();
+    });
+
+    it('returns null when the active android account is missing androidPackageName', async () => {
+      const sk = generateSecretKey();
+      const pubkey = getPublicKey(sk);
+      const npub = nip19.npubEncode(pubkey);
+      const storage = makeMockStorage();
+      storage.set(
+        'accounts',
+        // Deliberately malformed: method=android with no androidPackageName.
+        // Shouldn't crash, just refuse to unlock.
+        JSON.stringify([{ npub, pubkey, method: 'android' }]),
+      );
+      storage.set('active-pubkey', pubkey);
+      const s = createSigner({
+        storage,
+        androidSignerPlugin: new MockAndroidPlugin(sk),
+      });
+      expect(await s.unlock()).toBeNull();
+      expect(s.getActiveSigner()).toBeNull();
+    });
+
+    it('emits a login event when unlocking after fresh hydrate', async () => {
+      const sk = generateSecretKey();
+      const plugin = new MockAndroidPlugin(sk);
+      const storage = makeMockStorage();
+
+      const first = createSigner({ storage, androidSignerPlugin: plugin });
+      await first.loginWithAndroidSigner();
+
+      const second = createSigner({ storage, androidSignerPlugin: plugin });
+      const events: SignerEvent[] = [];
+      second.onChange((e) => events.push(e));
+      await second.unlock();
+      expect(events.map((e) => e.type)).toEqual(['login']);
+    });
+
+    it('unlocked signer signs valid events and round-trips nip44', async () => {
+      const sk = generateSecretKey();
+      const skPeer = generateSecretKey();
+      const plugin = new MockAndroidPlugin(sk);
+      const storage = makeMockStorage();
+
+      const first = createSigner({ storage, androidSignerPlugin: plugin });
+      await first.loginWithAndroidSigner();
+
+      const second = createSigner({ storage, androidSignerPlugin: plugin });
+      const unlocked = (await second.unlock())!;
+      const peer = new LocalSigner(skPeer);
+      const userPubkey = getPublicKey(sk);
+      const peerPubkey = getPublicKey(skPeer);
+
+      const signed = await unlocked.signEvent({
+        kind: 1,
+        content: 'unlocked',
+        tags: [],
+        created_at: Math.floor(Date.now() / 1000),
+      });
+      expect(verifyEvent(signed)).toBe(true);
+
+      const ct = await unlocked.nip44Encrypt(peerPubkey, 'hello');
+      expect(await peer.nip44Decrypt(userPubkey, ct)).toBe('hello');
+    });
   });
 
   describe('listAndroidSignerApps', () => {

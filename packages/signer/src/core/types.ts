@@ -104,6 +104,19 @@ export interface BunkerLoginOptions {
   perms?: string[];
 }
 
+/**
+ * Options for {@link Signer.unlock}. Only `nip46` needs `pool`; the other
+ * methods reconstruct their signer from purely local state.
+ */
+export interface UnlockOptions {
+  /**
+   * Relay pool used when silently re-attaching a NIP-46 bunker session.
+   * The BunkerSigner needs somewhere to subscribe for incoming responses;
+   * without a pool the nip46 branch returns `null`.
+   */
+  pool?: AbstractSimplePool;
+}
+
 export interface NostrConnectOptions {
   relays: string[];
   metadata?: { name?: string; url?: string; image?: string };

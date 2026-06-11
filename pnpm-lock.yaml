@@ -74,6 +74,24 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
 
+  packages/wllama-service:
+    devDependencies:
+      '@wllama/wllama':
+        specifier: ^3.0.0
+        version: 3.4.1
+      happy-dom:
+        specifier: ^15.0.0
+        version: 15.11.7
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
+
 packages:
 
   '@ampproject/remapping@2.3.0':
@@ -666,6 +684,9 @@ packages:
 
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
+
+  '@wllama/wllama@3.4.1':
+    resolution: {integrity: sha512-izq3CLVsIIpFoi4lI5/yvpM1tbzTBnDU8WuVi6I1q1oQgImSXSGF8eZo8WwDNBgbmhVJpcPGyw8cg24jKk0sbg==}
 
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
@@ -1979,6 +2000,8 @@ snapshots:
       '@vitest/pretty-format': 2.1.9
       loupe: 3.2.1
       tinyrainbow: 1.2.0
+
+  '@wllama/wllama@3.4.1': {}
 
   '@xmldom/xmldom@0.9.10': {}
 

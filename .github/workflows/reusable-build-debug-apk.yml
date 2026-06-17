@@ -32,7 +32,6 @@ permissions:
   pull-requests: write
   issues: write
   actions: read
-  issues: write
 
 jobs:
   build:

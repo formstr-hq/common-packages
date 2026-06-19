@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@formstr/local-relay tester</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a; --bg: #fafafa; --muted: #6b7280; --border: #d4d4d8;
+        --accent: #2563eb; --ok: #047857; --warn: #b45309; --down: #b91c1c;
+        --surface: #fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e7eb; --bg: #0b0b0b; --muted: #9ca3af; --border: #2a2a2a;
+          --accent: #60a5fa; --ok: #34d399; --warn: #fbbf24; --down: #f87171;
+          --surface: #18181b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0 auto; max-width: 760px; padding: 24px;
+        font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg);
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.sub { color: var(--muted); margin: 0 0 20px; }
+      label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+      input {
+        width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+        border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit;
+      }
+      .row { display: flex; gap: 8px; margin-top: 16px; }
+      button {
+        padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent);
+        color: #fff; font: inherit; cursor: pointer;
+      }
+      button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+      #status {
+        margin: 18px 0 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+        border: 1px solid var(--border); background: var(--surface);
+      }
+      #status.live { border-color: var(--accent); }
+      #status.done { color: var(--muted); }
+      #health { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+      .relay { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+      .relay.connected { color: var(--ok); border-color: var(--ok); }
+      .relay.connecting, .relay.reconnecting { color: var(--warn); border-color: var(--warn); }
+      .relay.down { color: var(--down); border-color: var(--down); }
+      #stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 16px; }
+      .stat { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
+      .note { padding: 14px 0; border-top: 1px solid var(--border); }
+      .note .head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+      .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; background: var(--border); flex: 0 0 auto; }
+      .avatar.ph { display: flex; align-items: center; justify-content: center; font-weight: 600; color: var(--muted); }
+      .note .name { font-weight: 600; }
+      .note .meta { font-size: 12px; color: var(--muted); }
+      .note .body { white-space: pre-wrap; word-break: break-word; }
+      .note .engage { margin-top: 8px; font-size: 13px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <h1>@formstr/local-relay — full-contract tester</h1>
+    <p class="sub">
+      Contact list → following feed → profiles → likes → zaps. The app only
+      <em>declares interests</em>; the worker (local relay) fulfills them.
+    </p>
+
+    <label for="pubkey">User (hex pubkey or npub) — we fetch THEIR following feed</label>
+    <input id="pubkey" />
+    <label for="relays">User relays (comma-separated)</label>
+    <input id="relays" />
+
+    <div class="row">
+      <button id="go">Load following feed</button>
+      <button id="stop" class="ghost">Drop interests</button>
+    </div>
+
+    <div id="status">…</div>
+    <div id="health"></div>
+    <div id="stats"></div>
+    <div id="feed"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

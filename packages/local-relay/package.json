@@ -1,0 +1,72 @@
+{
+  "name": "@formstr/local-relay",
+  "version": "0.1.0",
+  "description": "NIP-01 Web Worker local relay + an intent-only data layer for Nostr apps. The app declares interests and publishes; the worker owns every connection decision.",
+  "license": "MIT",
+  "author": "Abhay <toabhayraizada@gmail.com>",
+  "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/local-relay#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/formstr-hq/common-packages.git",
+    "directory": "packages/local-relay"
+  },
+  "bugs": {
+    "url": "https://github.com/formstr-hq/common-packages/issues"
+  },
+  "keywords": [
+    "nostr",
+    "relay",
+    "local-relay",
+    "web-worker",
+    "nip-01",
+    "nip-65",
+    "outbox",
+    "offline-first",
+    "formstr"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "import": "./dist/worker.js",
+      "require": "./dist/worker.cjs"
+    },
+    "./testkit": {
+      "types": "./dist/testkit.d.ts",
+      "import": "./dist/testkit.js",
+      "require": "./dist/testkit.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.23.5"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

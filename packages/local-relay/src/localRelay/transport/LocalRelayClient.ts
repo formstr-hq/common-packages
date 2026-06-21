@@ -12,7 +12,7 @@
 import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
 import { Channel } from "./channel";
-import { FromWorker, ToWorker, RelayPublishOutcome, RelayHealth } from "./frames";
+import { FromWorker, ToWorker, RelayPublishOutcome, RelayHealth, Diagnostics } from "./frames";
 
 export interface SubscribeHandlers {
   onEvent: (event: Event) => void;
@@ -32,6 +32,7 @@ export class LocalRelayClient {
   private subs = new Map<string, Sub>();
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
+  private pendingDiagnostics = new Map<string, (diagnostics: Diagnostics) => void>();
   private counter = 0;
 
   constructor(private channel: Channel, private opts: LocalRelayClientOptions = {}) {
@@ -90,6 +91,15 @@ export class LocalRelayClient {
     return new Promise((resolve) => {
       this.pendingHealth.set(reqId, resolve);
       this.send({ kind: "relayHealth", reqId });
+    });
+  }
+
+  /** Read-only snapshot of the worker's state (debugging). Triggers no network. */
+  diagnostics(): Promise<Diagnostics> {
+    const reqId = `d${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingDiagnostics.set(reqId, resolve);
+      this.send({ kind: "diagnostics", reqId });
     });
   }
 
@@ -153,6 +163,15 @@ export class LocalRelayClient {
       if (resolve) {
         this.pendingHealth.delete(m.reqId);
         resolve(m.relays);
+      }
+      return;
+    }
+
+    if (m.kind === "diagnostics") {
+      const resolve = this.pendingDiagnostics.get(m.reqId);
+      if (resolve) {
+        this.pendingDiagnostics.delete(m.reqId);
+        resolve(m.diagnostics);
       }
       return;
     }

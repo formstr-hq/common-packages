@@ -148,6 +148,36 @@ describe("DataLayer", () => {
     await settle();
     expect(f.count("wss://u1")).toBe(2);
   });
+
+  it("diagnostics exposes paused state, interests, upstream routing, cache, and health", async () => {
+    const { service, dataLayer } = await wire();
+    service.db.add(
+      makeEvent({ id: "r".repeat(64), kind: 10002, pubkey: "alice", tags: [["r", "wss://alice-relay"]] })
+    );
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} }); // outbox-routed
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }); // author-less → user relays
+    await settle();
+
+    const diag = await dataLayer.diagnostics();
+    expect(diag.paused).toBe(false);
+    expect(diag.interests).toHaveLength(2);
+    expect(diag.interests.every((i) => i.sync)).toBe(true);
+
+    const routed = diag.upstream.flatMap((u) => u.relays);
+    expect(routed).toContain("wss://alice-relay"); // author branch resolves via outbox
+    expect(routed).toContain("wss://u1"); // author-less branch resolves via user relays
+
+    expect(diag.cache.totalEvents).toBeGreaterThanOrEqual(1); // the kind-10002 is stored
+    expect(diag.relays.some((h) => h.relay === "wss://u1")).toBe(true);
+    expect(diag.enrichment).toEqual({ queuedIds: 0, queuedAuthors: 0, pending: false });
+  });
+
+  it("diagnostics reports the paused lifecycle state", async () => {
+    const { dataLayer } = await wire();
+    dataLayer.pause();
+    await settle();
+    expect((await dataLayer.diagnostics()).paused).toBe(true);
+  });
 });
 
 describe("DataLayer singleton accessor", () => {

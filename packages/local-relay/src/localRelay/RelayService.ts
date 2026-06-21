@@ -17,6 +17,7 @@ import { EventDB } from "./core/EventDB";
 import { generateFilterHash } from "./core/matchFilter";
 import { Channel } from "./transport/channel";
 import { WorkerHost } from "./transport/WorkerHost";
+import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
 import { SocketFactory, webSocketFactory } from "./sync/Socket";
@@ -71,6 +72,7 @@ export class RelayService {
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
+      onDiagnostics: (reqId) => this.host.postDiagnostics(reqId, this.diagnostics()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -328,6 +330,49 @@ export class RelayService {
       if (!tag[2] || tag[2] === dir) out.push(tag[1]);
     }
     return out;
+  }
+
+  /**
+   * Read-only snapshot of the worker's state for debugging. Pure observation —
+   * touches no sockets and mutates nothing. Surfaces the things you can't see
+   * from the main thread: whether the worker is paused, which interests it holds,
+   * what it's actually subscribed to upstream (and where), and the store size.
+   */
+  private diagnostics(): Diagnostics {
+    return {
+      paused: this.paused,
+      interests: Array.from(this.interests.entries()).map(([subId, i]) => ({
+        subId,
+        filters: i.filters,
+        sync: i.sync,
+      })),
+      upstream: Array.from(this.upstream.entries()).map(([filterHash, u]) => ({
+        filterHash,
+        filters: u.filters,
+        relays: this.routeRelays(u.filters),
+      })),
+      relays: this.relayHealth(),
+      cache: this.db.stats(),
+      enrichment: {
+        queuedIds: this.enrichIds.size,
+        queuedAuthors: this.enrichAuthors.size,
+        pending: this.enrichTimer !== null,
+      },
+    };
+  }
+
+  /** Candidate relays a set of filters routes to (author outbox ∪ user relays). */
+  private routeRelays(filters: Filter[]): string[] {
+    const relays = new Set<string>();
+    for (const filter of filters) {
+      if (filter.authors && filter.authors.length) {
+        for (const pubkey of filter.authors) {
+          for (const relay of this.getWriteRelays(pubkey)) relays.add(relay);
+        }
+      }
+      for (const relay of this.userRelays) relays.add(relay);
+    }
+    return Array.from(relays);
   }
 
   /** Live connection health for the user's relays (configured + any connected). */

@@ -152,9 +152,21 @@ describe("LocalRelayClient frame routing", () => {
     const { client: clientCh, worker: workerCh } = createChannelPair();
     const client = new LocalRelayClient(clientCh);
     void client;
-    // No pending publish/health with these ids — must be silently ignored.
+    // No pending publish/health/diagnostics with these ids — silently ignored.
     workerCh.post({ kind: "publishResult", pubId: "ghost", results: [] });
     workerCh.post({ kind: "relayHealth", reqId: "ghost", relays: [] });
+    workerCh.post({
+      kind: "diagnostics",
+      reqId: "ghost",
+      diagnostics: {
+        paused: false,
+        interests: [],
+        upstream: [],
+        relays: [],
+        cache: { totalEvents: 0, eventsByKind: {}, totalAuthors: 0 },
+        enrichment: { queuedIds: 0, queuedAuthors: 0, pending: false },
+      },
+    });
     workerCh.post({ kind: "ready" });
     await tick();
     // Reaching here without throwing is the assertion.

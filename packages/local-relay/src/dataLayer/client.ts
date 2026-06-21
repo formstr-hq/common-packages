@@ -14,9 +14,9 @@
 import type { Event, Filter } from "../localRelay/core/types";
 import type { EventTemplate } from "nostr-tools";
 import { LocalRelayClient, SubscribeHandlers } from "../localRelay/transport/LocalRelayClient";
-import type { RelayPublishOutcome, RelayHealth } from "../localRelay/transport/frames";
+import type { RelayPublishOutcome, RelayHealth, Diagnostics } from "../localRelay/transport/frames";
 
-export type { RelayPublishOutcome, RelayHealth };
+export type { RelayPublishOutcome, RelayHealth, Diagnostics };
 
 /**
  * Aggregate publish outcome — same shape `PublishDiagnosticModal` already
@@ -132,6 +132,15 @@ export class DataLayer {
   /** Live connection health of the user's relays (read-only observation). */
   relayHealth(): Promise<RelayHealth[]> {
     return this.deps.client.relayHealth();
+  }
+
+  /**
+   * Read-only snapshot of the worker's state — paused flag, declared interests,
+   * live upstream subscriptions + their routed relays, relay health, store stats,
+   * and pending enrichment. For debugging only; triggers no network.
+   */
+  diagnostics(): Promise<Diagnostics> {
+    return this.deps.client.diagnostics();
   }
 
   /** Active-account change: retarget scope (does NOT rehydrate the shared store). */

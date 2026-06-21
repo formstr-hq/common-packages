@@ -47,6 +47,7 @@ export type {
   FromWorker,
   RelayPublishOutcome,
   RelayHealth,
+  Diagnostics,
 } from "./localRelay/transport/frames";
 
 // ---- storage adapters ----

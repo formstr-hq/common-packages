@@ -215,6 +215,7 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `publishEvent(event)` | Publish an already-signed event (lists, diagnostics retry). | Yes |
 | `addEvent(event)` / `addEvents(events)` | Add events to the local store (optimistic / out-of-band). | No |
 | `relayHealth()` | Live connection health of the user's relays. | Read-only observation |
+| `diagnostics()` | Read-only snapshot of worker state (paused, interests, upstream routing, cache, enrichment). | Read-only observation |
 | `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
 | `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
 | `pause()` / `resume()` | Lifecycle hints (backgrounded / foregrounded). | Worker decides |
@@ -480,6 +481,39 @@ const health = await dataLayer.relayHealth(); // RelayHealth[]
 Read-only observation — it reports state, it doesn't open anything. Poll it on a
 timer if you want a live status panel (the tester does so every 1.5s).
 
+### 11.4 Diagnostics
+
+For deeper debugging, `diagnostics()` returns a read-only snapshot of the
+**worker's** internal state. Like `relayHealth`, it's pure observation — it
+touches no sockets and mutates nothing.
+
+```ts
+const d = await dataLayer.diagnostics();
+// {
+//   paused,                                   // lifecycle flag (true after pause())
+//   interests: [{ subId, filters, sync }],    // what the app has declared
+//   upstream:  [{ filterHash, filters, relays }], // what the worker is subscribed to, and where
+//   relays,                                   // RelayHealth[] (same as relayHealth())
+//   cache:     { totalEvents, eventsByKind, totalAuthors },
+//   enrichment:{ queuedIds, queuedAuthors, pending },
+// }
+```
+
+`interests` vs `upstream` is the useful pair: you own the filters, so you can map
+**feature → filters → relays** to see which relay is serving which part of your
+UI. The `upstream[].relays` are *candidate* relays (author outbox ∪ user relays) —
+a superset of the sockets actually opened, since outbox routing caps per-relay
+author lists.
+
+This is the tool for telling a wedged **client** apart from a wedged **worker**
+after suspend/resume. Two tells:
+
+- `paused: true` while the app is foregrounded → a `resume()` was dropped; the
+  worker is ignoring new interests (`reconcile()` short-circuits while paused).
+- `interests: []` while your app still holds `observe` handles → the worker was
+  restarted (common when the OS kills the webview on mobile suspend) and its
+  in-memory interests are gone, but the main thread never re-declared them.
+
 ---
 
 ## 12. Authentication (NIP-42)
@@ -716,3 +750,10 @@ author-scoped read has no home and stays pending until relays are known.
 **Multiple components, one subscription?**
 Yes — interests are deduped by filter-hash. Identical filters share one upstream
 subscription; that's the whole point of the architecture.
+
+**Feeds stop loading after backgrounding/resume, and retry does nothing.**
+Call `dataLayer.diagnostics()` (§11.4). If `paused: true` while foregrounded, a
+`resume()` was dropped — send one. If `interests: []` while your app still holds
+`observe` handles, the worker was restarted (common on mobile suspend) and lost
+its in-memory interests; the main thread needs to re-declare them. See §11.4 for
+the full breakdown.

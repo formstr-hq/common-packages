@@ -218,6 +218,7 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `diagnostics()` | Read-only snapshot of worker state (paused, interests, upstream routing, cache, enrichment). | Read-only observation |
 | `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
 | `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
+| `addGossipRelay(url)` / `removeGossipRelay(url)` | Add/remove a discovered relay to the gossip pool (fetch referenced/missing events). | Discovery only |
 | `pause()` / `resume()` | Lifecycle hints (backgrounded / foregrounded). | Worker decides |
 
 > Note: `setUserRelays` exists on both `LocalRelayClient` and `DataLayer`. Call it
@@ -493,7 +494,9 @@ const d = await dataLayer.diagnostics();
 //   paused,                                   // lifecycle flag (true after pause())
 //   interests: [{ subId, filters, sync }],    // what the app has declared
 //   upstream:  [{ filterHash, filters, relays }], // what the worker is subscribed to, and where
-//   relays,                                   // RelayHealth[] (same as relayHealth())
+//   relays,                                   // RelayHealth[] (same as relayHealth()), each tagged { gossip }
+//   gossipRelays: string[],                   // discovered relays currently in the pool
+//   connections: { user, outbox, gossip, total }, // counts of CONNECTED relays by source
 //   cache:     { totalEvents, eventsByKind, totalAuthors },
 //   enrichment:{ queuedIds, queuedAuthors, pending },
 // }
@@ -513,6 +516,49 @@ after suspend/resume. Two tells:
 - `interests: []` while your app still holds `observe` handles → the worker was
   restarted (common when the OS kills the webview on mobile suspend) and its
   in-memory interests are gone, but the main thread never re-declared them.
+
+### 11.5 Discovered (gossip) relays
+
+Outbox routing (§11.2) covers *authors you follow* — it reads their `kind:10002`
+write relays from the store. But some events can't be reached that way: a note
+**referenced inside a DM**, an `nevent`/`nprofile` a user pastes, an `e`-tag hint
+to a niche relay. The relay for those lives only in the client (e.g. after
+decrypting the DM), and the author may be someone you've never synced.
+
+`addGossipRelay` feeds those discovered relays to the worker:
+
+```ts
+// client decrypts a DM, parses an nevent → { id, relays: [hint] }
+dataLayer.addGossipRelay(hint);                  // tell the worker about it
+dataLayer.observe([{ ids: [id] }], { onEvent }); // plain networked observe — no relay param
+// worker fetches { ids: [id] } from userRelays ∪ gossip pool → finds it on `hint`
+```
+
+Key properties:
+
+- **Separate from `setUserRelays`.** The gossip pool is *discovered extras used to
+  find events*. It never becomes a publish target, and clearing user relays
+  doesn't touch it.
+- **Read/discovery only.** Used on the batched discovery path — author-less fetches
+  (`{ ids }`, `{ "#e" }`, …) and enrichment of referenced events — **not** the
+  author-feed firehose, so it can't fan your feeds out across random relays.
+- **Bounded (LRU).** Discovered relays come from untrusted hints, so the pool is
+  capped (default 64, `maxGossipRelays` on the worker) to limit the
+  amplification/connection blast radius; re-adding a url marks it most-recent.
+- **Ephemeral.** Not persisted — a worker restart starts with an empty pool. The
+  *events* you fetched are already in IndexedDB; re-deriving a hint from a stored
+  DM is cheap, and not persisting untrusted relay URLs is the safer default.
+- **Observable.** `diagnostics().gossipRelays` lists the pool;
+  `diagnostics().connections.gossip` and the `gossip` flag on each `relayHealth()`
+  entry let you show "connected to N discovered relays" in the UI:
+
+  ```ts
+  const health = await dataLayer.relayHealth();
+  const discovered = health.filter((r) => r.gossip && r.connected).length;
+  ```
+
+`removeGossipRelay(url)` drops a relay so future fetches stop targeting it (an
+already-open socket closes on the next `pause()`/`resume()` cycle).
 
 ---
 

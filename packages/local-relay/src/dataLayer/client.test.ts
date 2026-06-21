@@ -208,3 +208,104 @@ describe("DataLayer singleton accessor", () => {
     expect((ambient as unknown as Record<string, unknown>).notAMethod).toBeUndefined();
   });
 });
+
+describe("DataLayer gossip relays", () => {
+  const reqSub = (sock: { sent: any[] }) => sock.sent.find((m) => m[0] === "REQ")![1] as string;
+
+  it("an author-less interest fetches from a discovered relay (the DM-reference case)", async () => {
+    const { f, service, dataLayer } = await wire();
+    dataLayer.addGossipRelay("wss://gossip"); // hint extracted from a decrypted DM
+    const got: string[] = [];
+    dataLayer.observe([{ ids: ["d".repeat(64)] }], { onEvent: (e) => got.push(e.id) });
+    await settle();
+
+    expect(f.count("wss://gossip")).toBe(1); // worker dialed the discovered relay
+    const sock = f.last("wss://gossip");
+    sock.open();
+    sock.emit(["EVENT", reqSub(sock), makeEvent({ id: "d".repeat(64), kind: 1, pubkey: "x" })]);
+    await settle();
+    expect(got).toEqual(["d".repeat(64)]);
+    expect(service.db.getById("d".repeat(64))).toBeDefined();
+  });
+
+  it("enrichment reaches into the gossip pool for referenced events", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.addGossipRelay("wss://gossip");
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1"); // alice has no outbox → falls back to user relay
+    sock.open();
+    sock.emit([
+      "EVENT",
+      reqSub(sock),
+      makeEvent({ id: "a".repeat(64), kind: 1, pubkey: "alice", tags: [["e", "f".repeat(64)]] }),
+    ]);
+    await new Promise((r) => setTimeout(r, 300)); // enrich debounce
+
+    expect(f.count("wss://gossip")).toBe(1); // enrichment dialed the gossip relay too
+    f.last("wss://gossip").open(); // flush the queued REQ
+    const greq = f.last("wss://gossip").sent.find((m) => m[0] === "REQ");
+    expect(greq.slice(2)).toEqual(expect.arrayContaining([expect.objectContaining({ ids: ["f".repeat(64)] })]));
+  });
+
+  it("diagnostics reports the pool, the per-relay gossip flag, and connection counts", async () => {
+    const { f, service, dataLayer } = await wire();
+    service.db.add(
+      makeEvent({ id: "r".repeat(64), kind: 10002, pubkey: "alice", tags: [["r", "wss://alice-relay"]] })
+    );
+    dataLayer.addGossipRelay("wss://gossip");
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} }); // → outbox alice-relay
+    dataLayer.observe([{ ids: ["x".repeat(64)] }], { onEvent: () => {} }); // → user ∪ gossip
+    await settle();
+    f.last("wss://u1").open();
+    f.last("wss://alice-relay").open();
+    f.last("wss://gossip").open();
+    await settle();
+
+    const diag = await dataLayer.diagnostics();
+    expect(diag.gossipRelays).toEqual(["wss://gossip"]);
+    expect(diag.relays.find((h) => h.relay === "wss://gossip")).toMatchObject({ gossip: true, connected: true });
+    expect(diag.relays.find((h) => h.relay === "wss://alice-relay")).toMatchObject({ gossip: false });
+    expect(diag.connections.gossip).toBe(1); // wss://gossip
+    expect(diag.connections.outbox).toBe(1); // wss://alice-relay (connected, not user, not gossip)
+    expect(diag.connections.user).toBe(1); // wss://u1
+    expect(diag.connections.total).toBe(3);
+  });
+
+  it("removeGossipRelay drops the relay so future fetches skip it", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.addGossipRelay("wss://gossip");
+    dataLayer.removeGossipRelay("wss://gossip");
+    dataLayer.removeGossipRelay("wss://not-in-pool"); // no-op
+    dataLayer.observe([{ ids: ["x".repeat(64)] }], { onEvent: () => {} });
+    await settle();
+
+    expect(f.count("wss://gossip")).toBe(0); // removed → never targeted
+    expect((await dataLayer.diagnostics()).gossipRelays).toEqual([]);
+  });
+
+  it("bounds the pool (LRU) and marks a re-added relay most-recent", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const f = fakeSocketFactory();
+    const service = new RelayService({
+      channel: workerCh,
+      socketFactory: f.factory,
+      storage: new MemoryStorage(),
+      verify: () => true,
+      now: () => NOW,
+      maxGossipRelays: 2,
+    });
+    await service.start();
+    const client = new LocalRelayClient(clientCh);
+    const dataLayer = new DataLayer({ client, sign: async (t: EventTemplate) => makeEvent({ kind: t.kind }) });
+    await settle();
+
+    dataLayer.addGossipRelay("wss://a");
+    dataLayer.addGossipRelay("wss://b");
+    dataLayer.addGossipRelay("wss://a"); // re-add → most-recent → [b, a]
+    dataLayer.addGossipRelay("wss://c"); // overflow → evict oldest (b) → [a, c]
+    await settle();
+
+    expect((await dataLayer.diagnostics()).gossipRelays).toEqual(["wss://a", "wss://c"]);
+  });
+});

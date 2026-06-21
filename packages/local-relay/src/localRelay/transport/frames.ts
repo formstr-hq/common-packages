@@ -37,6 +37,11 @@ export interface Diagnostics {
   upstream: { filterHash: string; filters: Filter[]; relays: string[] }[];
   /** Per-relay connection health (the same data as `relayHealth()`). */
   relays: RelayHealth[];
+  /** The discovered relays currently in the gossip pool (most-recent last). */
+  gossipRelays: string[];
+  /** Counts of currently-connected relays by source. `outbox` is derived
+   *  (connected, but neither a user nor a gossip relay). */
+  connections: { user: number; outbox: number; gossip: number; total: number };
   /** Local store statistics (total events, per-kind counts, distinct authors). */
   cache: DBStats;
   /** Pending autonomous-enrichment work. */
@@ -64,6 +69,10 @@ export type ToWorker =
   // --- config / observation / lifecycle (not network commands) ---
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
+  /** Add/remove a discovered relay to the gossip pool (read-only discovery —
+   *  used to fetch referenced/missing events; never a publish target). */
+  | { kind: "addGossipRelay"; url: string }
+  | { kind: "removeGossipRelay"; url: string }
   | { kind: "signResult"; reqId: string; event: Event | null }
   | { kind: "relayHealth"; reqId: string }
   /** Request a read-only snapshot of the worker's state (debugging only). */

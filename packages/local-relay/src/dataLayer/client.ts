@@ -153,6 +153,21 @@ export class DataLayer {
     this.deps.client.setUserRelays(relays);
   }
 
+  /**
+   * Add a discovered relay to the gossip pool so the worker can fetch
+   * referenced/missing events from it (e.g. a note referenced inside a DM, whose
+   * relay hint only the client can see after decryption). Read/discovery only —
+   * never a publish target, kept separate from the user's own relays, and bounded.
+   */
+  addGossipRelay(url: string): void {
+    this.deps.client.addGossipRelay(url);
+  }
+
+  /** Remove a relay from the gossip pool; future fetches stop targeting it. */
+  removeGossipRelay(url: string): void {
+    this.deps.client.removeGossipRelay(url);
+  }
+
   /** App backgrounded — lifecycle hint; the worker decides what to do. */
   pause(): void {
     this.deps.client.pause();

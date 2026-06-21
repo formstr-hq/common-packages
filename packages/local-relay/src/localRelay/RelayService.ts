@@ -19,6 +19,7 @@ import { Channel } from "./transport/channel";
 import { WorkerHost } from "./transport/WorkerHost";
 import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
+import type { RelayHealth } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
 import { SocketFactory, webSocketFactory } from "./sync/Socket";
 import { StorageAdapter } from "./storage/StorageAdapter";
@@ -28,6 +29,15 @@ import { Persistence, PersistenceOptions } from "./storage/persistence";
 const ENRICH_DEBOUNCE_MS = 200;
 const ENRICH_BATCH = 200;
 
+/**
+ * Cap on the discovered (gossip) relay pool. Discovered relays come from
+ * untrusted hints, so an unbounded pool is an amplification vector and risks the
+ * browser's total-WebSocket ceiling (Firefox defaults to ~200). The pool is LRU:
+ * the most-recently-added survive, so the cap bounds how many discovered relays
+ * the worker ever dials.
+ */
+const DEFAULT_MAX_GOSSIP_RELAYS = 64;
+
 export interface RelayServiceOptions {
   channel: Channel;
   socketFactory?: SocketFactory;
@@ -35,6 +45,8 @@ export interface RelayServiceOptions {
   persistence?: PersistenceOptions;
   verify?: (event: Event) => boolean;
   now?: () => number;
+  /** Max discovered relays kept in the gossip pool (LRU). Default 64. */
+  maxGossipRelays?: number;
 }
 
 export class RelayService {
@@ -44,6 +56,14 @@ export class RelayService {
   private sync: SyncEngine;
   private persistence: Persistence | null;
   private userRelays: string[] = [];
+  /**
+   * Discovered relays from hints (DM-referenced notes, e/q-tag hints, …), kept
+   * separate from `userRelays`. Used only on the read/discovery path (enrichment
+   * + author-less fetches) to find referenced/missing events — never a publish
+   * target. Ephemeral and LRU-bounded; most-recently-added is last.
+   */
+  private gossipRelays: string[] = [];
+  private readonly maxGossipRelays: number;
   /** Standing interests by subscription id (the worker's only network input). */
   private interests = new Map<string, { filters: Filter[]; sync: boolean }>();
   /** Live upstream subscriptions, deduped by filter-hash across interests. */
@@ -61,6 +81,7 @@ export class RelayService {
   constructor(opts: RelayServiceOptions) {
     this.verify = opts.verify ?? defaultVerify;
     this.now = opts.now ?? (() => Date.now());
+    this.maxGossipRelays = opts.maxGossipRelays ?? DEFAULT_MAX_GOSSIP_RELAYS;
     this.db = new EventDB(opts.now);
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
     this.host = new WorkerHost(opts.channel, this.db, {
@@ -68,6 +89,8 @@ export class RelayService {
         this.userRelays = relays;
         this.reconcile(); // new relays may let pending interests find a home
       },
+      onAddGossipRelay: (url) => this.addGossipRelay(url),
+      onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
       onObserve: (subId, filters, sync) => this.observe(subId, filters, sync),
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
@@ -197,7 +220,8 @@ export class RelayService {
    * feed can never make the worker open an unbounded number of reads.
    */
   private flushEnrichment(): void {
-    if (this.paused || !this.userRelays.length) return;
+    const relays = this.readRelays();
+    if (this.paused || !relays.length) return;
     const ids = Array.from(this.enrichIds).slice(0, ENRICH_BATCH);
     const authors = Array.from(this.enrichAuthors).slice(0, ENRICH_BATCH);
     ids.forEach((id) => {
@@ -213,7 +237,9 @@ export class RelayService {
     if (ids.length) filters.push({ ids });
     if (authors.length) filters.push({ kinds: [0], authors });
     if (filters.length) {
-      const id = this.pool.subscribe(this.userRelays, filters, {
+      // Discovery path: also reach into the gossip pool to find referenced events
+      // that may live on relays the user isn't subscribed to.
+      const id = this.pool.subscribe(relays, filters, {
         onEvent: (event) => {
           if (this.verify(event)) this.ingest([event], false);
         },
@@ -227,7 +253,9 @@ export class RelayService {
 
   /**
    * Open a standing upstream subscription for a scope. Author-scoped filters are
-   * outbox-partitioned via SyncEngine; author-less ones hit the user's relays.
+   * outbox-partitioned via SyncEngine (gossip relays stay out of the feed
+   * firehose); author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note)
+   * hit the user's relays ∪ the gossip pool, so discovered hints can resolve them.
    */
   private openSync(filters: Filter[]): SyncHandle {
     const handles: SyncHandle[] = [];
@@ -244,13 +272,16 @@ export class RelayService {
             limit: filter.limit,
           })
         );
-      } else if (this.userRelays.length) {
-        const id = this.pool.subscribe(this.userRelays, [filter], {
-          onEvent: (event) => {
-            if (this.verify(event)) this.ingest([event]);
-          },
-        });
-        handles.push({ close: () => this.pool.unsubscribe(id) });
+      } else {
+        const relays = this.readRelays();
+        if (relays.length) {
+          const id = this.pool.subscribe(relays, [filter], {
+            onEvent: (event) => {
+              if (this.verify(event)) this.ingest([event]);
+            },
+          });
+          handles.push({ close: () => this.pool.unsubscribe(id) });
+        }
       }
     }
     return { close: () => handles.forEach((h) => h.close()) };
@@ -307,6 +338,34 @@ export class RelayService {
     if (this.enrichIds.size || this.enrichAuthors.size) this.scheduleEnrich();
   }
 
+  // --- gossip pool ----------------------------------------------------------
+
+  /**
+   * Add a discovered relay to the gossip pool (LRU). Takes effect for subsequent
+   * author-less fetches and the next enrichment flush — it does not re-open
+   * existing subscriptions. Re-adding an existing url marks it most-recent.
+   */
+  private addGossipRelay(url: string): void {
+    const existing = this.gossipRelays.indexOf(url);
+    if (existing !== -1) this.gossipRelays.splice(existing, 1);
+    this.gossipRelays.push(url);
+    if (this.gossipRelays.length > this.maxGossipRelays) this.gossipRelays.shift();
+  }
+
+  /**
+   * Drop a discovered relay from the pool so future fetches stop targeting it.
+   * Membership only — an already-open socket closes on the next pause()/resume.
+   */
+  private removeGossipRelay(url: string): void {
+    const i = this.gossipRelays.indexOf(url);
+    if (i !== -1) this.gossipRelays.splice(i, 1);
+  }
+
+  /** Relays the read/discovery path may use: user relays ∪ the gossip pool. */
+  private readRelays(): string[] {
+    return Array.from(new Set([...this.userRelays, ...this.gossipRelays]));
+  }
+
   // --- helpers --------------------------------------------------------------
 
   /** Outbox cache IS the store: parse the latest kind-10002 for this pubkey. */
@@ -339,6 +398,9 @@ export class RelayService {
    * what it's actually subscribed to upstream (and where), and the store size.
    */
   private diagnostics(): Diagnostics {
+    const relays = this.relayHealth();
+    const connected = relays.filter((r) => r.connected);
+    const userSet = new Set(this.userRelays);
     return {
       paused: this.paused,
       interests: Array.from(this.interests.entries()).map(([subId, i]) => ({
@@ -351,7 +413,14 @@ export class RelayService {
         filters: u.filters,
         relays: this.routeRelays(u.filters),
       })),
-      relays: this.relayHealth(),
+      relays,
+      gossipRelays: [...this.gossipRelays],
+      connections: {
+        user: connected.filter((r) => userSet.has(r.relay)).length,
+        gossip: connected.filter((r) => r.gossip).length,
+        outbox: connected.filter((r) => !userSet.has(r.relay) && !r.gossip).length,
+        total: connected.length,
+      },
       cache: this.db.stats(),
       enrichment: {
         queuedIds: this.enrichIds.size,
@@ -361,7 +430,11 @@ export class RelayService {
     };
   }
 
-  /** Candidate relays a set of filters routes to (author outbox ∪ user relays). */
+  /**
+   * Candidate relays a set of filters routes to. Author-scoped filters go to the
+   * authors' outbox ∪ user relays; author-less ones add the gossip pool (mirrors
+   * `openSync`).
+   */
   private routeRelays(filters: Filter[]): string[] {
     const relays = new Set<string>();
     for (const filter of filters) {
@@ -369,19 +442,29 @@ export class RelayService {
         for (const pubkey of filter.authors) {
           for (const relay of this.getWriteRelays(pubkey)) relays.add(relay);
         }
+        for (const relay of this.userRelays) relays.add(relay);
+      } else {
+        for (const relay of this.readRelays()) relays.add(relay);
       }
-      for (const relay of this.userRelays) relays.add(relay);
     }
     return Array.from(relays);
   }
 
-  /** Live connection health for the user's relays (configured + any connected). */
-  private relayHealth() {
+  /**
+   * Live connection health for the user's relays (configured + any connected),
+   * each tagged with whether it's a discovered (gossip) relay.
+   */
+  private relayHealth(): RelayHealth[] {
     const fromPool = this.pool.relayHealth();
     const seen = new Set(fromPool.map((h) => h.relay));
-    const missing = Array.from(new Set(this.userRelays))
+    const missing: RelayHealth[] = Array.from(new Set(this.userRelays))
       .filter((r) => !seen.has(r))
-      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false }));
-    return [...fromPool, ...missing];
+      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false, gossip: false }));
+    const userSet = new Set(this.userRelays);
+    const gossipSet = new Set(this.gossipRelays);
+    return [...fromPool, ...missing].map((h) => ({
+      ...h,
+      gossip: gossipSet.has(h.relay) && !userSet.has(h.relay),
+    }));
   }
 }

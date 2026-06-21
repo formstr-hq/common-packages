@@ -231,7 +231,7 @@ describe("RelayPool teardown", () => {
 
     p.closeAll();
     expect(p.relayHealth([A])).toEqual([
-      { relay: A, connected: false, connecting: false, reconnecting: false },
+      { relay: A, connected: false, connecting: false, reconnecting: false, gossip: false },
     ]);
   });
 });

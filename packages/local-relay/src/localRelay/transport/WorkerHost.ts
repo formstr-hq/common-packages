@@ -18,6 +18,9 @@ export interface WorkerHostHooks {
   onSetAccount?: (pubkey: string | null) => void;
   /** The user's relay set changed (policy input for the worker's routing). */
   onSetUserRelays?: (relays: string[]) => void;
+  /** A discovered relay was added to / removed from the gossip pool. */
+  onAddGossipRelay?: (url: string) => void;
+  onRemoveGossipRelay?: (url: string) => void;
   /** A standing interest was registered/updated — the worker decides upstream. */
   onObserve?: (subId: string, filters: Filter[], sync: boolean) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
@@ -105,6 +108,12 @@ export class WorkerHost {
         break;
       case "setUserRelays":
         this.hooks.onSetUserRelays?.(m.relays);
+        break;
+      case "addGossipRelay":
+        this.hooks.onAddGossipRelay?.(m.url);
+        break;
+      case "removeGossipRelay":
+        this.hooks.onRemoveGossipRelay?.(m.url);
         break;
       case "pause":
         this.hooks.onPause?.();

@@ -112,6 +112,20 @@ export class LocalRelayClient {
     this.send({ kind: "setUserRelays", relays });
   }
 
+  /**
+   * Add a discovered relay to the worker's gossip pool — used to fetch
+   * referenced/missing events (e.g. a note referenced in a DM) from relays the
+   * user isn't subscribed to. Read/discovery only; never a publish target.
+   */
+  addGossipRelay(url: string): void {
+    this.send({ kind: "addGossipRelay", url });
+  }
+
+  /** Remove a relay from the gossip pool; future fetches stop targeting it. */
+  removeGossipRelay(url: string): void {
+    this.send({ kind: "removeGossipRelay", url });
+  }
+
   /** App backgrounded — a lifecycle hint; the worker decides what to do. */
   pause(): void {
     this.send({ kind: "pause" });

@@ -12,6 +12,25 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  apps/local-relay-tester:
+    dependencies:
+      '@formstr/local-relay':
+        specifier: workspace:*
+        version: link:../../packages/local-relay
+      nostr-tools:
+        specifier: ^2.23.5
+        version: 2.23.5(typescript@5.9.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.42
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.0
+        version: 5.4.21(@types/node@20.19.42)
+
   apps/tester:
     dependencies:
       '@capacitor/core':
@@ -42,6 +61,25 @@ importers:
       vite:
         specifier: ^5.4.0
         version: 5.4.21(@types/node@20.19.42)
+
+  packages/local-relay:
+    dependencies:
+      nostr-tools:
+        specifier: ^2.23.5
+        version: 2.23.5(typescript@5.9.3)
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^2.0.0
+        version: 2.1.9(vitest@2.1.9(@types/node@20.19.42)(happy-dom@15.11.7))
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
 
   packages/signer:
     dependencies:

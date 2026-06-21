@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "paths": {
+      "@formstr/local-relay": ["../../packages/local-relay/src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

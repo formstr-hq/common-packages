@@ -1,4 +1,4 @@
-import { DataLayer } from "./client";
+import { DataLayer, setDataLayer, getDataLayer, dataLayer as ambient } from "./client";
 import { RelayService } from "../localRelay/RelayService";
 import { LocalRelayClient } from "../localRelay/transport/LocalRelayClient";
 import { createChannelPair } from "../localRelay/transport/channel";
@@ -104,5 +104,77 @@ describe("DataLayer", () => {
 
     expect(found?.id).toBe("p".repeat(64));
     expect(f.count("wss://u1")).toBe(0);
+  });
+
+  it("addEvent / addEvents put events in the local store with no network", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.addEvent(makeEvent({ id: "x".repeat(64), kind: 1, pubkey: "alice" }));
+    dataLayer.addEvents([
+      makeEvent({ id: "y".repeat(64), kind: 1, pubkey: "alice" }),
+      makeEvent({ id: "z".repeat(64), kind: 1, pubkey: "alice" }),
+    ]);
+    await settle();
+
+    expect((await dataLayer.fetchById("x".repeat(64)))?.id).toBe("x".repeat(64));
+    expect((await dataLayer.fetchById("y".repeat(64)))?.id).toBe("y".repeat(64));
+    expect(f.count("wss://u1")).toBe(0);
+  });
+
+  it("setUserRelays retargets where an author-less sync interest connects", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.setUserRelays(["wss://u2"]);
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }); // author-less → user relays
+    await settle();
+    expect(f.count("wss://u2")).toBe(1);
+  });
+
+  it("setActiveAccount is accepted as a scope-retarget hint", async () => {
+    const { dataLayer } = await wire();
+    expect(() => dataLayer.setActiveAccount("alice")).not.toThrow();
+    expect(() => dataLayer.setActiveAccount(null)).not.toThrow();
+  });
+
+  it("pause closes sockets and resume reopens from standing interests", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    await settle();
+    f.last("wss://u1").open();
+
+    dataLayer.pause();
+    await settle();
+    expect(f.last("wss://u1").readyState).toBe(3);
+
+    dataLayer.resume();
+    await settle();
+    expect(f.count("wss://u1")).toBe(2);
+  });
+});
+
+describe("DataLayer singleton accessor", () => {
+  afterEach(() => setDataLayer(null));
+
+  it("getDataLayer throws before bootstrap", () => {
+    setDataLayer(null);
+    expect(() => getDataLayer()).toThrow(/not bootstrapped/);
+  });
+
+  it("setDataLayer installs the instance getDataLayer returns", async () => {
+    const { dataLayer } = await wire();
+    setDataLayer(dataLayer);
+    expect(getDataLayer()).toBe(dataLayer);
+  });
+
+  it("the ambient `dataLayer` proxy forwards methods and reads through to the instance", async () => {
+    const { f, dataLayer } = await wire();
+    setDataLayer(dataLayer);
+
+    // method call goes through the bound proxy
+    ambient.addEvent(makeEvent({ id: "x".repeat(64), kind: 1, pubkey: "alice" }));
+    await settle();
+    expect((await ambient.fetchById("x".repeat(64)))?.id).toBe("x".repeat(64));
+    expect(f.count("wss://u1")).toBe(0);
+
+    // a non-function / missing property reads through as-is (not bound)
+    expect((ambient as unknown as Record<string, unknown>).notAMethod).toBeUndefined();
   });
 });

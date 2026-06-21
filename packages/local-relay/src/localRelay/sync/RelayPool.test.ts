@@ -1,4 +1,4 @@
-import { RelayPool } from "./RelayPool";
+import { RelayPool, RelayPublishOutcome } from "./RelayPool";
 import { RelayConnection, RelayConnectionHandlers } from "./RelayConnection";
 import { fakeSocketFactory } from "../testkit";
 import { makeEvent } from "../testkit";
@@ -111,6 +111,128 @@ describe("RelayPool delivery", () => {
     const events = await promise;
     expect(events.map((e) => e.id)).toEqual(["q".repeat(64)]);
     expect(f.last(A).sent.some((m) => m[0] === "CLOSE")).toBe(true);
+  });
+});
+
+describe("RelayPool publish", () => {
+  it("is fire-and-forget without onResult", () => {
+    const { f, p } = pool();
+    p.publish([A], makeEvent({ id: "a".repeat(64) }));
+    f.last(A).open();
+    expect(f.last(A).sent.some((m) => m[0] === "EVENT")).toBe(true);
+  });
+
+  it("reports an empty result immediately when there are no relays", () => {
+    const { p } = pool();
+    let res: RelayPublishOutcome[] | undefined;
+    p.publish([], makeEvent({ id: "a".repeat(64) }), { onResult: (r) => (res = r) });
+    expect(res).toEqual([]);
+  });
+
+  it("marks unanswered relays timeout (connected) vs failed (unreachable)", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, p } = pool();
+      let res: RelayPublishOutcome[] = [];
+      p.publish([A, B], makeEvent({ id: "a".repeat(64) }), { onResult: (r) => (res = r), timeoutMs: 1000 });
+      f.last(A).open(); // A connects but never answers; B never opens
+      vi.advanceTimersByTime(1000); // deadline elapses
+
+      expect(res.find((r) => r.relay === A)?.status).toBe("timeout");
+      expect(res.find((r) => r.relay === B)).toMatchObject({ status: "failed", message: "Relay unreachable" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("RelayPool teardown", () => {
+  it("resetRelays destroys known connections and skips unknown ones", () => {
+    const { f, p } = pool();
+    p.subscribe([A], [{ kinds: [1] }], { onEvent: () => {} }, { eoseDeadlineMs: 10 ** 9 });
+    f.last(A).open();
+    expect(p.relayHealth([A])[0].connected).toBe(true);
+
+    p.resetRelays([A, "wss://never-connected"]); // unknown url is a no-op
+    expect(p.relayHealth([A])[0].connected).toBe(false);
+  });
+
+  it("ignores stray frames for unknown subscriptions and publishes", () => {
+    const { f, p } = pool();
+    p.subscribe([A], [{ kinds: [1] }], { onEvent: () => {} }, { eoseDeadlineMs: 10 ** 9 });
+    const sock = f.last(A);
+    sock.open();
+    // EVENT / EOSE for a sub that doesn't exist, OK for an event never published.
+    expect(() => {
+      sock.emit(["EVENT", "ghost", makeEvent({ id: "a".repeat(64) })]);
+      sock.emit(["EOSE", "ghost"]);
+      sock.emit(["OK", "z".repeat(64), true, ""]);
+      p.unsubscribe("ghost"); // unsubscribing an unknown sub is a no-op
+    }).not.toThrow();
+  });
+
+  it("a publish deadline firing after completion is a no-op", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, p } = pool();
+      let results = 0;
+      p.publish([A], makeEvent({ id: "a".repeat(64) }), { onResult: () => results++, timeoutMs: 1000 });
+      f.last(A).open();
+      f.last(A).emit(["OK", "a".repeat(64), true, ""]); // all relays answered → finishes
+      expect(results).toBe(1);
+      vi.advanceTimersByTime(1000); // deadline fires, but the publish is already done
+      expect(results).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a relay whose connection was reset mid-publish as failed", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, p } = pool();
+      let res: RelayPublishOutcome[] = [];
+      p.publish([A], makeEvent({ id: "a".repeat(64) }), { onResult: (r) => (res = r), timeoutMs: 1000 });
+      f.last(A).open();
+      // resetRelays drops the connection but leaves the publish pending, so at the
+      // deadline there's no connection to read state from → the `?? false` path.
+      p.resetRelays([A]);
+      vi.advanceTimersByTime(1000);
+      expect(res).toEqual([
+        { relay: A, status: "failed", message: "Relay unreachable", latencyMs: expect.any(Number) },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tolerates a leftover deadline from a superseded re-publish", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, p } = pool();
+      const ev = makeEvent({ id: "a".repeat(64) });
+      p.publish([A], ev, { onResult: () => {}, timeoutMs: 1000 }); // first attempt, timer T1
+      p.publish([A], ev, { onResult: () => {}, timeoutMs: 5000 }); // supersedes; T1 left scheduled
+      f.last(A).open();
+      f.last(A).emit(["OK", "a".repeat(64), true, ""]); // second attempt completes, clears its own timer
+
+      // T1 still fires → finishPublish runs with the entry already gone.
+      expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closeAll clears sub deadlines, pending publishes, and connections", () => {
+    const { f, p } = pool();
+    p.subscribe([A], [{ kinds: [1] }], { onEvent: () => {} }, { eoseDeadlineMs: 10 ** 9 });
+    p.publish([A], makeEvent({ id: "a".repeat(64) }), { onResult: () => {}, timeoutMs: 10 ** 9 });
+    f.last(A).open();
+
+    p.closeAll();
+    expect(p.relayHealth([A])).toEqual([
+      { relay: A, connected: false, connecting: false, reconnecting: false },
+    ]);
   });
 });
 

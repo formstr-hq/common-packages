@@ -67,4 +67,97 @@ describe("LocalRelayClient ↔ WorkerHost protocol", () => {
     const result = await host.signerPort.sign({ kind: 22242, created_at: NOW, tags: [], content: "" });
     expect(result).toBeNull();
   });
+
+  it("ingest adds events to the store (no OK, no upstream); an empty batch is a no-op", async () => {
+    const seen: string[] = [];
+    const hooks: WorkerHostHooks = { onPublish: () => seen.push("publish") };
+    const { db, client } = wire(undefined, hooks);
+    client.ingest([makeEvent({ id: "i".repeat(64) })]);
+    client.ingest([]); // guarded — sends nothing
+    await tick();
+    expect(db.getById("i".repeat(64))).toBeDefined();
+    expect(seen).toEqual([]); // ingest never publishes upstream
+  });
+
+  it("routes setAccount / setUserRelays / pause / resume to the host hooks", async () => {
+    const calls: string[] = [];
+    let account: string | null = "unset";
+    const hooks: WorkerHostHooks = {
+      onSetAccount: (pk) => {
+        account = pk;
+        calls.push("account");
+      },
+      onSetUserRelays: () => calls.push("relays"),
+      onPause: () => calls.push("pause"),
+      onResume: () => calls.push("resume"),
+    };
+    const { client } = wire(undefined, hooks);
+    client.setActiveAccount("alice");
+    client.setUserRelays(["wss://r"]);
+    client.pause();
+    client.resume();
+    await tick();
+    expect(account).toBe("alice");
+    expect(calls).toEqual(["account", "relays", "pause", "resume"]);
+  });
+});
+
+describe("LocalRelayClient frame routing", () => {
+  it("ends a subscription on a CLOSED frame and stops delivering to it", async () => {
+    // Drive the worker side of the channel by hand to emit raw NIP-01 frames.
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const client = new LocalRelayClient(clientCh);
+
+    const got: string[] = [];
+    let eosed = 0;
+    const handle = client.observe([{ kinds: [1] }], {
+      onEvent: (e) => got.push(e.id),
+      onEose: () => eosed++,
+    });
+    await tick();
+
+    workerCh.post({ kind: "nostr", msg: ["EVENT", handle.id, makeEvent({ id: "a".repeat(64) })] });
+    workerCh.post({ kind: "nostr", msg: ["CLOSED", handle.id, "auth-required"] });
+    await tick();
+    expect(got).toEqual(["a".repeat(64)]);
+    expect(eosed).toBe(1); // CLOSED resolves the sub like an EOSE
+
+    // The sub is forgotten — a late EVENT for it is dropped.
+    workerCh.post({ kind: "nostr", msg: ["EVENT", handle.id, makeEvent({ id: "b".repeat(64) })] });
+    await tick();
+    expect(got).toEqual(["a".repeat(64)]);
+  });
+
+  it("a second unobserve is a no-op; a sign request with no handler refuses", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const sent: any[] = [];
+    workerCh.onMessage((m) => sent.push(m));
+    const client = new LocalRelayClient(clientCh); // no onSignRequest configured
+
+    const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
+    handle.unobserve();
+    handle.unobserve(); // already removed → no second unobserve frame
+    workerCh.post({
+      kind: "signRequest",
+      reqId: "r1",
+      template: { kind: 22242, created_at: 0, tags: [], content: "" },
+    });
+    await tick();
+
+    expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(1);
+    expect(sent.find((m) => m.kind === "signResult")).toEqual({ kind: "signResult", reqId: "r1", event: null });
+  });
+
+  it("ignores publishResult / relayHealth frames for unknown ids", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const client = new LocalRelayClient(clientCh);
+    void client;
+    // No pending publish/health with these ids — must be silently ignored.
+    workerCh.post({ kind: "publishResult", pubId: "ghost", results: [] });
+    workerCh.post({ kind: "relayHealth", reqId: "ghost", relays: [] });
+    workerCh.post({ kind: "ready" });
+    await tick();
+    // Reaching here without throwing is the assertion.
+    expect(true).toBe(true);
+  });
 });

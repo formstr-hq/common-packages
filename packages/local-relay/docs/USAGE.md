@@ -1,0 +1,718 @@
+# Using `@formstr/local-relay`
+
+A complete guide to wiring and using the local relay — a NIP-01 Web Worker
+"relay" backed by a local store, plus an intent-only data layer for Nostr apps.
+
+---
+
+## Table of contents
+
+1. [Mental model](#1-mental-model)
+2. [Install](#2-install)
+3. [The three subpath exports](#3-the-three-subpath-exports)
+4. [Quick start (5 minutes)](#4-quick-start-5-minutes)
+5. [Wiring it up, step by step](#5-wiring-it-up-step-by-step)
+6. [The `DataLayer` API](#6-the-datalayer-api)
+7. [Reading: `observe` and cache-only reads](#7-reading-observe-and-cache-only-reads)
+8. [Writing: `publish`](#8-writing-publish)
+9. [Scopes, filters, and feed assembly](#9-scopes-filters-and-feed-assembly)
+10. [The kind registry](#10-the-kind-registry)
+11. [Relays, routing, and health](#11-relays-routing-and-health)
+12. [Authentication (NIP-42)](#12-authentication-nip-42)
+13. [Lifecycle: pause / resume / accounts](#13-lifecycle-pause--resume--accounts)
+14. [Storage and pruning](#14-storage-and-pruning)
+15. [Advanced: building your own worker / `RelayService`](#15-advanced-building-your-own-worker--relayservice)
+16. [Testing](#16-testing)
+17. [Wrapping in React (or any reactive host)](#17-wrapping-in-react-or-any-reactive-host)
+18. [FAQ / gotchas](#18-faq--gotchas)
+
+---
+
+## 1. Mental model
+
+The single load-bearing principle:
+
+> **The app can only _declare interests_ (`observe`) and _publish_. It never opens
+> a connection on a whim.**
+
+Everything else follows from this. The Web Worker (`RelayService`) owns **every**
+connection decision. It looks at the union of every active interest, dedupes them
+by filter-hash, routes them per NIP-65 (outbox model), and decides if/when/how to
+touch a relay. There is deliberately **no** `fetch`, `sync`, `reconnect`, or
+`resetRelays` verb anywhere in the app-facing API.
+
+Consequences you can rely on:
+
+- **Presentation scales independently of the network.** Ten components observing
+  the same scope share **one** upstream subscription. UI churn (mounting,
+  unmounting, re-rendering) never opens or closes a socket directly.
+- **Reads are cache-only.** `fetchById` / `fetchReplaceable` and any `localOnly`
+  observe serve from the local store and **never** trigger a network fetch. The
+  worker keeps the store warm on its own and **enriches** it (referenced `e`/`q`
+  events + author `kind:0` profiles for scopes it syncs).
+- **Retry is just another publish.** The worker, not the app, reaches dead relays.
+
+```
+┌─────────────────────────── main thread ───────────────────────────┐
+│                                                                    │
+│   your UI  ──observe / publish──►  DataLayer  ──►  LocalRelayClient │
+│      ▲                                                     │       │
+│      └────────── onEvent / onEose / results ◄─────────────┘       │
+└────────────────────────────────│ Channel (postMessage) │──────────┘
+                                  ▼
+┌─────────────────────────── Web Worker ────────────────────────────┐
+│   RelayService  ─►  EventDB (store)  ─►  IndexedDB (persistence)    │
+│        │                                                           │
+│        └─►  RelayPool / SyncEngine  ──►  wss:// relays (sockets)    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Install
+
+```bash
+pnpm add @formstr/local-relay nostr-tools
+```
+
+`nostr-tools` is a peer you'll use for signing/encoding (`finalizeEvent`,
+`nip19`, etc.). The package itself depends on `nostr-tools` for verification.
+
+You need a bundler that supports `new Worker(new URL(..., import.meta.url))`
+(Vite, webpack 5, Rollup, etc.). Examples below assume Vite.
+
+---
+
+## 3. The three subpath exports
+
+| Import | What you get | Runs where |
+| --- | --- | --- |
+| `@formstr/local-relay` | The engine + contract: `DataLayer`, `LocalRelayClient`, `RelayService`, `workerChannel`, scopes/feed/kinds, storage adapters. Pure JS. | main thread **and** worker |
+| `@formstr/local-relay/worker` | A ready-made Worker entry (IndexedDB + real sockets). Point a `Worker` at it. | worker only |
+| `@formstr/local-relay/testkit` | `makeEvent`, `FakeSocket`, `fakeSocketFactory` for tests. | tests |
+
+---
+
+## 4. Quick start (5 minutes)
+
+```ts
+import {
+  DataLayer,
+  LocalRelayClient,
+  workerChannel,
+} from "@formstr/local-relay";
+import { finalizeEvent, generateSecretKey, type EventTemplate } from "nostr-tools";
+
+// 1) Spawn the worker (the ready-made entry) and wire the client.
+const worker = new Worker(
+  new URL("@formstr/local-relay/worker", import.meta.url),
+  { type: "module" }
+);
+const client = new LocalRelayClient(workerChannel(worker));
+
+// 2) Tell the worker which relays the user reads from (routing input, not a command).
+client.setUserRelays(["wss://relay.damus.io", "wss://nos.lol"]);
+
+// 3) Build the data layer with a signer.
+const sk = generateSecretKey(); // demo only; use a real signer in production
+const dataLayer = new DataLayer({
+  client,
+  sign: async (t: EventTemplate) => finalizeEvent(t, sk),
+});
+
+// 4) Declare an interest — the worker decides the network.
+const handle = dataLayer.observe(
+  [{ kinds: [1], authors: ["3bf0c63f...459d"] }],
+  {
+    onEvent: (e) => console.log("note", e.id, e.content),
+    onEose: () => console.log("local replay done — live tail now"),
+  }
+);
+
+// 5) Publish something.
+const { event, result } = await dataLayer.publish({
+  kind: 1,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [],
+  content: "hello nostr",
+});
+console.log(`accepted by ${result.accepted}/${result.total} relays`);
+
+// later…
+handle.unobserve();
+```
+
+---
+
+## 5. Wiring it up, step by step
+
+### 5.1 The worker
+
+The simplest path is the ready-made entry — no worker file of your own:
+
+```ts
+const worker = new Worker(
+  new URL("@formstr/local-relay/worker", import.meta.url),
+  { type: "module" }
+);
+```
+
+That entry wires `RelayService` to the real Worker globals: a `selfChannel`,
+the real `WebSocket` factory, `nostr-tools` verification, and a shared IndexedDB
+store named `"shared"`. If you need a different store name or custom options,
+write a one-file worker yourself — see [§15](#15-advanced-building-your-own-worker--relayservice).
+
+### 5.2 The channel + client
+
+`workerChannel(worker)` adapts the `Worker` to the internal `Channel` interface.
+`LocalRelayClient` is your main-thread handle; it owns subscription ids and routes
+frames back to your callbacks.
+
+```ts
+const client = new LocalRelayClient(workerChannel(worker), {
+  // optional — only needed for NIP-42 AUTH (see §12)
+  onSignRequest: async (template) => mySigner.signEvent(template),
+});
+```
+
+### 5.3 The data layer
+
+`DataLayer` is the intent-only surface your app code should talk to. It needs the
+client and a `sign` function:
+
+```ts
+const dataLayer = new DataLayer({
+  client,
+  sign: async (template) => mySigner.signEvent(template), // local / NIP-07 / NIP-46
+});
+```
+
+### 5.4 (Optional) install it as a singleton
+
+For non-React code (helpers, contexts) there's an ambient accessor:
+
+```ts
+import { setDataLayer, dataLayer } from "@formstr/local-relay";
+
+setDataLayer(new DataLayer({ client, sign }));
+
+// anywhere later, at module scope:
+dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
+```
+
+`getDataLayer()` throws if accessed before `setDataLayer` runs.
+
+---
+
+## 6. The `DataLayer` API
+
+| Method | Purpose | Network? |
+| --- | --- | --- |
+| `observe(filters, handlers, options?)` | Declare a standing interest. Returns an `ObserveHandle`. | Worker decides (unless `localOnly`) |
+| `fetchById(id)` | Resolve one event by id from cache. | **Never** |
+| `fetchReplaceable(kind, pubkey)` | Current value of a replaceable event (profile, relay list) from cache. | **Never** |
+| `publish(template)` | Sign + store locally + send upstream. Returns `{ event, result }`. | Yes |
+| `publishEvent(event)` | Publish an already-signed event (lists, diagnostics retry). | Yes |
+| `addEvent(event)` / `addEvents(events)` | Add events to the local store (optimistic / out-of-band). | No |
+| `relayHealth()` | Live connection health of the user's relays. | Read-only observation |
+| `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
+| `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
+| `pause()` / `resume()` | Lifecycle hints (backgrounded / foregrounded). | Worker decides |
+
+> Note: `setUserRelays` exists on both `LocalRelayClient` and `DataLayer`. Call it
+> once early (and again whenever the user's relay list changes). In the quick start
+> it's called on the `client`; calling it on the `dataLayer` is equivalent.
+
+---
+
+## 7. Reading: `observe` and cache-only reads
+
+### 7.1 The shape of an observe
+
+```ts
+const handle = dataLayer.observe(filters, handlers, options);
+```
+
+- `filters: Filter[]` — standard NIP-01 filters.
+- `handlers`:
+  - `onEvent(event)` — fired for every matching event: first the **cache replay**,
+    then the **live tail**.
+  - `onEose?()` — fired once, after the **local** replay is drained. This means
+    "you've now seen everything in the cache"; live events keep coming after.
+- `options.localOnly?: boolean` — when `true`, a pure store read that triggers
+  **no** network. When omitted/false, the worker also keeps the scope warm upstream.
+
+The returned `ObserveHandle`:
+
+```ts
+interface ObserveHandle {
+  id: string;
+  update(filters: Filter[]): void; // re-declare with new filters (e.g. wider window to paginate)
+  unobserve(): void;               // drop the interest
+}
+```
+
+### 7.2 Pagination is `update`, not `fetch`
+
+To load older items, **widen the window** by re-declaring the same handle:
+
+```ts
+const handle = dataLayer.observe([{ kinds: [1], authors, limit: 50 }], handlers);
+
+// "load older":
+handle.update([{ kinds: [1], authors, until: oldestSeen, limit: 50 }]);
+```
+
+Still declarative — you've changed _what you care about_; the worker decides
+whether that needs a network read.
+
+### 7.3 One-shot cache reads
+
+For a single value from the cache, use the promise helpers — they never fetch:
+
+```ts
+const note    = await dataLayer.fetchById("abc123…");          // Event | null
+const profile = await dataLayer.fetchReplaceable(0, pubkey);   // kind:0
+const relays  = await dataLayer.fetchReplaceable(10002, pubkey); // NIP-65 list
+```
+
+These work because the worker **enriches** the store as it syncs: when it pulls a
+feed, it also queues the referenced `e`/`q` events and the authors' `kind:0`
+profiles. So by the time you read, they're usually already cached.
+
+### 7.4 Cache-only `observe` (reactive reads)
+
+If you want a value **and** to be notified when enrichment lands later, observe
+with `localOnly: true` instead of the one-shot helpers:
+
+```ts
+// Profiles: express NO network interest; just read what the worker enriched.
+const profilesHandle = dataLayer.observe(
+  [{ kinds: [0], authors: follows }],
+  { onEvent: (e) => renderProfile(e) },
+  { localOnly: true }
+);
+```
+
+This is the pattern in the tester app: the feed observe (networked) drives
+enrichment, and the profile observe (cache-only) just reads the avatars that
+appear — proving enrichment + cache reads work end to end.
+
+---
+
+## 8. Writing: `publish`
+
+```ts
+const { event, result } = await dataLayer.publish({
+  kind: 1,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [],
+  content: "gm",
+});
+```
+
+What happens, in order:
+
+1. `sign(template)` turns it into a full signed `Event`.
+2. The event is stored **locally first**, so any local interest sees it instantly
+   (optimistic UI for free).
+3. It's sent upstream. The worker routes it to the author's **write** relays
+   (outbox) ∪ the user's relays, plus the **inbox** relays of any `p`-tagged
+   pubkey (gossip delivery of mentions).
+
+`result: PublishResult`:
+
+```ts
+interface PublishResult {
+  ok: boolean;                       // accepted by at least one relay
+  accepted: number;
+  total: number;
+  relayResults: RelayPublishOutcome[]; // per-relay accepted/rejected/timeout/failed
+}
+```
+
+`relayResults` is exactly the shape a publish-diagnostics modal wants. **Retry is
+just another publish** (`publish` / `publishEvent`) — the worker handles reaching
+dead relays; you don't manage sockets.
+
+Already have a signed event (e.g. NIP-17 gift wraps, list edits)? Use
+`publishEvent(event)`.
+
+---
+
+## 9. Scopes, filters, and feed assembly
+
+You _can_ hand-write NIP-01 filters. But the package ships an opinionated read
+surface so the UI never builds a raw filter or sees a relay.
+
+### 9.1 Scopes
+
+A `Scope` says **which subset of the network** you want; kinds say **which event
+types**:
+
+```ts
+type Scope =
+  | { type: "following" }            // user.follows
+  | { type: "network" }              // user.webOfTrust
+  | { type: "author"; pubkey }       // a single author
+  | { type: "thread"; rootId }       // a root note + its replies/quotes
+  | { type: "mentions"; pubkey }     // events #p-tagging this pubkey
+  | { type: "global" };              // author-less
+```
+
+### 9.2 Building filters
+
+```ts
+import { buildFilters, scopeHasInput, type ScopeUser } from "@formstr/local-relay";
+
+const user: ScopeUser = { pubkey, follows, webOfTrust };
+
+if (scopeHasInput({ type: "following" }, user)) {
+  const filters = buildFilters(
+    [1],                       // kinds
+    { type: "following" },     // scope
+    user,                      // resolves authors for following/network/author
+    { limit: 200 }             // optional window: { since?, until?, limit? }
+  );
+  dataLayer.observe(filters, handlers);
+}
+```
+
+- `buildFilters(kinds, scope, user, window?)` → `Filter[]`. Thread/mentions become
+  tag filters; global is author-less; following/network/author resolve to an
+  `authors` set (which the worker then outbox-partitions downstream).
+- `resolveAuthors(scope, user)` → the author list (or `null` for non-author scopes).
+- `scopeHasInput(scope, user)` → `false` when there's nothing to fetch (logged out,
+  empty follows / empty web-of-trust), so you can skip empty queries.
+
+### 9.3 Assembling a feed
+
+`observe` hands you a stream of raw events. `assembleFeed` turns the current
+snapshot into an ordered, de-duplicated display list:
+
+```ts
+import { assembleFeed } from "@formstr/local-relay";
+
+const notes = new Map<string, Event>();
+dataLayer.observe(filters, {
+  onEvent: (e) => { notes.set(e.id, e); scheduleRender(); },
+});
+
+function render() {
+  const list = assembleFeed(Array.from(notes.values()), { feedRootsOnly: true })
+    .slice(0, 100);
+  // … paint `list` (already newest-first, deduped, replies dropped) …
+}
+```
+
+`feedRootsOnly` (default `true`) drops replies/reactions/reposts; dedup collapses
+replaceable/addressable events to their latest version.
+
+---
+
+## 10. The kind registry
+
+`assembleFeed` and friends consult a **kind registry** that knows how to treat
+each event kind — its role, dedup identity, whether it's a top-level feed item,
+and what it references. The defaults mirror common Nostr behavior:
+
+| Kind | Role | Notes |
+| --- | --- | --- |
+| 1 | note | A note with an `e` tag is a reply → not a feed root |
+| 6 | repost | references the reposted event; never a feed root |
+| 7 | reaction | references the liked event; never a feed root |
+| 1018 / 1070 | response | references its target; never a feed root |
+| 1068 | poll | |
+| 30023 | article | addressable; versions collapse via the default dedupe key |
+
+Add support for a new kind with **one** entry — no new query function:
+
+```ts
+import { registerKind } from "@formstr/local-relay";
+
+registerKind(9802, {           // e.g. highlights
+  role: "other",
+  isFeedRoot: () => true,
+  // dedupeKey?: (e) => …       // defaults to id, or the replaceable key
+  // relatesTo?: (e) => …       // the event this one refers to
+});
+```
+
+Helpers to read the registry: `getKindDef`, `dedupeKey`, `isFeedRoot`,
+`relatesTo`, `roleOf`.
+
+---
+
+## 11. Relays, routing, and health
+
+### 11.1 Setting the user's relays
+
+```ts
+client.setUserRelays(["wss://relay.damus.io", "wss://nos.lol"]);
+// or dataLayer.setUserRelays([...])
+```
+
+This is a **routing-policy input**, not a command to connect. The worker uses it
+as the default read/write set and as a fallback for author-less scopes. Call it
+again whenever the user's relay list changes; the worker reconciles (new relays
+may let pending interests find a home).
+
+### 11.2 Outbox routing (NIP-65)
+
+For author-scoped reads and for publishing, the worker reads each pubkey's latest
+`kind:10002` relay list **straight from the store** (the outbox cache _is_ the
+store) and routes accordingly:
+
+- **Reads** of an author go to that author's **write** relays.
+- **Publishes** go to your write relays ∪ user relays ∪ the **read** relays of any
+  `p`-tagged recipient.
+
+You don't configure any of this — it's automatic, provided the relevant
+`kind:10002` events are in the store (the worker enriches them as it syncs).
+
+### 11.3 Health
+
+```ts
+const health = await dataLayer.relayHealth(); // RelayHealth[]
+// each: { relay, connected, connecting, reconnecting }
+```
+
+Read-only observation — it reports state, it doesn't open anything. Poll it on a
+timer if you want a live status panel (the tester does so every 1.5s).
+
+---
+
+## 12. Authentication (NIP-42)
+
+If a relay challenges with `AUTH`, the worker asks the **main thread** to sign the
+NIP-42 template (it can't hold keys itself). Wire it via the client option:
+
+```ts
+const client = new LocalRelayClient(workerChannel(worker), {
+  onSignRequest: async (template) => {
+    // return a signed Event, or null to refuse
+    return mySigner.signEvent(template);
+  },
+});
+```
+
+Return `null` to decline (the worker handles refusal gracefully). If you omit
+`onSignRequest`, all worker sign requests are refused.
+
+---
+
+## 13. Lifecycle: pause / resume / accounts
+
+The worker can't observe page visibility, so you feed it hints:
+
+```ts
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) dataLayer.pause();   // worker closes sockets, keeps store + interests
+  else dataLayer.resume();                  // worker reopens upstream from standing interests
+});
+```
+
+`pause()` closes every socket but **keeps** the store and your declared interests;
+`resume()` reconciles and reopens. Enrichment queued while paused drains on resume.
+
+On account switch:
+
+```ts
+dataLayer.setActiveAccount(newPubkey); // retargets scope; does NOT wipe the shared store
+```
+
+---
+
+## 14. Storage and pruning
+
+The ready-made worker persists to **IndexedDB** (store name `"shared"`) via
+write-through: bursts of ingests batch into a few bulk writes; hydration loads the
+store on boot; pruning runs periodically.
+
+The default prune policy (`defaultPrunePolicy()`):
+
+- **Protected forever** (never pruned by age or cap): `kind:0` (profiles),
+  `kind:3` (contacts), `kind:10002` (relay lists), and the whole `10000–19999`
+  replaceable-list range.
+- **TTL by kind**: articles (`30023`) and polls (`1068`) live 30 days.
+- **Default TTL**: 7 days for everything else (notes, reposts, reactions…).
+- **Hard cap**: 50,000 events; oldest non-protected evicted past that.
+
+To customize, write your own worker and pass `persistence.prunePolicy` (and/or
+`debounceMs`, `pruneIntervalMs`) — see next section.
+
+---
+
+## 15. Advanced: building your own worker / `RelayService`
+
+When you need a custom store name, custom pruning, or a non-IndexedDB adapter,
+write a one-file worker. This is the exact pattern a host app uses:
+
+```ts
+// relay.worker.ts
+/// <reference lib="webworker" />
+import {
+  RelayService,
+  selfChannel,
+  IndexedDBStorage,
+} from "@formstr/local-relay";
+
+const channel = selfChannel(self as unknown as {
+  postMessage: (m: unknown) => void;
+  onmessage: ((e: MessageEvent) => void) | null;
+});
+
+const service = new RelayService({
+  channel,
+  storage: new IndexedDBStorage("my-app"),     // custom store name
+  persistence: {
+    debounceMs: 1000,
+    pruneIntervalMs: 5 * 60 * 1000,
+    // prunePolicy: { protectedKinds, ttlByKind, defaultTtlSeconds, maxEvents },
+  },
+  // socketFactory: customFactory,  // default = real WebSocket
+  // verify: customVerify,          // default = nostr-tools verify
+  // now: () => Date.now(),
+});
+
+void service.start(); // hydrate from storage, then begin write-through + pruning
+export {};
+```
+
+Then point your `Worker` at it:
+
+```ts
+const worker = new Worker(new URL("./relay.worker.ts", import.meta.url), {
+  type: "module",
+});
+```
+
+`RelayServiceOptions`:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `channel` | — (required) | The transport (`selfChannel(self)` in a worker) |
+| `storage` | none (memory only) | `IndexedDBStorage` or `MemoryStorage` or your own `StorageAdapter` |
+| `persistence` | defaults | `debounceMs`, `pruneIntervalMs`, `prunePolicy` |
+| `socketFactory` | real WebSocket | inject `FakeSocket` factory in tests |
+| `verify` | nostr-tools verify | event signature verification |
+| `now` | `Date.now` | clock injection for tests |
+
+Storage adapters available: `MemoryStorage` (no durability — good for tests/SSR),
+`IndexedDBStorage(name)` (browser persistence), or implement the small
+`StorageAdapter` interface yourself.
+
+---
+
+## 16. Testing
+
+The whole client/worker protocol can be exercised **without a real Worker** over
+an in-memory channel pair, and without real sockets via the testkit.
+
+```ts
+import {
+  RelayService,
+  LocalRelayClient,
+  DataLayer,
+  createChannelPair,
+  MemoryStorage,
+} from "@formstr/local-relay";
+import { makeEvent, fakeSocketFactory } from "@formstr/local-relay/testkit";
+
+const { client: clientCh, worker: workerCh } = createChannelPair();
+const sockets = fakeSocketFactory();
+
+const service = new RelayService({
+  channel: workerCh,
+  storage: new MemoryStorage(),
+  socketFactory: sockets.factory,
+  verify: () => true, // skip real sig checks in unit tests
+});
+await service.start();
+
+const client = new LocalRelayClient(clientCh);
+const dataLayer = new DataLayer({ client, sign: async (t) => makeEvent(t) });
+
+const seen: string[] = [];
+dataLayer.observe([{ kinds: [1] }], { onEvent: (e) => seen.push(e.id) });
+
+// drive a relay: open the socket and push an event
+client.setUserRelays(["wss://relay.test"]);
+const sock = sockets.last("wss://relay.test");
+sock.open();
+sock.emit(["EVENT", "<subid>", makeEvent({ kind: 1, id: "deadbeef" })]);
+```
+
+- `createChannelPair()` — two linked in-memory `Channel`s (messages round-trip
+  through JSON, so non-serializable payloads are caught).
+- `makeEvent(overrides?)` — a structurally-valid event (the store never checks
+  signatures, so no real keys needed).
+- `fakeSocketFactory()` — records every `FakeSocket`; control them with
+  `.open()`, `.emit(msg)`, `.fail()`, and inspect `.sent`.
+
+---
+
+## 17. Wrapping in React (or any reactive host)
+
+The contract is framework-agnostic on purpose — React hooks live in the consuming
+app, not in this package. A minimal `useEvents` is just `observe` + state:
+
+```ts
+function useEvents(filters: Filter[], options?: ObserveOptions) {
+  const [events, setEvents] = useState<Map<string, Event>>(new Map());
+  const key = JSON.stringify(filters);
+
+  useEffect(() => {
+    const next = new Map<string, Event>();
+    const handle = getDataLayer().observe(
+      filters,
+      {
+        onEvent: (e) => {
+          next.set(e.id, e);
+          setEvents(new Map(next));
+        },
+      },
+      options
+    );
+    return () => handle.unobserve();
+  }, [key]); // re-declare when filters change
+
+  return events;
+}
+```
+
+Because N components observing the same filters share one upstream subscription,
+you can call this freely without worrying about socket fan-out.
+
+---
+
+## 18. FAQ / gotchas
+
+**`fetchById` returns `null` even though the event exists upstream.**
+Reads are cache-only by design. If it isn't in the store yet, you get `null`.
+Express an `observe` interest in it (or its scope) and let the worker fetch +
+enrich; then read.
+
+**My `onEose` fired but I expected more events.**
+`onEose` means the **local cache** replay is done. Live and freshly-synced events
+arrive via `onEvent` _after_ EOSE. It is not "the network is exhausted."
+
+**Profiles/avatars never show up.**
+You need at least one **networked** observe in that scope to drive enrichment.
+A `localOnly` profile observe only _reads_ what enrichment produced — it never
+fetches. Also confirm `setUserRelays` was called (enrichment fetches from the
+user's relays).
+
+**Publishing succeeds locally but no relay accepted it.**
+Check `result.relayResults` for per-relay reasons (rejected/timeout/failed), and
+make sure `setUserRelays` is set and/or the author has a `kind:10002` in the
+store for outbox routing. Retry by calling `publish`/`publishEvent` again.
+
+**Nothing connects.**
+The worker only opens sockets when there's a networked interest **and** somewhere
+to route it. With no `setUserRelays` and no `kind:10002` in the store, an
+author-scoped read has no home and stays pending until relays are known.
+
+**Multiple components, one subscription?**
+Yes — interests are deduped by filter-hash. Identical filters share one upstream
+subscription; that's the whole point of the architecture.

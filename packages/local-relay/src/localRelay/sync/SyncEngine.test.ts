@@ -1,4 +1,4 @@
-import { SyncEngine } from "./SyncEngine";
+import { SyncEngine, defaultVerify } from "./SyncEngine";
 import { RelayPool } from "./RelayPool";
 import { fakeSocketFactory, makeEvent } from "../testkit";
 import type { Event } from "../core/types";
@@ -89,13 +89,57 @@ describe("SyncEngine", () => {
       kinds: [1],
       authors: ["alice"],
       userRelays: ["wss://u1"],
+      since: 1000,
       until: 5000,
       limit: 50,
       eoseDeadlineMs: 10 ** 9,
     });
     f.last("wss://r1").open();
     const filter = reqOn(f.last("wss://r1"))![2];
+    expect(filter.since).toBe(1000);
     expect(filter.until).toBe(5000);
     expect(filter.limit).toBe(50);
+  });
+
+  it("fires EOSE immediately when no authors resolve to a relay bucket", () => {
+    const { engine } = setup();
+    let eosed = 0;
+    const handle = engine.fetch(
+      { kinds: [1], authors: [], userRelays: [], eoseDeadlineMs: 10 ** 9 },
+      () => eosed++
+    );
+    expect(eosed).toBe(1);
+    expect(() => handle.close()).not.toThrow();
+  });
+
+  it("close() flushes a pending batch and clears its flush timer", () => {
+    const { f, engine, ingested } = setup();
+    const handle = engine.fetch({ kinds: [1], authors: ["alice"], userRelays: ["wss://u1"], eoseDeadlineMs: 10 ** 9 });
+    f.last("wss://r1").open();
+    const s = subIdOn(f.last("wss://r1"));
+    f.last("wss://r1").emit(["EVENT", s, makeEvent({ id: "a".repeat(64), pubkey: "alice" })]);
+    // close BEFORE the 50ms flush fires → close() drains the buffer synchronously.
+    handle.close();
+    expect(ingested.map((e) => e.id)).toEqual(["a".repeat(64)]);
+  });
+
+  it("falls back to nostr-tools verify when none is injected", async () => {
+    const f = fakeSocketFactory();
+    const pool = new RelayPool(f.factory, { autoReconnect: false });
+    const ingested: Event[] = [];
+    // No `verify` → constructor uses defaultVerify (real signature check).
+    const engine = new SyncEngine({ pool, ingest: (e) => ingested.push(...e), getWriteRelays: () => [] });
+    engine.fetch({ kinds: [1], authors: ["alice"], userRelays: ["wss://r1"], eoseDeadlineMs: 10 ** 9 });
+    f.last("wss://r1").open();
+    const sub = subIdOn(f.last("wss://r1"));
+    f.last("wss://r1").emit(["EVENT", sub, makeEvent({ id: "a".repeat(64) })]); // forged → rejected
+    await tick();
+    expect(ingested).toHaveLength(0);
+  });
+});
+
+describe("defaultVerify", () => {
+  it("delegates to nostr-tools and rejects an unsigned/forged event", () => {
+    expect(defaultVerify(makeEvent({ id: "a".repeat(64) }))).toBe(false);
   });
 });

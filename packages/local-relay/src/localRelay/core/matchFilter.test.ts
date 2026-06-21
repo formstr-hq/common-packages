@@ -1,4 +1,4 @@
-import { matchFilter, matchAnyFilter, generateFilterHash, chunkFilter } from "./matchFilter";
+import { matchFilter, matchAnyFilter, generateFilterHash, chunkFilter, extractTagKeys } from "./matchFilter";
 import { makeEvent } from "../testkit";
 
 describe("matchFilter", () => {
@@ -46,10 +46,23 @@ describe("matchFilter", () => {
     expect(matchFilter(e, { limit: 0 })).toBe(true);
   });
 
+  it("matchFilter handles a tagless event against a non-tag filter", () => {
+    const tagless = { id: "a".repeat(64), pubkey: "p".repeat(64), kind: 1, created_at: 0, content: "" } as any;
+    expect(matchFilter(tagless, { kinds: [1] })).toBe(true);
+  });
+
   it("matchAnyFilter is the OR of filters", () => {
     const e = makeEvent({ kind: 7 });
     expect(matchAnyFilter(e, [{ kinds: [1] }, { kinds: [7] }])).toBe(true);
     expect(matchAnyFilter(e, [{ kinds: [1] }, { kinds: [6] }])).toBe(false);
+  });
+});
+
+describe("extractTagKeys", () => {
+  it("emits key:value for tags with a value and tolerates a missing tags array", () => {
+    const e = makeEvent({ tags: [["e", "root"], ["p", "alice"], ["d"]] }); // ["d"] has no value
+    expect(extractTagKeys(e)).toEqual(["e:root", "p:alice"]);
+    expect(extractTagKeys({ kind: 1 } as any)).toEqual([]); // no tags array
   });
 });
 
@@ -64,6 +77,13 @@ describe("generateFilterHash", () => {
     const a = generateFilterHash([{ kinds: [1] }], ["wss://x"]);
     const b = generateFilterHash([{ kinds: [2] }], ["wss://x"]);
     expect(a).not.toBe(b);
+  });
+
+  it("ignores undefined fields and keeps scalar fields verbatim", () => {
+    // `authors: undefined` is skipped; `limit` (a scalar) is kept as-is.
+    const withUndef = generateFilterHash([{ kinds: [2, 1], authors: undefined, limit: 10 } as any], []);
+    const without = generateFilterHash([{ kinds: [1, 2], limit: 10 }], []);
+    expect(withUndef).toBe(without);
   });
 });
 

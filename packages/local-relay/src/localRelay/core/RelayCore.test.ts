@@ -78,6 +78,40 @@ describe("RelayCore EVENT / INGEST", () => {
     expect(ok[2]).toBe(false);
   });
 
+  it("OKs a malformed event with an empty id when none is present", () => {
+    const { core, out } = setup();
+    core.handle(["EVENT", null as any]);
+    expect(out.find((m) => m[0] === "OK")).toEqual(["OK", "", false, "invalid: malformed event"]);
+  });
+
+  it("skips malformed events inside an INGEST batch but still fans out ephemerals", () => {
+    const { db, core, out } = setup();
+    core.handle(["REQ", "eph", { kinds: [20001] }]);
+    core.handle(["INGEST", [{ bad: true } as any, makeEvent({ id: "e".repeat(64), kind: 20001 })]]);
+    expect(eventsFor(out, "eph")).toEqual(["e".repeat(64)]); // ephemeral fanned out
+    expect(db.allEvents()).toHaveLength(0); // malformed skipped, ephemeral not stored
+  });
+
+  it("does not re-deliver the same ephemeral event to a sub", () => {
+    const { core, out } = setup();
+    core.handle(["REQ", "sub1", { kinds: [20001] }]);
+    const e = makeEvent({ id: "e".repeat(64), kind: 20001 });
+    core.handle(["EVENT", e]);
+    core.handle(["EVENT", e]); // already seen by sub1 → not re-sent
+    expect(eventsFor(out, "sub1")).toEqual(["e".repeat(64)]);
+  });
+
+  it("does not fan store removals (only adds) out to live subs", () => {
+    const { db, core, out } = setup();
+    const pubkey = "p".repeat(64);
+    const note = makeEvent({ id: "n".repeat(64), pubkey, kind: 1 });
+    db.add(note);
+    core.handle(["REQ", "sub1", { kinds: [1] }]); // replays the note
+    // A deletion removes the note → a "remove" store change, which must NOT emit.
+    db.add(makeEvent({ id: "d".repeat(64), pubkey, kind: 5, tags: [["e", note.id]] }));
+    expect(eventsFor(out, "sub1")).toEqual(["n".repeat(64)]); // only the replay
+  });
+
   it("ingests a batch silently (no OK) and fans out", () => {
     const { db, core, out } = setup();
     core.handle(["REQ", "sub1", { kinds: [1] }]);
@@ -93,5 +127,18 @@ describe("RelayCore EVENT / INGEST", () => {
     core.handle(["EVENT", makeEvent({ id: "e".repeat(64), kind: 20001 })]);
     expect(eventsFor(out, "sub1")).toEqual(["e".repeat(64)]);
     expect(db.query({ kinds: [20001] })).toHaveLength(0);
+  });
+});
+
+describe("RelayCore dispose", () => {
+  it("detaches the store listener and drops all subscriptions", () => {
+    const { db, core, out } = setup();
+    core.handle(["REQ", "sub1", { kinds: [1] }]);
+    core.dispose();
+
+    expect(core.activeSubscriptionCount()).toBe(0);
+    // A post-dispose store change must not fan out to the (gone) sub.
+    db.add(makeEvent({ id: "a".repeat(64), kind: 1 }));
+    expect(eventsFor(out, "sub1")).toEqual([]);
   });
 });

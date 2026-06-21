@@ -53,3 +53,9 @@ stores) over this framework-agnostic contract.
 - `@formstr/local-relay` — engine + contract (pure JS)
 - `@formstr/local-relay/worker` — a ready-made Worker entry (IndexedDB + real sockets)
 - `@formstr/local-relay/testkit` — `makeEvent`, fake socket factory for tests
+
+## Documentation
+
+See [`docs/USAGE.md`](./docs/USAGE.md) for the full guide — wiring, the `DataLayer`
+API, scopes/feeds/kinds, routing, auth, lifecycle, storage, building a custom
+worker, and testing.

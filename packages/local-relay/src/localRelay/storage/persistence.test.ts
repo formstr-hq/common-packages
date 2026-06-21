@@ -1,5 +1,6 @@
 import { Persistence } from "./persistence";
 import { MemoryStorage } from "./MemoryStorage";
+import { StorageAdapter } from "./StorageAdapter";
 import { EventDB } from "../core/EventDB";
 import { defaultPrunePolicy } from "../core/types";
 import { makeEvent } from "../testkit";
@@ -87,6 +88,65 @@ describe("Persistence pruning", () => {
     expect(pruned).toBe(1);
     const remaining = await storage.loadAll();
     expect(remaining.map((e) => e.id)).toEqual(["new".padEnd(64, "0")]);
+  });
+});
+
+describe("Persistence stop", () => {
+  it("clears timers, detaches write-through, and flushes a final time", async () => {
+    const storage = new MemoryStorage();
+    const db = new EventDB(() => NOW);
+    // Long timers so nothing fires on its own — stop() must do the work.
+    const p = new Persistence(db, storage, { debounceMs: 10_000, pruneIntervalMs: 10_000 });
+    await p.start();
+
+    db.add(makeEvent({ id: "a".repeat(64) })); // schedules a (long) debounce
+    await p.stop(); // clears timers + flushes the pending put
+    expect(storage.size).toBe(1);
+
+    // After stop the listener is detached: further changes aren't captured.
+    db.add(makeEvent({ id: "b".repeat(64) }));
+    await p.flush();
+    expect(storage.size).toBe(1);
+  });
+});
+
+describe("Persistence reentrancy", () => {
+  it("does not start a second flush while one is in flight", async () => {
+    const written: string[] = [];
+    let releasePut: () => void = () => {};
+    // A storage whose batchPut hangs until we release it, so we can overlap flushes.
+    const storage: StorageAdapter = {
+      loadAll: async () => [],
+      batchPut: (events) => {
+        written.push(...events.map((e) => e.id));
+        return new Promise<void>((resolve) => (releasePut = resolve));
+      },
+      batchDelete: async () => {},
+      clear: async () => {},
+    };
+    const db = new EventDB(() => NOW);
+    const p = new Persistence(db, storage, noTimers);
+    await p.start();
+
+    db.add(makeEvent({ id: "a".repeat(64) }));
+    const first = p.flush(); // sets flushing=true, awaits the hung batchPut
+    const second = p.flush(); // flushing in progress → returns immediately
+    await second;
+    db.add(makeEvent({ id: "b".repeat(64) })); // queued, but the second flush did nothing
+    releasePut();
+    await first;
+    expect(written).toEqual(["a".repeat(64)]); // only the first flush ran
+  });
+});
+
+describe("MemoryStorage", () => {
+  it("clear empties the store", async () => {
+    const storage = new MemoryStorage();
+    await storage.batchPut([makeEvent({ id: "a".repeat(64) })]);
+    expect(storage.size).toBe(1);
+    await storage.clear();
+    expect(storage.size).toBe(0);
+    expect(await storage.loadAll()).toHaveLength(0);
   });
 });
 

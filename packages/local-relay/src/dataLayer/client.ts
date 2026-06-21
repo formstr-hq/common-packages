@@ -14,9 +14,9 @@
 import type { Event, Filter } from "../localRelay/core/types";
 import type { EventTemplate } from "nostr-tools";
 import { LocalRelayClient, SubscribeHandlers } from "../localRelay/transport/LocalRelayClient";
-import type { RelayPublishOutcome, RelayHealth } from "../localRelay/transport/frames";
+import type { RelayPublishOutcome, RelayHealth, Diagnostics } from "../localRelay/transport/frames";
 
-export type { RelayPublishOutcome, RelayHealth };
+export type { RelayPublishOutcome, RelayHealth, Diagnostics };
 
 /**
  * Aggregate publish outcome — same shape `PublishDiagnosticModal` already
@@ -134,6 +134,15 @@ export class DataLayer {
     return this.deps.client.relayHealth();
   }
 
+  /**
+   * Read-only snapshot of the worker's state — paused flag, declared interests,
+   * live upstream subscriptions + their routed relays, relay health, store stats,
+   * and pending enrichment. For debugging only; triggers no network.
+   */
+  diagnostics(): Promise<Diagnostics> {
+    return this.deps.client.diagnostics();
+  }
+
   /** Active-account change: retarget scope (does NOT rehydrate the shared store). */
   setActiveAccount(pubkey: string | null): void {
     this.deps.client.setActiveAccount(pubkey);
@@ -142,6 +151,21 @@ export class DataLayer {
   /** Relays the user reads from — a routing-policy input, not a command. */
   setUserRelays(relays: string[]): void {
     this.deps.client.setUserRelays(relays);
+  }
+
+  /**
+   * Add a discovered relay to the gossip pool so the worker can fetch
+   * referenced/missing events from it (e.g. a note referenced inside a DM, whose
+   * relay hint only the client can see after decryption). Read/discovery only —
+   * never a publish target, kept separate from the user's own relays, and bounded.
+   */
+  addGossipRelay(url: string): void {
+    this.deps.client.addGossipRelay(url);
+  }
+
+  /** Remove a relay from the gossip pool; future fetches stop targeting it. */
+  removeGossipRelay(url: string): void {
+    this.deps.client.removeGossipRelay(url);
   }
 
   /** App backgrounded — lifecycle hint; the worker decides what to do. */

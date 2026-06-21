@@ -47,6 +47,9 @@ export interface RelayHealth {
   connected: boolean;
   connecting: boolean;
   reconnecting: boolean;
+  /** True if this is a discovered (gossip-pool) relay, not a user relay. The
+   *  pool itself is source-agnostic and reports `false`; RelayService tags it. */
+  gossip: boolean;
 }
 
 export interface PublishOptions {
@@ -202,6 +205,7 @@ export class RelayPool {
         connected: c?.connected ?? false,
         connecting: c?.connecting ?? false,
         reconnecting: c?.reconnecting ?? false,
+        gossip: false, // RelayService tags discovered relays; the pool can't.
       };
     });
   }

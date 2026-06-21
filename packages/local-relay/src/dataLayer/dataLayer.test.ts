@@ -1,4 +1,4 @@
-import { dedupeKey, isFeedRoot, relatesTo, roleOf } from "./kinds";
+import { dedupeKey, isFeedRoot, relatesTo, roleOf, getKindDef, registerKind } from "./kinds";
 import { resolveAuthors, buildFilters, scopeHasInput, Scope } from "./scope";
 import { assembleFeed } from "./feed";
 import { makeEvent } from "../localRelay/testkit";
@@ -24,6 +24,19 @@ describe("kind registry", () => {
     expect(roleOf(9999)).toBe("other");
     expect(relatesTo(makeEvent({ kind: 6, tags: [["e", "orig"]] }))).toBe("orig");
     expect(isFeedRoot(makeEvent({ kind: 6, tags: [["e", "orig"]] }))).toBe(false);
+    // reactions (7) and responses (1018/1070) are never feed roots
+    expect(isFeedRoot(makeEvent({ kind: 7, tags: [["e", "liked"]] }))).toBe(false);
+    expect(isFeedRoot(makeEvent({ kind: 1018, tags: [["e", "poll"]] }))).toBe(false);
+    expect(isFeedRoot(makeEvent({ kind: 1070, tags: [["e", "poll"]] }))).toBe(false);
+    expect(relatesTo(makeEvent({ kind: 1018, tags: [["e", "poll"]] }))).toBe("poll");
+  });
+
+  it("exposes raw defs via getKindDef and honours a custom dedupeKey", () => {
+    expect(getKindDef(1)?.role).toBe("note");
+    expect(getKindDef(99999)).toBeUndefined();
+
+    registerKind(49999, { role: "other", dedupeKey: () => "fixed" });
+    expect(dedupeKey(makeEvent({ kind: 49999 }))).toBe("fixed");
   });
 });
 
@@ -35,6 +48,17 @@ describe("scope", () => {
     expect(resolveAuthors({ type: "network" }, user)).toEqual(["a", "b", "c"]);
     expect(resolveAuthors({ type: "author", pubkey: "x" }, user)).toEqual(["x"]);
     expect(resolveAuthors({ type: "thread", rootId: "r" }, user)).toBeNull();
+  });
+
+  it("falls back to empty author sets when follows / web-of-trust are absent", () => {
+    expect(resolveAuthors({ type: "following" }, {})).toEqual([]);
+    expect(resolveAuthors({ type: "network" }, {})).toEqual([]);
+  });
+
+  it("builds an author-less filter for the global scope, carrying the window", () => {
+    expect(buildFilters([1], { type: "global" }, {}, { since: 10, until: 20, limit: 5 })).toEqual([
+      { kinds: [1], since: 10, until: 20, limit: 5 },
+    ]);
   });
 
   it("builds author filters for author scopes", () => {
@@ -58,7 +82,9 @@ describe("scope", () => {
 
   it("scopeHasInput gates empty feeds", () => {
     expect(scopeHasInput({ type: "following" }, { follows: [] })).toBe(false);
+    expect(scopeHasInput({ type: "following" }, {})).toBe(false); // follows absent
     expect(scopeHasInput({ type: "network" }, user)).toBe(true);
+    expect(scopeHasInput({ type: "network" }, {})).toBe(false); // web-of-trust absent
     expect(scopeHasInput({ type: "global" } as Scope, {})).toBe(true);
   });
 });

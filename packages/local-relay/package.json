@@ -1,6 +1,6 @@
 {
   "name": "@formstr/local-relay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "NIP-01 Web Worker local relay + an intent-only data layer for Nostr apps. The app declares interests and publishes; the worker owns every connection decision.",
   "license": "MIT",
   "author": "Abhay <toabhayraizada@gmail.com>",
@@ -58,6 +58,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
@@ -65,6 +66,7 @@
     "nostr-tools": "^2.23.5"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"

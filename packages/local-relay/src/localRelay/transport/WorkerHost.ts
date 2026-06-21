@@ -10,7 +10,7 @@ import { EventDB } from "../core/EventDB";
 import { RelayCore } from "../core/RelayCore";
 import { Channel } from "./channel";
 import { SignerPort } from "./SignerPort";
-import { FromWorker, ToWorker } from "./frames";
+import { FromWorker, ToWorker, Diagnostics } from "./frames";
 import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 
 export interface WorkerHostHooks {
@@ -18,6 +18,9 @@ export interface WorkerHostHooks {
   onSetAccount?: (pubkey: string | null) => void;
   /** The user's relay set changed (policy input for the worker's routing). */
   onSetUserRelays?: (relays: string[]) => void;
+  /** A discovered relay was added to / removed from the gossip pool. */
+  onAddGossipRelay?: (url: string) => void;
+  onRemoveGossipRelay?: (url: string) => void;
   /** A standing interest was registered/updated — the worker decides upstream. */
   onObserve?: (subId: string, filters: Filter[], sync: boolean) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
@@ -26,6 +29,8 @@ export interface WorkerHostHooks {
   onPublish?: (pubId: string, event: Event) => void;
   /** Report live relay connection health (read-only observation). */
   onRelayHealth?: (reqId: string) => void;
+  /** Report a read-only snapshot of the worker's state (debugging). */
+  onDiagnostics?: (reqId: string) => void;
   /** Lifecycle hints; the worker decides how to respond. */
   onPause?: () => void;
   onResume?: () => void;
@@ -61,6 +66,11 @@ export class WorkerHost {
     this.emit({ kind: "relayHealth", reqId, relays });
   }
 
+  /** Send a diagnostics snapshot back to the client. */
+  postDiagnostics(reqId: string, diagnostics: Diagnostics): void {
+    this.emit({ kind: "diagnostics", reqId, diagnostics });
+  }
+
   private emit(m: FromWorker): void {
     this.channel.post(m);
   }
@@ -90,11 +100,20 @@ export class WorkerHost {
       case "relayHealth":
         this.hooks.onRelayHealth?.(m.reqId);
         break;
+      case "diagnostics":
+        this.hooks.onDiagnostics?.(m.reqId);
+        break;
       case "setAccount":
         this.hooks.onSetAccount?.(m.pubkey);
         break;
       case "setUserRelays":
         this.hooks.onSetUserRelays?.(m.relays);
+        break;
+      case "addGossipRelay":
+        this.hooks.onAddGossipRelay?.(m.url);
+        break;
+      case "removeGossipRelay":
+        this.hooks.onRemoveGossipRelay?.(m.url);
         break;
       case "pause":
         this.hooks.onPause?.();

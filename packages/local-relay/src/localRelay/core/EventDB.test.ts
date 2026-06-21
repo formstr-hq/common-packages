@@ -25,6 +25,35 @@ describe("EventDB query", () => {
     expect(store.query({ "#t": ["nostr"] } as any)).toHaveLength(1);
     expect(store.query({ "#t": ["bitcoin"] } as any)).toHaveLength(0);
   });
+
+  it("falls back to a full scan when the filter has no indexed field", () => {
+    const store = db();
+    store.add(makeEvent({ id: "a".repeat(64), created_at: 500 }));
+    store.add(makeEvent({ id: "b".repeat(64), created_at: 100 }));
+    // since-only filter — no ids/authors/kinds/tags to index by.
+    expect(store.query({ since: 200 }).map((e) => e.id)).toEqual(["a".repeat(64)]);
+  });
+});
+
+describe("stats & clear", () => {
+  it("reports totals by kind and distinct authors", () => {
+    const store = db();
+    store.add(makeEvent({ id: "a".repeat(64), kind: 1, pubkey: "p".repeat(64) }));
+    store.add(makeEvent({ id: "b".repeat(64), kind: 7, pubkey: "p".repeat(64) }));
+    const stats = store.stats();
+    expect(stats.totalEvents).toBe(2);
+    expect(stats.eventsByKind).toEqual({ 1: 1, 7: 1 });
+    expect(stats.totalAuthors).toBe(1);
+  });
+
+  it("clear empties every index", () => {
+    const store = db();
+    store.add(makeEvent({ id: "a".repeat(64), pubkey: "p".repeat(64), tags: [["t", "x"]] }));
+    store.clear();
+    expect(store.allEvents()).toHaveLength(0);
+    expect(store.stats().totalEvents).toBe(0);
+    expect(store.query({ "#t": ["x"] } as any)).toHaveLength(0);
+  });
 });
 
 describe("replaceable & ephemeral", () => {
@@ -76,12 +105,36 @@ describe("NIP-09 deletion", () => {
     expect(store.add(note)).toBe(false); // re-add rejected
   });
 
+  it("records a deletion for an event that isn't stored, harmlessly", () => {
+    const store = db();
+    const pubkey = "p".repeat(64);
+    // The referenced event was never stored — there's nothing to remove.
+    store.add(makeEvent({ id: "d".repeat(64), pubkey, kind: 5, tags: [["e", "u".repeat(64)]] }));
+    expect(store.isDeleted("u".repeat(64))).toBe(true);
+  });
+
   it("ignores a deletion that targets another author's event", () => {
     const store = db();
     const note = makeEvent({ id: "n".repeat(64), pubkey: "alice".padEnd(64, "0"), kind: 1 });
     store.add(note);
     store.add(makeEvent({ id: "d".repeat(64), pubkey: "mallory".padEnd(64, "0"), kind: 5, tags: [["e", note.id]] }));
     expect(store.getById(note.id)).toBeDefined();
+  });
+
+  it("ignores a re-sent (already-processed) deletion event", () => {
+    const store = db();
+    const pubkey = "p".repeat(64);
+    const note = makeEvent({ id: "n".repeat(64), pubkey, kind: 1 });
+    store.add(note);
+    const del = makeEvent({ id: "d".repeat(64), pubkey, kind: 5, tags: [["e", note.id]] });
+    expect(store.add(del)).toBe(true);
+    expect(store.add(del)).toBe(false); // same deletion again → no-op
+  });
+});
+
+describe("structural validation", () => {
+  it("rejects a structurally invalid event", () => {
+    expect(db().add({ id: "nope" } as any)).toBe(false);
   });
 });
 

@@ -7,9 +7,31 @@ import type {
   ConnectionResult,
 } from './types';
 
+interface WllamaInstance {
+  loadModel(files: File[], options: { n_ctx: number; n_gpu_layers?: number }): Promise<void>;
+  createChatCompletion(params: {
+    messages: Array<{ role: string; content: string }>;
+    max_tokens: number;
+    temperature: number;
+    top_k: number;
+    top_p: number;
+  }): Promise<{ choices?: Array<{ message?: { content?: string } }> }>;
+  exit(): Promise<void>;
+}
+
+type WllamaConstructor = new (config: { default: string }) => WllamaInstance;
+
+function isWebGPUSupported(): boolean {
+  return typeof navigator !== 'undefined' && 'gpu' in navigator;
+}
+
+function extractErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class WllamaService {
-  private wllama: Wllama | null = null;
-  private modelName: string = '';
+  private wllama: WllamaInstance | null = null;
+  private modelName = '';
   private config: Required<WllamaServiceConfig>;
 
   constructor(config: WllamaServiceConfig = {}) {
@@ -28,12 +50,11 @@ export class WllamaService {
     if (!('caches' in window)) {
       return { success: false, error: 'Cache API is not supported in this browser.' };
     }
-    const hasWebGPU = !!(navigator as any).gpu;
-    const isolated = window.crossOriginIsolated;
+
     return {
       success: true,
-      hasWebGPU,
-      crossOriginIsolated: isolated,
+      hasWebGPU: isWebGPUSupported(),
+      crossOriginIsolated: window.crossOriginIsolated,
     };
   }
 
@@ -51,14 +72,15 @@ export class WllamaService {
       onProgress?.(10);
 
       const configPaths = { default: this.config.wasmPath };
-      this.wllama = new Wllama(configPaths as any);
+      const WllamaConstructor = Wllama as unknown as WllamaConstructor;
+      this.wllama = new WllamaConstructor(configPaths);
       onProgress?.(30);
 
       await this.storeInCache(file);
       onProgress?.(50);
 
-      const hasWebGPU = !!(navigator as any).gpu;
-      await (this.wllama as any).loadModel([file], {
+      const hasWebGPU = isWebGPUSupported();
+      await this.wllama.loadModel([file], {
         n_ctx: this.config.nCtx,
         ...(hasWebGPU && this.config.nGpuLayers > 0
           ? { n_gpu_layers: this.config.nGpuLayers }
@@ -69,9 +91,9 @@ export class WllamaService {
       onProgress?.(100);
 
       return { success: true, usedWebGPU: hasWebGPU };
-    } catch (e: any) {
+    } catch (error: unknown) {
       await this.unload();
-      return { success: false, error: e.message };
+      return { success: false, error: extractErrorMessage(error) };
     }
   }
 
@@ -83,12 +105,11 @@ export class WllamaService {
 
     try {
       const t0 = performance.now();
-
-      const messages: { role: string; content: string }[] = [];
+      const messages: Array<{ role: string; content: string }> = [];
       if (req.system) messages.push({ role: 'system', content: req.system });
       messages.push({ role: 'user', content: req.prompt });
 
-      const response = await (this.wllama as any).createChatCompletion({
+      const response = await this.wllama.createChatCompletion({
         messages,
         max_tokens: req.maxTokens ?? 512,
         temperature: req.temperature ?? 0.7,
@@ -96,25 +117,34 @@ export class WllamaService {
         top_p: req.topP ?? 0.95,
       });
 
-      const text: string = response?.choices?.[0]?.message?.content ?? '';
+      const text = response?.choices?.[0]?.message?.content ?? '';
       return {
         success: true,
         text,
         timeMs: Math.round(performance.now() - t0),
       };
-    } catch (e: any) {
-      return { success: false, error: e.message || 'Generation failed' };
+    } catch (error: unknown) {
+      return { success: false, error: extractErrorMessage(error) || 'Generation failed' };
     }
   }
 
   /** Unload the current model and free memory */
   async unload(): Promise<void> {
     if (this.wllama) {
-      try { await (this.wllama as any).exit(); } catch (_) {}
+      try {
+        await this.wllama.exit();
+      } catch {
+        // ignore cleanup failures
+      }
       this.wllama = null;
     }
+
     if (this.modelName) {
-      try { await this.deleteFromCache(this.modelName); } catch (_) {}
+      try {
+        await this.deleteFromCache(this.modelName);
+      } catch {
+        // ignore cleanup failures
+      }
       this.modelName = '';
     }
   }

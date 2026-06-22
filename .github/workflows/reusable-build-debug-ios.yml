@@ -86,17 +86,34 @@ jobs:
 
       - name: Install CocoaPods dependencies
         working-directory: ios/App
-        run: pod install
+        run: |
+          if [ -f Podfile ]; then
+            pod install
+          else
+            echo "No Podfile found — project uses Swift Package Manager, skipping pod install."
+          fi
+
+      # Resolve which xcodebuild entry point to use:
+      # CocoaPods projects generate a standalone App.xcworkspace; SPM projects use App.xcodeproj.
+      - name: Detect Xcode build entry point
+        id: xcode-entry
+        run: |
+          if [ -d ios/App/App.xcworkspace ]; then
+            echo "flag=-workspace ios/App/App.xcworkspace" >> $GITHUB_OUTPUT
+          else
+            echo "flag=-project ios/App/App.xcodeproj" >> $GITHUB_OUTPUT
+          fi
 
       # Simulator build — no signing required
       - name: Build iOS Simulator
         run: |
           xcodebuild \
-            -workspace ios/App/App.xcworkspace \
+            ${{ steps.xcode-entry.outputs.flag }} \
             -scheme App \
             -configuration Debug \
             -sdk iphonesimulator \
             -derivedDataPath ios/build \
+            -clonedSourcePackagesDirPath ios/SourcePackages \
             build \
             CODE_SIGNING_ALLOWED=NO
 
@@ -149,10 +166,11 @@ jobs:
           TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
         run: |
           xcodebuild \
-            -workspace ios/App/App.xcworkspace \
+            ${{ steps.xcode-entry.outputs.flag }} \
             -scheme App \
             -configuration Debug \
             -archivePath ios/build/App.xcarchive \
+            -clonedSourcePackagesDirPath ios/SourcePackages \
             archive \
             DEVELOPMENT_TEAM="$TEAM_ID"
 

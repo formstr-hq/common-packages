@@ -33,6 +33,7 @@ export class LocalRelayClient {
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
   private pendingSeenOn = new Map<string, (relays: string[]) => void>();
+  private pendingOnline = new Map<string, (online: boolean) => void>();
   private pendingDiagnostics = new Map<string, (diagnostics: Diagnostics) => void>();
   private counter = 0;
 
@@ -74,6 +75,15 @@ export class LocalRelayClient {
   }
 
   /**
+   * Manually re-attempt delivery of outbox records that exhausted their automatic
+   * retries (one event by id, or all failed ones if omitted). The worker re-arms
+   * them and tries again — fire-and-forget, like publish.
+   */
+  retryDelivery(eventId?: string): void {
+    this.send({ kind: "retryDelivery", eventId });
+  }
+
+  /**
    * Publish an already-signed event; resolves with each relay's outcome (for
    * publish diagnostics). Retry is just another publish — the worker, not the
    * app, decides how to reach dead relays.
@@ -107,6 +117,19 @@ export class LocalRelayClient {
     return new Promise((resolve) => {
       this.pendingSeenOn.set(reqId, resolve);
       this.send({ kind: "seenOn", reqId, eventId });
+    });
+  }
+
+  /**
+   * Whether the worker currently considers itself online — a user relay is
+   * connected now, or was within the last 30s (debounced). Derived from real
+   * socket state, read-only; triggers no network.
+   */
+  online(): Promise<boolean> {
+    const reqId = `o${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingOnline.set(reqId, resolve);
+      this.send({ kind: "online", reqId });
     });
   }
 
@@ -211,6 +234,15 @@ export class LocalRelayClient {
       if (resolve) {
         this.pendingSeenOn.delete(m.reqId);
         resolve(m.relays);
+      }
+      return;
+    }
+
+    if (m.kind === "online") {
+      const resolve = this.pendingOnline.get(m.reqId);
+      if (resolve) {
+        this.pendingOnline.delete(m.reqId);
+        resolve(m.online);
       }
       return;
     }

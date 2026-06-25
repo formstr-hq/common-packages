@@ -147,6 +147,24 @@ export class DataLayer {
   }
 
   /**
+   * Whether the worker considers itself online — a user relay is connected now,
+   * or was within the last 30s (debounced so brief drops don't flap). Derived
+   * from real socket state, not `navigator.onLine`. Read-only; no network.
+   */
+  online(): Promise<boolean> {
+    return this.deps.client.online();
+  }
+
+  /**
+   * Manually re-attempt delivery of outbox records that exhausted their automatic
+   * retries — one published event by id, or all failed ones if omitted. Surface
+   * the failed set from `diagnostics().delivery`. Fire-and-forget.
+   */
+  retryDelivery(eventId?: string): void {
+    this.deps.client.retryDelivery(eventId);
+  }
+
+  /**
    * Read-only snapshot of the worker's state — paused flag, declared interests,
    * live upstream subscriptions + their routed relays, relay health, store stats,
    * and pending enrichment. For debugging only; triggers no network.

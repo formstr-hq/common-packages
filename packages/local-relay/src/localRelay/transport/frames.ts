@@ -13,7 +13,7 @@
  * tagged envelope.
  */
 import type { EventTemplate } from "nostr-tools";
-import type { Event, Filter, DBStats } from "../core/types";
+import type { Event, Filter, DBStats, OutboxRecord } from "../core/types";
 import type { ClientMessage, RelayMessage } from "../core/protocol";
 import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 
@@ -27,6 +27,8 @@ import type { RelayPublishOutcome, RelayHealth } from "../sync/RelayPool";
 export interface Diagnostics {
   /** Lifecycle: true after `pause()`, false after `resume()`. */
   paused: boolean;
+  /** True if a user relay is connected now or was within the last 30s (debounced). */
+  online: boolean;
   /** Standing interests the app has declared (the worker's only network input). */
   interests: { subId: string; filters: Filter[]; sync: boolean }[];
   /**
@@ -48,6 +50,11 @@ export interface Diagnostics {
   cache: DBStats;
   /** Pending autonomous-enrichment work. */
   enrichment: { queuedIds: number; queuedAuthors: number; pending: boolean };
+  /** Durable outbox: events still being re-delivered to relays that haven't
+   *  accepted them. `records` carries each (incl. `failed` ones); `pendingRelays`
+   *  counts owed (event, relay) pairs still auto-retrying; `failed` counts records
+   *  that exhausted retries and await a manual `retryDelivery`. */
+  delivery: { records: OutboxRecord[]; pendingRelays: number; failed: number };
 }
 
 /** Main thread → Worker. Interests + publish + config/lifecycle only. */
@@ -68,6 +75,8 @@ export type ToWorker =
   | { kind: "publish"; pubId: string; event: Event }
   /** Add events to the local store without publishing upstream (optimistic). */
   | { kind: "ingest"; events: Event[] }
+  /** Manually re-attempt delivery of failed outbox records (one by id, or all). */
+  | { kind: "retryDelivery"; eventId?: string }
   // --- config / observation / lifecycle (not network commands) ---
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
@@ -82,6 +91,8 @@ export type ToWorker =
   | { kind: "relayHealth"; reqId: string }
   /** Ask which relays a stored event has been seen on (provenance). Read-only. */
   | { kind: "seenOn"; reqId: string; eventId: string }
+  /** Ask whether the worker currently considers itself online. Read-only. */
+  | { kind: "online"; reqId: string }
   /** Request a read-only snapshot of the worker's state (debugging only). */
   | { kind: "diagnostics"; reqId: string }
   /** App backgrounded/foregrounded — a lifecycle hint; the worker decides what
@@ -96,6 +107,7 @@ export type FromWorker =
   | { kind: "publishResult"; pubId: string; results: RelayPublishOutcome[] }
   | { kind: "relayHealth"; reqId: string; relays: RelayHealth[] }
   | { kind: "seenOn"; reqId: string; relays: string[] }
+  | { kind: "online"; reqId: string; online: boolean }
   | { kind: "diagnostics"; reqId: string; diagnostics: Diagnostics }
   | { kind: "ready" };
 

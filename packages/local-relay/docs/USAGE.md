@@ -216,6 +216,8 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `addEvent(event)` / `addEvents(events)` | Add events to the local store (optimistic / out-of-band). | No |
 | `relayHealth()` | Live connection health of the user's relays. | Read-only observation |
 | `seenOn(eventId)` | Relays a cached event was opportunistically observed on (usually one — the source; good for relay hints, not a "who has it" count). Returns `string[]`. | Read-only observation |
+| `online()` | Whether a user relay is connected now or was within the last 30s (debounced). Returns `boolean`. | Read-only observation |
+| `retryDelivery(eventId?)` | Re-attempt delivery of outbox records that exhausted automatic retries (one event, or all failed). | Yes (worker decides) |
 | `diagnostics()` | Read-only snapshot of worker state (paused, interests, upstream routing, cache, enrichment). | Read-only observation |
 | `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
 | `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
@@ -496,6 +498,7 @@ touches no sockets and mutates nothing.
 const d = await dataLayer.diagnostics();
 // {
 //   paused,                                   // lifecycle flag (true after pause())
+//   online,                                   // user relay connected now or within last 30s
 //   interests: [{ subId, filters, sync }],    // what the app has declared
 //   upstream:  [{ filterHash, filters, relays }], // what the worker is subscribed to, and where
 //   relays,                                   // RelayHealth[] (same as relayHealth()), each tagged { gossip }
@@ -504,6 +507,7 @@ const d = await dataLayer.diagnostics();
 //   connections: { user, outbox, gossip, total }, // counts of CONNECTED relays by source
 //   cache:     { totalEvents, eventsByKind, totalAuthors },
 //   enrichment:{ queuedIds, queuedAuthors, pending },
+//   delivery:  { records: OutboxRecord[], pendingRelays, failed }, // durable outbox (§11.8)
 // }
 ```
 
@@ -632,6 +636,53 @@ useful as a "delivered to N relays" confirmation, or to pick a hint you know is
 live.
 
 Empty if the event isn't in the store, or its source wasn't recorded.
+
+### 11.8 Offline publishing & delivery-on-reconnect (the outbox)
+
+`publish` is **offline-safe and durable**. The event is stored locally first (so
+your own UI sees it instantly), then sent upstream. Any target relay that doesn't
+accept becomes **delivery debt** in a persisted outbox, and the worker keeps
+re-delivering on its own until the event lands — you don't re-publish by hand.
+
+What's owed vs not:
+
+- **Accepted** (`OK true`) → the relay has it; done.
+- **Timeout / unreachable** → owed; retried with **exponential backoff** (capped).
+- **Rejected** (`OK false`, e.g. spam/policy) → *terminal*; never retried.
+
+Retries are driven by real reachability, not a guess: when a relay's socket
+(re)connects, the worker flushes what it owes that relay; `resume()` and a backoff
+timer re-attempt the rest. The outbox is **persisted** (IndexedDB), so debt
+survives a worker restart and is re-attempted on boot.
+
+Cleanup is automatic: if the event is **deleted** (NIP-09), **superseded** (a newer
+replaceable), or pruned, its outbox debt is dropped — the worker won't keep trying
+to deliver something that's gone.
+
+After a bounded number of attempts a record is marked **failed** (auto-retry stops,
+but it's *kept*, not dropped). Surface and retry these manually:
+
+```ts
+const { delivery } = await dataLayer.diagnostics();
+// delivery.records: OutboxRecord[]  (each: { eventId, pending, attempts, nextAttemptAt, failed })
+// delivery.pendingRelays: number    (owed pairs still auto-retrying)
+// delivery.failed: number           (records awaiting a manual retry)
+
+dataLayer.retryDelivery(eventId); // re-arm one failed delivery
+dataLayer.retryDelivery();        // re-arm all failed deliveries
+```
+
+### 11.9 Online state
+
+```ts
+const up = await dataLayer.online(); // boolean
+```
+
+`online` is **derived from real socket state**, not `navigator.onLine` (which lies
+about captive portals / LAN-without-WAN): it's true if a **user relay** is
+connected now, or was within the last **30s** — a debounce so a brief drop doesn't
+flap the flag. It's also on `diagnostics().online`. Use it for an offline
+indicator; the outbox already handles *delivery* without you gating on it.
 
 ---
 
@@ -859,7 +910,10 @@ user's relays).
 **Publishing succeeds locally but no relay accepted it.**
 Check `result.relayResults` for per-relay reasons (rejected/timeout/failed), and
 make sure `setUserRelays` is set and/or the author has a `kind:10002` in the
-store for outbox routing. Retry by calling `publish`/`publishEvent` again.
+store for outbox routing. You usually **don't** need to retry by hand: timeout/
+unreachable targets are queued in the durable outbox and re-delivered on reconnect
+(§11.8). Only after a record is marked `failed` (see `diagnostics().delivery`) is a
+manual `retryDelivery(eventId)` needed; a rejection (`OK false`) is terminal.
 
 **Nothing connects.**
 The worker only opens sockets when there's a networked interest **and** somewhere

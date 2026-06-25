@@ -149,6 +149,25 @@ describe("DataLayer", () => {
     expect(await dataLayer.seenOn(id)).toEqual(["wss://u1"]);
   });
 
+  it("online() reflects user-relay connectivity through the data layer", async () => {
+    const { f, dataLayer } = await wire();
+    expect(await dataLayer.online()).toBe(false); // nothing connected
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} });
+    await settle();
+    f.last("wss://u1").open(); // onConnect → reachable
+    await settle();
+    expect(await dataLayer.online()).toBe(true);
+  });
+
+  it("retryDelivery passes through without error and diagnostics exposes the outbox", async () => {
+    const { dataLayer } = await wire();
+    expect(() => dataLayer.retryDelivery("a".repeat(64))).not.toThrow();
+    expect(() => dataLayer.retryDelivery()).not.toThrow(); // all failed
+    const diag = await dataLayer.diagnostics();
+    expect(diag.delivery).toEqual({ records: [], pendingRelays: 0, failed: 0 });
+    expect(typeof diag.online).toBe("boolean");
+  });
+
   it("setActiveAccount is accepted as a scope-retarget hint", async () => {
     const { dataLayer } = await wire();
     expect(() => dataLayer.setActiveAccount("alice")).not.toThrow();

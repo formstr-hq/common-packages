@@ -33,6 +33,10 @@ export interface WorkerHostHooks {
   onRelayHealth?: (reqId: string) => void;
   /** Report which relays a stored event has been seen on (provenance). */
   onSeenOn?: (reqId: string, eventId: string) => void;
+  /** Report whether the worker currently considers itself online. */
+  onOnline?: (reqId: string) => void;
+  /** Manually re-attempt delivery of failed outbox records (one id, or all). */
+  onRetryDelivery?: (eventId?: string) => void;
   /** Report a read-only snapshot of the worker's state (debugging). */
   onDiagnostics?: (reqId: string) => void;
   /** Lifecycle hints; the worker decides how to respond. */
@@ -75,6 +79,11 @@ export class WorkerHost {
     this.emit({ kind: "seenOn", reqId, relays });
   }
 
+  /** Send the current online state back to the client. */
+  postOnline(reqId: string, online: boolean): void {
+    this.emit({ kind: "online", reqId, online });
+  }
+
   /** Send a diagnostics snapshot back to the client. */
   postDiagnostics(reqId: string, diagnostics: Diagnostics): void {
     this.emit({ kind: "diagnostics", reqId, diagnostics });
@@ -106,11 +115,17 @@ export class WorkerHost {
         // Local store only (no OK, no upstream) — optimistic adds / imports.
         this.relayCore.handle(["INGEST", m.events]);
         break;
+      case "retryDelivery":
+        this.hooks.onRetryDelivery?.(m.eventId);
+        break;
       case "relayHealth":
         this.hooks.onRelayHealth?.(m.reqId);
         break;
       case "seenOn":
         this.hooks.onSeenOn?.(m.reqId, m.eventId);
+        break;
+      case "online":
+        this.hooks.onOnline?.(m.reqId);
         break;
       case "diagnostics":
         this.hooks.onDiagnostics?.(m.reqId);

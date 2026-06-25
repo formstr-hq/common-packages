@@ -16,6 +16,27 @@ export type StoreChange =
 
 export type StoreListener = (change: StoreChange) => void;
 
+/**
+ * A durable outbox entry: an event we published that hasn't reached all its
+ * target relays yet, so the worker keeps re-delivering until it lands (or gives
+ * up). The event body lives in the event store; this only tracks delivery debt.
+ */
+export interface OutboxRecord {
+  /** Id of the published event (looked up from the event store to re-send). */
+  eventId: string;
+  /** Target relays that haven't accepted yet and haven't terminally rejected. */
+  pending: string[];
+  /** Delivery attempts made so far (drives backoff + the give-up cap). */
+  attempts: number;
+  /** Epoch ms before which the next sweep should skip this record (backoff). */
+  nextAttemptAt: number;
+  /**
+   * Set once the give-up cap is hit: auto-retry stops, but the record is KEPT so
+   * the client can list it and trigger a manual retry later. Cleared by retry.
+   */
+  failed: boolean;
+}
+
 /** Statistics about the store — used for debug + prune decisions. */
 export interface DBStats {
   totalEvents: number;

@@ -21,6 +21,7 @@ import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
 import type { RelayHealth } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
+import { DeliveryOutbox } from "./sync/DeliveryOutbox";
 import { SocketFactory, webSocketFactory } from "./sync/Socket";
 import { StorageAdapter } from "./storage/StorageAdapter";
 import { Persistence, PersistenceOptions } from "./storage/persistence";
@@ -45,6 +46,13 @@ const DEFAULT_MAX_GOSSIP_RELAYS = 64;
  */
 const DM_KINDS = new Set<number>([1059]);
 
+/**
+ * "Online" debounce: we count as online if a user relay is connected now or was
+ * within this window, so a brief socket blip doesn't flap the flag (or trigger
+ * redundant outbox sweeps). See `isOnline`.
+ */
+const ONLINE_WINDOW_MS = 30_000;
+
 /** Order-independent equality of two relay-url lists (treated as sets). */
 function sameRelaySet(a: string[], b: string[]): boolean {
   const setA = new Set(a);
@@ -63,6 +71,10 @@ export interface RelayServiceOptions {
   now?: () => number;
   /** Max discovered relays kept in the gossip pool (LRU). Default 64. */
   maxGossipRelays?: number;
+  /** Max wait for a relay's publish OK before it's marked timeout/failed. */
+  publishTimeoutMs?: number;
+  /** Tuning for the durable delivery outbox (retry backoff + give-up cap). */
+  outbox?: { baseBackoffMs?: number; maxBackoffMs?: number; maxAttempts?: number };
 }
 
 export class RelayService {
@@ -70,7 +82,9 @@ export class RelayService {
   private host: WorkerHost;
   private pool: RelayPool;
   private sync: SyncEngine;
+  private outbox: DeliveryOutbox;
   private persistence: Persistence | null;
+  private storage: StorageAdapter | null;
   private userRelays: string[] = [];
   /**
    * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
@@ -93,16 +107,22 @@ export class RelayService {
   private paused = false;
   private verify: (event: Event) => boolean;
   private now: () => number;
+  private publishTimeoutMs?: number;
   /** Pending enrichment targets (referenced event ids + author pubkeys). */
   private enrichIds = new Set<string>();
   private enrichAuthors = new Set<string>();
   private enrichTimer: ReturnType<typeof setTimeout> | null = null;
   /** Already-requested enrichment targets, so we never re-fetch the same ref. */
   private enrichRequested = new Set<string>();
+  /** Most recent time a USER relay socket was connected (drives `isOnline`). */
+  private lastUserRelayConnectedAt = 0;
+  /** One-shot timer that fires the next due outbox sweep (backoff retry). */
+  private outboxTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: RelayServiceOptions) {
     this.verify = opts.verify ?? defaultVerify;
     this.now = opts.now ?? (() => Date.now());
+    this.publishTimeoutMs = opts.publishTimeoutMs;
     this.maxGossipRelays = opts.maxGossipRelays ?? DEFAULT_MAX_GOSSIP_RELAYS;
     this.db = new EventDB(opts.now);
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
@@ -124,6 +144,8 @@ export class RelayService {
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
       onSeenOn: (reqId, eventId) => this.host.postSeenOn(reqId, this.db.seenOn(eventId)),
+      onOnline: (reqId) => this.host.postOnline(reqId, this.isOnline()),
+      onRetryDelivery: (eventId) => this.outbox.retry(eventId),
       onDiagnostics: (reqId) => this.host.postDiagnostics(reqId, this.diagnostics()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
@@ -137,20 +159,56 @@ export class RelayService {
       verify: opts.verify,
       recordSeen: (id, relay) => this.db.recordSeen(id, relay),
     });
+    this.storage = opts.storage ?? null;
     this.persistence = opts.storage
       ? new Persistence(this.db, opts.storage, opts.persistence)
       : null;
+    this.outbox = new DeliveryOutbox({
+      now: this.now,
+      getEvent: (id) => this.db.getById(id),
+      publish: (relays, event, onResult) =>
+        this.pool.publish(relays, event, {
+          now: this.now,
+          timeoutMs: this.publishTimeoutMs,
+          onResult: (results) => {
+            // A redelivery that lands still means the relay now has the event.
+            for (const r of results) {
+              if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+            }
+            onResult(results);
+          },
+        }),
+      storage: this.storage,
+      onScheduled: () => this.scheduleOutboxFlush(),
+      baseBackoffMs: opts.outbox?.baseBackoffMs,
+      maxBackoffMs: opts.outbox?.maxBackoffMs,
+      maxAttempts: opts.outbox?.maxAttempts,
+    });
+    // A relay (re)connecting is our only trustworthy "reachable" signal: flush any
+    // delivery debt owed to it, and refresh online state if it's a user relay.
+    this.pool.setOnConnect((relay) => this.onRelayConnect(relay));
+    // Deletions, replaceable supersessions, and prunes all surface as store
+    // `remove`s — drop any outbox debt for a vanished event in one place.
+    this.db.onChange((change) => {
+      if (change.type === "remove") this.outbox.remove(change.id);
+    });
   }
 
-  /** Hydrate from storage and begin write-through + pruning. */
+  /** Hydrate from storage (events + outbox), begin write-through, and flush. */
   async start(): Promise<void> {
     await this.persistence?.start();
+    if (this.storage) this.outbox.hydrate(await this.storage.loadOutbox());
+    this.outbox.sweep(); // attempt any debt carried across a restart
   }
 
   async stop(): Promise<void> {
     if (this.enrichTimer) {
       clearTimeout(this.enrichTimer);
       this.enrichTimer = null;
+    }
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
     }
     for (const u of Array.from(this.upstream.values())) u.handle?.close();
     this.upstream.clear();
@@ -358,15 +416,26 @@ export class RelayService {
    * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
    * any p-tagged pubkey (gossip). The worker owns routing; retry is just another
    * publish. Always reports a result so the diagnostics UI never hangs.
+   *
+   * Targets that don't accept (timeout / unreachable — NOT outright rejection)
+   * become durable outbox debt, re-delivered on reconnect until they land.
    */
   private publishUpstream(pubId: string, event: Event): void {
-    this.pool.publish(this.publishTargets(event), event, {
+    const targets = this.publishTargets(event);
+    this.pool.publish(targets, event, {
       now: this.now,
+      timeoutMs: this.publishTimeoutMs,
       onResult: (results) => {
-        // Relays that accepted the publish now hold the event — count them as seen.
+        const owed: string[] = [];
         for (const r of results) {
+          // Accepted → it has the event (count as seen). Timeout/failed → owed,
+          // retry later. Rejected → terminal refusal, never retried.
           if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+          else if (r.status === "timeout" || r.status === "failed") owed.push(r.relay);
         }
+        // Only queue debt for an event that's actually in the store (skip
+        // ephemerals, which aren't stored and so can't be re-sent).
+        if (owed.length && this.db.getById(event.id)) this.outbox.mark(event.id, owed);
         this.host.postPublishResult(pubId, results);
       },
     });
@@ -391,6 +460,10 @@ export class RelayService {
       clearTimeout(this.enrichTimer);
       this.enrichTimer = null;
     }
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
+    }
     for (const entry of Array.from(this.upstream.values())) {
       entry.handle?.close();
       entry.handle = null;
@@ -406,6 +479,47 @@ export class RelayService {
     this.reconcile();
     // Drain any enrichment queued while backgrounded.
     if (this.enrichIds.size || this.enrichAuthors.size) this.scheduleEnrich();
+    // Re-attempt delivery debt: pause() tore down the sockets, so owed relays
+    // need fresh connections (the attempt itself reopens them).
+    this.outbox.sweep();
+  }
+
+  // --- outbox delivery-on-reconnect + online state --------------------------
+
+  /**
+   * A relay socket reached OPEN — our only trustworthy reachability signal. Note
+   * when a user relay connects (feeds `isOnline`) and flush any delivery debt owed
+   * to this relay right away (it's demonstrably up).
+   */
+  private onRelayConnect(relay: string): void {
+    if (this.userRelays.includes(relay)) this.lastUserRelayConnectedAt = this.now();
+    this.outbox.flushRelay(relay);
+  }
+
+  /**
+   * Online = a user relay is connected now, or was within the last 30s (debounced
+   * so a brief drop doesn't flap). Computed from live socket state — never a guess
+   * (`navigator.onLine` lies about captive portals / LAN-without-WAN).
+   */
+  isOnline(): boolean {
+    const connectedNow = this.pool.relayHealth(this.userRelays).some((h) => h.connected);
+    return connectedNow || this.now() - this.lastUserRelayConnectedAt < ONLINE_WINDOW_MS;
+  }
+
+  /** Arm a single one-shot timer for the next due outbox retry (backoff sweep). */
+  private scheduleOutboxFlush(): void {
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
+    }
+    if (this.paused) return;
+    const earliest = this.outbox.earliestNextAttemptAt();
+    if (earliest === null) return; // nothing pending (or all in flight)
+    const delay = Math.max(0, earliest - this.now());
+    this.outboxTimer = setTimeout(() => {
+      this.outboxTimer = null;
+      this.outbox.sweep();
+    }, delay);
   }
 
   // --- gossip pool ----------------------------------------------------------
@@ -492,6 +606,7 @@ export class RelayService {
     const userSet = new Set(this.userRelays);
     return {
       paused: this.paused,
+      online: this.isOnline(),
       interests: Array.from(this.interests.entries()).map(([subId, i]) => ({
         subId,
         filters: i.filters,
@@ -516,6 +631,11 @@ export class RelayService {
         queuedIds: this.enrichIds.size,
         queuedAuthors: this.enrichAuthors.size,
         pending: this.enrichTimer !== null,
+      },
+      delivery: {
+        records: this.outbox.snapshot(),
+        pendingRelays: this.outbox.pendingCount(),
+        failed: this.outbox.failedCount(),
       },
     };
   }

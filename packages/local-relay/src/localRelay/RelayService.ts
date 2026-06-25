@@ -38,6 +38,15 @@ const ENRICH_BATCH = 200;
  */
 const DEFAULT_MAX_GOSSIP_RELAYS = 64;
 
+/** Order-independent equality of two relay-url lists (treated as sets). */
+function sameRelaySet(a: string[], b: string[]): boolean {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  if (setA.size !== setB.size) return false;
+  for (const url of setA) if (!setB.has(url)) return false;
+  return true;
+}
+
 export interface RelayServiceOptions {
   channel: Channel;
   socketFactory?: SocketFactory;
@@ -86,8 +95,18 @@ export class RelayService {
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
     this.host = new WorkerHost(opts.channel, this.db, {
       onSetUserRelays: (relays) => {
+        // A relay-set change must REOPEN standing subs, not just reconcile:
+        // reconcile() dedupes by filter-hash (relay-independent), so an
+        // already-open scope is never reopened on the new relays. Author-less
+        // subs (notably the kind-1059 DM stream) would otherwise stay bound to
+        // the old relays — e.g. a user's NIP-17 inbox relays folding in after
+        // hydration wouldn't take effect, so DMs delivered there wouldn't arrive
+        // live until a pause/resume. An unchanged set still reconciles (cheap,
+        // and lets pending interests find a home once relays first appear).
+        const changed = !sameRelaySet(this.userRelays, relays);
         this.userRelays = relays;
-        this.reconcile(); // new relays may let pending interests find a home
+        if (changed) this.reopenUpstream();
+        else this.reconcile();
       },
       onAddGossipRelay: (url) => this.addGossipRelay(url),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
@@ -167,6 +186,19 @@ export class RelayService {
         this.upstream.delete(key);
       }
     }
+  }
+
+  /**
+   * Tear down every standing upstream sub and reconcile from scratch, so each
+   * scope is reopened against the CURRENT relay set. Used when `userRelays`
+   * changes (every standing sub's target relays derive from it — author-scoped
+   * via SyncEngine's floor, author-less via `readRelays()`).
+   */
+  private reopenUpstream(): void {
+    if (this.paused) return;
+    for (const entry of Array.from(this.upstream.values())) entry.handle?.close();
+    this.upstream.clear();
+    this.reconcile();
   }
 
   // --- store ingest + autonomous enrichment ---------------------------------

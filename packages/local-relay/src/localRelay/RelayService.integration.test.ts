@@ -151,6 +151,42 @@ describe("RelayService — interests drive the network (app cannot)", () => {
     expect(service.db.getById("g".repeat(64))).toBeDefined();
   });
 
+  it("reopens a standing author-less sub on the new relays when the user relay set changes", async () => {
+    const { f, client } = await wire(); // userRelays = ["wss://u1"]
+    // An author-less interest (e.g. the kind-1059 DM stream) opens on user relays.
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+    expect(f.count("wss://dm-inbox")).toBe(0);
+
+    // The user's NIP-17 DM inbox relay folds in (e.g. after store hydration). The
+    // standing sub must reopen on the wider set, else DMs delivered only to
+    // wss://dm-inbox never arrive live — reconcile() alone wouldn't, since the
+    // filter hash is unchanged.
+    client.setUserRelays(["wss://u1", "wss://dm-inbox"]);
+    await settle();
+
+    expect(f.count("wss://dm-inbox")).toBe(1); // now subscribed on the new relay
+    const dmSock = f.last("wss://dm-inbox");
+    dmSock.open();
+    const reqs = reqOn(dmSock);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0][2]).toMatchObject({ kinds: [1059] });
+  });
+
+  it("an unchanged user relay set does not reopen standing subs", async () => {
+    const { f, client } = await wire(); // userRelays = ["wss://u1"]
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+
+    // Same set (different order) → no teardown/reopen churn.
+    client.setUserRelays(["wss://u1"]);
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+    expect(closeOn(f.last("wss://u1"))).toHaveLength(0);
+  });
+
   it("publish also targets a mentioned pubkey's inbox (read) relays", async () => {
     const { f, service, client } = await wire();
     // bob advertises an inbox relay via a read-marked NIP-65 entry. The junk

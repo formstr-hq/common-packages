@@ -38,6 +38,13 @@ const ENRICH_BATCH = 200;
  */
 const DEFAULT_MAX_GOSSIP_RELAYS = 64;
 
+/**
+ * NIP-17 gift-wrap kind. An author-less interest scoped purely to these kinds is
+ * a DM read: it targets the user's DM inbox relays (kind 10050), NOT the general
+ * read/gossip relays — and general feed reads never touch the DM inbox relays.
+ */
+const DM_KINDS = new Set<number>([1059]);
+
 /** Order-independent equality of two relay-url lists (treated as sets). */
 function sameRelaySet(a: string[], b: string[]): boolean {
   const setA = new Set(a);
@@ -65,6 +72,12 @@ export class RelayService {
   private sync: SyncEngine;
   private persistence: Persistence | null;
   private userRelays: string[] = [];
+  /**
+   * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
+   * are delivered. Kept separate from `userRelays` so the kind-1059 stream can
+   * target them specifically while general feed reads stay off them.
+   */
+  private dmRelays: string[] = [];
   /**
    * Discovered relays from hints (DM-referenced notes, e/q-tag hints, …), kept
    * separate from `userRelays`. Used only on the read/discovery path (enrichment
@@ -95,18 +108,14 @@ export class RelayService {
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
     this.host = new WorkerHost(opts.channel, this.db, {
       onSetUserRelays: (relays) => {
-        // A relay-set change must REOPEN standing subs, not just reconcile:
-        // reconcile() dedupes by filter-hash (relay-independent), so an
-        // already-open scope is never reopened on the new relays. Author-less
-        // subs (notably the kind-1059 DM stream) would otherwise stay bound to
-        // the old relays — e.g. a user's NIP-17 inbox relays folding in after
-        // hydration wouldn't take effect, so DMs delivered there wouldn't arrive
-        // live until a pause/resume. An unchanged set still reconciles (cheap,
-        // and lets pending interests find a home once relays first appear).
         const changed = !sameRelaySet(this.userRelays, relays);
         this.userRelays = relays;
-        if (changed) this.reopenUpstream();
-        else this.reconcile();
+        this.onRelaySetChanged(changed);
+      },
+      onSetDmRelays: (relays) => {
+        const changed = !sameRelaySet(this.dmRelays, relays);
+        this.dmRelays = relays;
+        this.onRelaySetChanged(changed);
       },
       onAddGossipRelay: (url) => this.addGossipRelay(url),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
@@ -114,6 +123,7 @@ export class RelayService {
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
+      onSeenOn: (reqId, eventId) => this.host.postSeenOn(reqId, this.db.seenOn(eventId)),
       onDiagnostics: (reqId) => this.host.postDiagnostics(reqId, this.diagnostics()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
@@ -125,6 +135,7 @@ export class RelayService {
       ingest: (events) => this.ingest(events),
       getWriteRelays: (pk) => this.getWriteRelays(pk),
       verify: opts.verify,
+      recordSeen: (id, relay) => this.db.recordSeen(id, relay),
     });
     this.persistence = opts.storage
       ? new Persistence(this.db, opts.storage, opts.persistence)
@@ -189,10 +200,26 @@ export class RelayService {
   }
 
   /**
+   * Apply a user/DM relay-set change. A real change must REOPEN standing subs,
+   * not just reconcile: reconcile() dedupes by filter-hash (relay-independent),
+   * so an already-open scope is never reopened on the new relays. Author-less
+   * subs (notably the kind-1059 DM stream) would otherwise stay bound to the old
+   * relays — e.g. a user's NIP-17 DM inbox relays folding in after hydration
+   * wouldn't take effect, so DMs delivered there wouldn't arrive live until a
+   * pause/resume. An unchanged set still reconciles (cheap, and lets pending
+   * interests find a home once relays first appear).
+   */
+  private onRelaySetChanged(changed: boolean): void {
+    if (changed) this.reopenUpstream();
+    else this.reconcile();
+  }
+
+  /**
    * Tear down every standing upstream sub and reconcile from scratch, so each
-   * scope is reopened against the CURRENT relay set. Used when `userRelays`
-   * changes (every standing sub's target relays derive from it — author-scoped
-   * via SyncEngine's floor, author-less via `readRelays()`).
+   * scope is reopened against the CURRENT relay set. Used when `userRelays` or
+   * `dmRelays` changes (every standing sub's target relays derive from them —
+   * author-scoped via SyncEngine's floor, author-less via `readRelays()`, DM
+   * subs via `dmReadRelays()`).
    */
   private reopenUpstream(): void {
     if (this.paused) return;
@@ -272,8 +299,10 @@ export class RelayService {
       // Discovery path: also reach into the gossip pool to find referenced events
       // that may live on relays the user isn't subscribed to.
       const id = this.pool.subscribe(relays, filters, {
-        onEvent: (event) => {
-          if (this.verify(event)) this.ingest([event], false);
+        onEvent: (event, relay) => {
+          if (!this.verify(event)) return;
+          this.ingest([event], false);
+          this.db.recordSeen(event.id, relay);
         },
         onEose: () => this.pool.unsubscribe(id),
       });
@@ -286,8 +315,9 @@ export class RelayService {
   /**
    * Open a standing upstream subscription for a scope. Author-scoped filters are
    * outbox-partitioned via SyncEngine (gossip relays stay out of the feed
-   * firehose); author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note)
-   * hit the user's relays ∪ the gossip pool, so discovered hints can resolve them.
+   * firehose); DM (kind-1059) reads hit the user's DM inbox relays; other
+   * author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note) hit the
+   * user's relays ∪ the gossip pool, so discovered hints can resolve them.
    */
   private openSync(filters: Filter[]): SyncHandle {
     const handles: SyncHandle[] = [];
@@ -305,11 +335,13 @@ export class RelayService {
           })
         );
       } else {
-        const relays = this.readRelays();
+        const relays = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
-            onEvent: (event) => {
-              if (this.verify(event)) this.ingest([event]);
+            onEvent: (event, relay) => {
+              if (!this.verify(event)) return;
+              this.ingest([event]);
+              this.db.recordSeen(event.id, relay);
             },
           });
           handles.push({ close: () => this.pool.unsubscribe(id) });
@@ -330,7 +362,13 @@ export class RelayService {
   private publishUpstream(pubId: string, event: Event): void {
     this.pool.publish(this.publishTargets(event), event, {
       now: this.now,
-      onResult: (results) => this.host.postPublishResult(pubId, results),
+      onResult: (results) => {
+        // Relays that accepted the publish now hold the event — count them as seen.
+        for (const r of results) {
+          if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+        }
+        this.host.postPublishResult(pubId, results);
+      },
     });
   }
 
@@ -398,6 +436,25 @@ export class RelayService {
     return Array.from(new Set([...this.userRelays, ...this.gossipRelays]));
   }
 
+  /**
+   * Relays a DM (kind-1059) read targets: the user's NIP-17 inbox relays, with
+   * the user's general relays as a fallback so DMs still arrive before any 10050
+   * is known. Deliberately excludes the gossip pool (DMs aren't discovered).
+   */
+  private dmReadRelays(): string[] {
+    return Array.from(new Set([...this.dmRelays, ...this.userRelays]));
+  }
+
+  /**
+   * True for a filter scoped purely to DM kinds — a DM inbox read. Only ever
+   * called on the author-less branch (author-scoped filters route via outbox), so
+   * it need not re-check authors.
+   */
+  private isDmFilter(filter: Filter): boolean {
+    const kinds = filter.kinds;
+    return !!kinds && kinds.length > 0 && kinds.every((k) => DM_KINDS.has(k));
+  }
+
   // --- helpers --------------------------------------------------------------
 
   /** Outbox cache IS the store: parse the latest kind-10002 for this pubkey. */
@@ -446,6 +503,7 @@ export class RelayService {
         relays: this.routeRelays(u.filters),
       })),
       relays,
+      dmRelays: [...this.dmRelays],
       gossipRelays: [...this.gossipRelays],
       connections: {
         user: connected.filter((r) => userSet.has(r.relay)).length,
@@ -476,7 +534,8 @@ export class RelayService {
         }
         for (const relay of this.userRelays) relays.add(relay);
       } else {
-        for (const relay of this.readRelays()) relays.add(relay);
+        const targets = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        for (const relay of targets) relays.add(relay);
       }
     }
     return Array.from(relays);

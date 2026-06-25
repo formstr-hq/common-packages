@@ -23,7 +23,8 @@ author `kind:0` profiles for scopes it syncs).
   adapters (`MemoryStorage`, `IndexedDBStorage`), the `Channel` transport, and the
   `LocalRelayClient`.
 - **contract** — `DataLayer` (`observe` / `publish` / `fetchById` /
-  `fetchReplaceable` / `relayHealth`), plus `scope`, `feed` assembly, and `kinds`.
+  `fetchReplaceable` / `relayHealth` / `seenOn`), plus `scope`, `feed` assembly,
+  and `kinds`.
 
 ## Usage
 

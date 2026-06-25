@@ -18,6 +18,8 @@ export interface WorkerHostHooks {
   onSetAccount?: (pubkey: string | null) => void;
   /** The user's relay set changed (policy input for the worker's routing). */
   onSetUserRelays?: (relays: string[]) => void;
+  /** The user's NIP-17 DM inbox relay set changed (kind-1059 stream routing). */
+  onSetDmRelays?: (relays: string[]) => void;
   /** A discovered relay was added to / removed from the gossip pool. */
   onAddGossipRelay?: (url: string) => void;
   onRemoveGossipRelay?: (url: string) => void;
@@ -29,6 +31,8 @@ export interface WorkerHostHooks {
   onPublish?: (pubId: string, event: Event) => void;
   /** Report live relay connection health (read-only observation). */
   onRelayHealth?: (reqId: string) => void;
+  /** Report which relays a stored event has been seen on (provenance). */
+  onSeenOn?: (reqId: string, eventId: string) => void;
   /** Report a read-only snapshot of the worker's state (debugging). */
   onDiagnostics?: (reqId: string) => void;
   /** Lifecycle hints; the worker decides how to respond. */
@@ -66,6 +70,11 @@ export class WorkerHost {
     this.emit({ kind: "relayHealth", reqId, relays });
   }
 
+  /** Send an event's seen-on relays back to the client. */
+  postSeenOn(reqId: string, relays: string[]): void {
+    this.emit({ kind: "seenOn", reqId, relays });
+  }
+
   /** Send a diagnostics snapshot back to the client. */
   postDiagnostics(reqId: string, diagnostics: Diagnostics): void {
     this.emit({ kind: "diagnostics", reqId, diagnostics });
@@ -100,6 +109,9 @@ export class WorkerHost {
       case "relayHealth":
         this.hooks.onRelayHealth?.(m.reqId);
         break;
+      case "seenOn":
+        this.hooks.onSeenOn?.(m.reqId, m.eventId);
+        break;
       case "diagnostics":
         this.hooks.onDiagnostics?.(m.reqId);
         break;
@@ -108,6 +120,9 @@ export class WorkerHost {
         break;
       case "setUserRelays":
         this.hooks.onSetUserRelays?.(m.relays);
+        break;
+      case "setDmRelays":
+        this.hooks.onSetDmRelays?.(m.relays);
         break;
       case "addGossipRelay":
         this.hooks.onAddGossipRelay?.(m.url);

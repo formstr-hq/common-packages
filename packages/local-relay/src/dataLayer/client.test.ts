@@ -128,6 +128,27 @@ describe("DataLayer", () => {
     expect(f.count("wss://u2")).toBe(1);
   });
 
+  it("setDmRelays routes the kind-1059 DM stream to the DM inbox relays", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.setDmRelays(["wss://dm1"]);
+    dataLayer.observe([{ kinds: [1059] }], { onEvent: () => {} }); // DM read
+    await settle();
+    expect(f.count("wss://dm1")).toBe(1);
+  });
+
+  it("seenOn reports the relays a cached event arrived on", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    const sub = sock.sent.filter((m: any) => m[0] === "REQ")[0][1];
+    const id = "a".repeat(64);
+    sock.emit(["EVENT", sub, makeEvent({ id, kind: 1, pubkey: "alice" })]);
+    await settle();
+    expect(await dataLayer.seenOn(id)).toEqual(["wss://u1"]);
+  });
+
   it("setActiveAccount is accepted as a scope-retarget hint", async () => {
     const { dataLayer } = await wire();
     expect(() => dataLayer.setActiveAccount("alice")).not.toThrow();
@@ -154,18 +175,22 @@ describe("DataLayer", () => {
     service.db.add(
       makeEvent({ id: "r".repeat(64), kind: 10002, pubkey: "alice", tags: [["r", "wss://alice-relay"]] })
     );
+    dataLayer.setDmRelays(["wss://dm1"]);
     dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} }); // outbox-routed
     dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }); // author-less → user relays
+    dataLayer.observe([{ kinds: [1059] }], { onEvent: () => {} }); // DM read → inbox relays
     await settle();
 
     const diag = await dataLayer.diagnostics();
     expect(diag.paused).toBe(false);
-    expect(diag.interests).toHaveLength(2);
+    expect(diag.interests).toHaveLength(3);
     expect(diag.interests.every((i) => i.sync)).toBe(true);
+    expect(diag.dmRelays).toEqual(["wss://dm1"]);
 
     const routed = diag.upstream.flatMap((u) => u.relays);
     expect(routed).toContain("wss://alice-relay"); // author branch resolves via outbox
     expect(routed).toContain("wss://u1"); // author-less branch resolves via user relays
+    expect(routed).toContain("wss://dm1"); // DM branch resolves via the inbox relays
 
     expect(diag.cache.totalEvents).toBeGreaterThanOrEqual(1); // the kind-10002 is stored
     expect(diag.relays.some((h) => h.relay === "wss://u1")).toBe(true);

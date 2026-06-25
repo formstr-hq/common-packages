@@ -37,6 +37,8 @@ export interface Diagnostics {
   upstream: { filterHash: string; filters: Filter[]; relays: string[] }[];
   /** Per-relay connection health (the same data as `relayHealth()`). */
   relays: RelayHealth[];
+  /** The user's NIP-17 DM inbox relays (kind 10050) the kind-1059 stream targets. */
+  dmRelays: string[];
   /** The discovered relays currently in the gossip pool (most-recent last). */
   gossipRelays: string[];
   /** Counts of currently-connected relays by source. `outbox` is derived
@@ -69,12 +71,17 @@ export type ToWorker =
   // --- config / observation / lifecycle (not network commands) ---
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
+  /** The user's NIP-17 DM inbox relays (kind 10050) — where the kind-1059 stream
+   *  reads. Routing-policy input, kept separate from general read relays. */
+  | { kind: "setDmRelays"; relays: string[] }
   /** Add/remove a discovered relay to the gossip pool (read-only discovery —
    *  used to fetch referenced/missing events; never a publish target). */
   | { kind: "addGossipRelay"; url: string }
   | { kind: "removeGossipRelay"; url: string }
   | { kind: "signResult"; reqId: string; event: Event | null }
   | { kind: "relayHealth"; reqId: string }
+  /** Ask which relays a stored event has been seen on (provenance). Read-only. */
+  | { kind: "seenOn"; reqId: string; eventId: string }
   /** Request a read-only snapshot of the worker's state (debugging only). */
   | { kind: "diagnostics"; reqId: string }
   /** App backgrounded/foregrounded — a lifecycle hint; the worker decides what
@@ -88,6 +95,7 @@ export type FromWorker =
   | { kind: "signRequest"; reqId: string; template: EventTemplate }
   | { kind: "publishResult"; pubId: string; results: RelayPublishOutcome[] }
   | { kind: "relayHealth"; reqId: string; relays: RelayHealth[] }
+  | { kind: "seenOn"; reqId: string; relays: string[] }
   | { kind: "diagnostics"; reqId: string; diagnostics: Diagnostics }
   | { kind: "ready" };
 

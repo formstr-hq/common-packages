@@ -24,6 +24,8 @@ export interface SyncEngineDeps {
   getWriteRelays: (pubkey: string) => string[];
   /** Signature verification; defaults to nostr-tools verifyEvent. */
   verify?: (event: Event) => boolean;
+  /** Record which relay an ingested event was seen on (provenance). */
+  recordSeen?: (eventId: string, relay: string) => void;
 }
 
 export interface FetchSpec {
@@ -63,7 +65,7 @@ export class SyncEngine {
     }
 
     const subIds: string[] = [];
-    let buffer: Event[] = [];
+    let buffer: { event: Event; relay: string }[] = [];
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
     let eosedBuckets = 0;
     let combinedEosed = false;
@@ -76,7 +78,11 @@ export class SyncEngine {
       if (buffer.length === 0) return;
       const batch = buffer;
       buffer = [];
-      this.deps.ingest(batch);
+      this.deps.ingest(batch.map((e) => e.event));
+      // Record provenance after ingest, so recordSeen sees the stored event.
+      if (this.deps.recordSeen) {
+        for (const { event, relay } of batch) this.deps.recordSeen(event.id, relay);
+      }
     };
     const scheduleFlush = () => {
       if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS);
@@ -101,9 +107,9 @@ export class SyncEngine {
         [relay],
         [filter],
         {
-          onEvent: (event) => {
+          onEvent: (event, relay) => {
             if (!this.verify(event)) return; // drop forged/garbage
-            buffer.push(event);
+            buffer.push({ event, relay });
             scheduleFlush();
           },
           onEose: onBucketEose,

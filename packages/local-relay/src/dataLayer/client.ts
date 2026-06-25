@@ -135,6 +135,18 @@ export class DataLayer {
   }
 
   /**
+   * Relays a cached event was opportunistically observed on — received upstream
+   * on an already-open subscription, or accepted on publish. Read-only; never
+   * triggers a fetch. NOT an inventory of who has the event: the worker never
+   * re-fetches what it already holds and the pool dedups per subscription, so
+   * this is usually ONE relay (the source). Good for deriving a relay hint, not
+   * for "on N relays" counts. Empty if not stored or no source was recorded.
+   */
+  seenOn(eventId: string): Promise<string[]> {
+    return this.deps.client.seenOn(eventId);
+  }
+
+  /**
    * Read-only snapshot of the worker's state — paused flag, declared interests,
    * live upstream subscriptions + their routed relays, relay health, store stats,
    * and pending enrichment. For debugging only; triggers no network.
@@ -151,6 +163,15 @@ export class DataLayer {
   /** Relays the user reads from — a routing-policy input, not a command. */
   setUserRelays(relays: string[]): void {
     this.deps.client.setUserRelays(relays);
+  }
+
+  /**
+   * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
+   * are delivered. The worker reads the kind-1059 stream from these specifically;
+   * general feed reads stay off them. Routing-policy input, not a command.
+   */
+  setDmRelays(relays: string[]): void {
+    this.deps.client.setDmRelays(relays);
   }
 
   /**

@@ -41,6 +41,12 @@ export class EventDB {
   private deletedIds = new Map<string, string>(); // target id -> deleter pubkey
   private processedDeletions = new Set<string>();
 
+  // "seenOn": relays a stored event was opportunistically observed on (received
+  // from on an open sub, or accepted on publish). Provenance/hint metadata, not
+  // part of the event — kept in lockstep with byId. Usually one relay: callers
+  // never re-fetch a held event, so this is a hint source, not a "who has it" set.
+  private seenRelays = new Map<string, Set<string>>();
+
   private listeners = new Set<StoreListener>();
 
   /** Injectable clock so tests can control expiration/TTL deterministically. */
@@ -104,7 +110,32 @@ export class EventDB {
     this.byKind.get(event.kind)?.delete(id);
     this.byAuthor.get(event.pubkey)?.delete(id);
     for (const key of extractTagKeys(event)) this.byTag.get(key)?.delete(id);
+    this.seenRelays.delete(id);
     this.emit({ type: "remove", id });
+  }
+
+  // --- seenOn (relay provenance) ---
+
+  /**
+   * Record that `relay` carried the event `id` (received upstream, or accepted on
+   * publish). No-op unless the event is actually stored, so `seenOn` never
+   * outlives its event (ephemerals/duplicates-of-deleted leave nothing behind).
+   * Idempotent — relays form a set.
+   */
+  recordSeen(id: string, relay: string): void {
+    if (!this.byId.has(id)) return;
+    let set = this.seenRelays.get(id);
+    if (!set) {
+      set = new Set();
+      this.seenRelays.set(id, set);
+    }
+    set.add(relay);
+  }
+
+  /** Relays a stored event has been seen on (insertion order). Empty if unknown. */
+  seenOn(id: string): string[] {
+    const set = this.seenRelays.get(id);
+    return set ? Array.from(set) : [];
   }
 
   // --- query ---
@@ -254,6 +285,7 @@ export class EventDB {
     this.replaceableKeys.clear();
     this.deletedIds.clear();
     this.processedDeletions.clear();
+    this.seenRelays.clear();
   }
 }
 

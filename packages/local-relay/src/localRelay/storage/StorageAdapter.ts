@@ -8,7 +8,7 @@
  * throw out of these methods — failures degrade to "nothing persisted", and the
  * in-memory EventDB remains the runtime source of truth.
  */
-import type { Event } from "../core/types";
+import type { Event, OutboxRecord } from "../core/types";
 
 export interface StorageAdapter {
   /** Load every persisted event (best-effort; returns [] on failure). */
@@ -19,4 +19,12 @@ export interface StorageAdapter {
   batchDelete(ids: string[]): Promise<void>;
   /** Drop everything. */
   clear(): Promise<void>;
+
+  // --- outbox (durable un-delivered publishes) ---
+  /** Load persisted outbox records (best-effort; returns [] on failure). */
+  loadOutbox(): Promise<OutboxRecord[]>;
+  /** Insert/replace outbox records by eventId. */
+  putOutbox(records: OutboxRecord[]): Promise<void>;
+  /** Delete outbox records by eventId. */
+  deleteOutbox(eventIds: string[]): Promise<void>;
 }

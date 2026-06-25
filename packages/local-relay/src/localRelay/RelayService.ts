@@ -21,6 +21,7 @@ import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
 import type { RelayHealth } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
+import { DeliveryOutbox } from "./sync/DeliveryOutbox";
 import { SocketFactory, webSocketFactory } from "./sync/Socket";
 import { StorageAdapter } from "./storage/StorageAdapter";
 import { Persistence, PersistenceOptions } from "./storage/persistence";
@@ -38,6 +39,29 @@ const ENRICH_BATCH = 200;
  */
 const DEFAULT_MAX_GOSSIP_RELAYS = 64;
 
+/**
+ * NIP-17 gift-wrap kind. An author-less interest scoped purely to these kinds is
+ * a DM read: it targets the user's DM inbox relays (kind 10050), NOT the general
+ * read/gossip relays — and general feed reads never touch the DM inbox relays.
+ */
+const DM_KINDS = new Set<number>([1059]);
+
+/**
+ * "Online" debounce: we count as online if a user relay is connected now or was
+ * within this window, so a brief socket blip doesn't flap the flag (or trigger
+ * redundant outbox sweeps). See `isOnline`.
+ */
+const ONLINE_WINDOW_MS = 30_000;
+
+/** Order-independent equality of two relay-url lists (treated as sets). */
+function sameRelaySet(a: string[], b: string[]): boolean {
+  const setA = new Set(a);
+  const setB = new Set(b);
+  if (setA.size !== setB.size) return false;
+  for (const url of setA) if (!setB.has(url)) return false;
+  return true;
+}
+
 export interface RelayServiceOptions {
   channel: Channel;
   socketFactory?: SocketFactory;
@@ -47,6 +71,10 @@ export interface RelayServiceOptions {
   now?: () => number;
   /** Max discovered relays kept in the gossip pool (LRU). Default 64. */
   maxGossipRelays?: number;
+  /** Max wait for a relay's publish OK before it's marked timeout/failed. */
+  publishTimeoutMs?: number;
+  /** Tuning for the durable delivery outbox (retry backoff + give-up cap). */
+  outbox?: { baseBackoffMs?: number; maxBackoffMs?: number; maxAttempts?: number };
 }
 
 export class RelayService {
@@ -54,8 +82,16 @@ export class RelayService {
   private host: WorkerHost;
   private pool: RelayPool;
   private sync: SyncEngine;
+  private outbox: DeliveryOutbox;
   private persistence: Persistence | null;
+  private storage: StorageAdapter | null;
   private userRelays: string[] = [];
+  /**
+   * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
+   * are delivered. Kept separate from `userRelays` so the kind-1059 stream can
+   * target them specifically while general feed reads stay off them.
+   */
+  private dmRelays: string[] = [];
   /**
    * Discovered relays from hints (DM-referenced notes, e/q-tag hints, …), kept
    * separate from `userRelays`. Used only on the read/discovery path (enrichment
@@ -71,23 +107,35 @@ export class RelayService {
   private paused = false;
   private verify: (event: Event) => boolean;
   private now: () => number;
+  private publishTimeoutMs?: number;
   /** Pending enrichment targets (referenced event ids + author pubkeys). */
   private enrichIds = new Set<string>();
   private enrichAuthors = new Set<string>();
   private enrichTimer: ReturnType<typeof setTimeout> | null = null;
   /** Already-requested enrichment targets, so we never re-fetch the same ref. */
   private enrichRequested = new Set<string>();
+  /** Most recent time a USER relay socket was connected (drives `isOnline`). */
+  private lastUserRelayConnectedAt = 0;
+  /** One-shot timer that fires the next due outbox sweep (backoff retry). */
+  private outboxTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: RelayServiceOptions) {
     this.verify = opts.verify ?? defaultVerify;
     this.now = opts.now ?? (() => Date.now());
+    this.publishTimeoutMs = opts.publishTimeoutMs;
     this.maxGossipRelays = opts.maxGossipRelays ?? DEFAULT_MAX_GOSSIP_RELAYS;
     this.db = new EventDB(opts.now);
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
     this.host = new WorkerHost(opts.channel, this.db, {
       onSetUserRelays: (relays) => {
+        const changed = !sameRelaySet(this.userRelays, relays);
         this.userRelays = relays;
-        this.reconcile(); // new relays may let pending interests find a home
+        this.onRelaySetChanged(changed);
+      },
+      onSetDmRelays: (relays) => {
+        const changed = !sameRelaySet(this.dmRelays, relays);
+        this.dmRelays = relays;
+        this.onRelaySetChanged(changed);
       },
       onAddGossipRelay: (url) => this.addGossipRelay(url),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
@@ -95,6 +143,9 @@ export class RelayService {
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
+      onSeenOn: (reqId, eventId) => this.host.postSeenOn(reqId, this.db.seenOn(eventId)),
+      onOnline: (reqId) => this.host.postOnline(reqId, this.isOnline()),
+      onRetryDelivery: (eventId) => this.outbox.retry(eventId),
       onDiagnostics: (reqId) => this.host.postDiagnostics(reqId, this.diagnostics()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
@@ -106,21 +157,58 @@ export class RelayService {
       ingest: (events) => this.ingest(events),
       getWriteRelays: (pk) => this.getWriteRelays(pk),
       verify: opts.verify,
+      recordSeen: (id, relay) => this.db.recordSeen(id, relay),
     });
+    this.storage = opts.storage ?? null;
     this.persistence = opts.storage
       ? new Persistence(this.db, opts.storage, opts.persistence)
       : null;
+    this.outbox = new DeliveryOutbox({
+      now: this.now,
+      getEvent: (id) => this.db.getById(id),
+      publish: (relays, event, onResult) =>
+        this.pool.publish(relays, event, {
+          now: this.now,
+          timeoutMs: this.publishTimeoutMs,
+          onResult: (results) => {
+            // A redelivery that lands still means the relay now has the event.
+            for (const r of results) {
+              if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+            }
+            onResult(results);
+          },
+        }),
+      storage: this.storage,
+      onScheduled: () => this.scheduleOutboxFlush(),
+      baseBackoffMs: opts.outbox?.baseBackoffMs,
+      maxBackoffMs: opts.outbox?.maxBackoffMs,
+      maxAttempts: opts.outbox?.maxAttempts,
+    });
+    // A relay (re)connecting is our only trustworthy "reachable" signal: flush any
+    // delivery debt owed to it, and refresh online state if it's a user relay.
+    this.pool.setOnConnect((relay) => this.onRelayConnect(relay));
+    // Deletions, replaceable supersessions, and prunes all surface as store
+    // `remove`s — drop any outbox debt for a vanished event in one place.
+    this.db.onChange((change) => {
+      if (change.type === "remove") this.outbox.remove(change.id);
+    });
   }
 
-  /** Hydrate from storage and begin write-through + pruning. */
+  /** Hydrate from storage (events + outbox), begin write-through, and flush. */
   async start(): Promise<void> {
     await this.persistence?.start();
+    if (this.storage) this.outbox.hydrate(await this.storage.loadOutbox());
+    this.outbox.sweep(); // attempt any debt carried across a restart
   }
 
   async stop(): Promise<void> {
     if (this.enrichTimer) {
       clearTimeout(this.enrichTimer);
       this.enrichTimer = null;
+    }
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
     }
     for (const u of Array.from(this.upstream.values())) u.handle?.close();
     this.upstream.clear();
@@ -167,6 +255,35 @@ export class RelayService {
         this.upstream.delete(key);
       }
     }
+  }
+
+  /**
+   * Apply a user/DM relay-set change. A real change must REOPEN standing subs,
+   * not just reconcile: reconcile() dedupes by filter-hash (relay-independent),
+   * so an already-open scope is never reopened on the new relays. Author-less
+   * subs (notably the kind-1059 DM stream) would otherwise stay bound to the old
+   * relays — e.g. a user's NIP-17 DM inbox relays folding in after hydration
+   * wouldn't take effect, so DMs delivered there wouldn't arrive live until a
+   * pause/resume. An unchanged set still reconciles (cheap, and lets pending
+   * interests find a home once relays first appear).
+   */
+  private onRelaySetChanged(changed: boolean): void {
+    if (changed) this.reopenUpstream();
+    else this.reconcile();
+  }
+
+  /**
+   * Tear down every standing upstream sub and reconcile from scratch, so each
+   * scope is reopened against the CURRENT relay set. Used when `userRelays` or
+   * `dmRelays` changes (every standing sub's target relays derive from them —
+   * author-scoped via SyncEngine's floor, author-less via `readRelays()`, DM
+   * subs via `dmReadRelays()`).
+   */
+  private reopenUpstream(): void {
+    if (this.paused) return;
+    for (const entry of Array.from(this.upstream.values())) entry.handle?.close();
+    this.upstream.clear();
+    this.reconcile();
   }
 
   // --- store ingest + autonomous enrichment ---------------------------------
@@ -240,8 +357,10 @@ export class RelayService {
       // Discovery path: also reach into the gossip pool to find referenced events
       // that may live on relays the user isn't subscribed to.
       const id = this.pool.subscribe(relays, filters, {
-        onEvent: (event) => {
-          if (this.verify(event)) this.ingest([event], false);
+        onEvent: (event, relay) => {
+          if (!this.verify(event)) return;
+          this.ingest([event], false);
+          this.db.recordSeen(event.id, relay);
         },
         onEose: () => this.pool.unsubscribe(id),
       });
@@ -254,8 +373,9 @@ export class RelayService {
   /**
    * Open a standing upstream subscription for a scope. Author-scoped filters are
    * outbox-partitioned via SyncEngine (gossip relays stay out of the feed
-   * firehose); author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note)
-   * hit the user's relays ∪ the gossip pool, so discovered hints can resolve them.
+   * firehose); DM (kind-1059) reads hit the user's DM inbox relays; other
+   * author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note) hit the
+   * user's relays ∪ the gossip pool, so discovered hints can resolve them.
    */
   private openSync(filters: Filter[]): SyncHandle {
     const handles: SyncHandle[] = [];
@@ -273,11 +393,13 @@ export class RelayService {
           })
         );
       } else {
-        const relays = this.readRelays();
+        const relays = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
-            onEvent: (event) => {
-              if (this.verify(event)) this.ingest([event]);
+            onEvent: (event, relay) => {
+              if (!this.verify(event)) return;
+              this.ingest([event]);
+              this.db.recordSeen(event.id, relay);
             },
           });
           handles.push({ close: () => this.pool.unsubscribe(id) });
@@ -294,11 +416,28 @@ export class RelayService {
    * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
    * any p-tagged pubkey (gossip). The worker owns routing; retry is just another
    * publish. Always reports a result so the diagnostics UI never hangs.
+   *
+   * Targets that don't accept (timeout / unreachable — NOT outright rejection)
+   * become durable outbox debt, re-delivered on reconnect until they land.
    */
   private publishUpstream(pubId: string, event: Event): void {
-    this.pool.publish(this.publishTargets(event), event, {
+    const targets = this.publishTargets(event);
+    this.pool.publish(targets, event, {
       now: this.now,
-      onResult: (results) => this.host.postPublishResult(pubId, results),
+      timeoutMs: this.publishTimeoutMs,
+      onResult: (results) => {
+        const owed: string[] = [];
+        for (const r of results) {
+          // Accepted → it has the event (count as seen). Timeout/failed → owed,
+          // retry later. Rejected → terminal refusal, never retried.
+          if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+          else if (r.status === "timeout" || r.status === "failed") owed.push(r.relay);
+        }
+        // Only queue debt for an event that's actually in the store (skip
+        // ephemerals, which aren't stored and so can't be re-sent).
+        if (owed.length && this.db.getById(event.id)) this.outbox.mark(event.id, owed);
+        this.host.postPublishResult(pubId, results);
+      },
     });
   }
 
@@ -321,6 +460,10 @@ export class RelayService {
       clearTimeout(this.enrichTimer);
       this.enrichTimer = null;
     }
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
+    }
     for (const entry of Array.from(this.upstream.values())) {
       entry.handle?.close();
       entry.handle = null;
@@ -336,6 +479,47 @@ export class RelayService {
     this.reconcile();
     // Drain any enrichment queued while backgrounded.
     if (this.enrichIds.size || this.enrichAuthors.size) this.scheduleEnrich();
+    // Re-attempt delivery debt: pause() tore down the sockets, so owed relays
+    // need fresh connections (the attempt itself reopens them).
+    this.outbox.sweep();
+  }
+
+  // --- outbox delivery-on-reconnect + online state --------------------------
+
+  /**
+   * A relay socket reached OPEN — our only trustworthy reachability signal. Note
+   * when a user relay connects (feeds `isOnline`) and flush any delivery debt owed
+   * to this relay right away (it's demonstrably up).
+   */
+  private onRelayConnect(relay: string): void {
+    if (this.userRelays.includes(relay)) this.lastUserRelayConnectedAt = this.now();
+    this.outbox.flushRelay(relay);
+  }
+
+  /**
+   * Online = a user relay is connected now, or was within the last 30s (debounced
+   * so a brief drop doesn't flap). Computed from live socket state — never a guess
+   * (`navigator.onLine` lies about captive portals / LAN-without-WAN).
+   */
+  isOnline(): boolean {
+    const connectedNow = this.pool.relayHealth(this.userRelays).some((h) => h.connected);
+    return connectedNow || this.now() - this.lastUserRelayConnectedAt < ONLINE_WINDOW_MS;
+  }
+
+  /** Arm a single one-shot timer for the next due outbox retry (backoff sweep). */
+  private scheduleOutboxFlush(): void {
+    if (this.outboxTimer) {
+      clearTimeout(this.outboxTimer);
+      this.outboxTimer = null;
+    }
+    if (this.paused) return;
+    const earliest = this.outbox.earliestNextAttemptAt();
+    if (earliest === null) return; // nothing pending (or all in flight)
+    const delay = Math.max(0, earliest - this.now());
+    this.outboxTimer = setTimeout(() => {
+      this.outboxTimer = null;
+      this.outbox.sweep();
+    }, delay);
   }
 
   // --- gossip pool ----------------------------------------------------------
@@ -364,6 +548,25 @@ export class RelayService {
   /** Relays the read/discovery path may use: user relays ∪ the gossip pool. */
   private readRelays(): string[] {
     return Array.from(new Set([...this.userRelays, ...this.gossipRelays]));
+  }
+
+  /**
+   * Relays a DM (kind-1059) read targets: the user's NIP-17 inbox relays, with
+   * the user's general relays as a fallback so DMs still arrive before any 10050
+   * is known. Deliberately excludes the gossip pool (DMs aren't discovered).
+   */
+  private dmReadRelays(): string[] {
+    return Array.from(new Set([...this.dmRelays, ...this.userRelays]));
+  }
+
+  /**
+   * True for a filter scoped purely to DM kinds — a DM inbox read. Only ever
+   * called on the author-less branch (author-scoped filters route via outbox), so
+   * it need not re-check authors.
+   */
+  private isDmFilter(filter: Filter): boolean {
+    const kinds = filter.kinds;
+    return !!kinds && kinds.length > 0 && kinds.every((k) => DM_KINDS.has(k));
   }
 
   // --- helpers --------------------------------------------------------------
@@ -403,6 +606,7 @@ export class RelayService {
     const userSet = new Set(this.userRelays);
     return {
       paused: this.paused,
+      online: this.isOnline(),
       interests: Array.from(this.interests.entries()).map(([subId, i]) => ({
         subId,
         filters: i.filters,
@@ -414,6 +618,7 @@ export class RelayService {
         relays: this.routeRelays(u.filters),
       })),
       relays,
+      dmRelays: [...this.dmRelays],
       gossipRelays: [...this.gossipRelays],
       connections: {
         user: connected.filter((r) => userSet.has(r.relay)).length,
@@ -426,6 +631,11 @@ export class RelayService {
         queuedIds: this.enrichIds.size,
         queuedAuthors: this.enrichAuthors.size,
         pending: this.enrichTimer !== null,
+      },
+      delivery: {
+        records: this.outbox.snapshot(),
+        pendingRelays: this.outbox.pendingCount(),
+        failed: this.outbox.failedCount(),
       },
     };
   }
@@ -444,7 +654,8 @@ export class RelayService {
         }
         for (const relay of this.userRelays) relays.add(relay);
       } else {
-        for (const relay of this.readRelays()) relays.add(relay);
+        const targets = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        for (const relay of targets) relays.add(relay);
       }
     }
     return Array.from(relays);

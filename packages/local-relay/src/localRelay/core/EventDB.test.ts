@@ -190,6 +190,39 @@ describe("change emitter + hydration", () => {
     expect(changes.some((c) => c.type === "remove" && c.id === note.id)).toBe(true);
   });
 
+  it("records and reports the relays an event was seen on (deduped)", () => {
+    const store = db();
+    const note = makeEvent({ id: "n".repeat(64) });
+    store.add(note);
+    store.recordSeen(note.id, "wss://a");
+    store.recordSeen(note.id, "wss://b");
+    store.recordSeen(note.id, "wss://a"); // dup → set
+    expect(store.seenOn(note.id)).toEqual(["wss://a", "wss://b"]);
+  });
+
+  it("seenOn is empty for an unknown event, and recordSeen ignores unstored ids", () => {
+    const store = db();
+    expect(store.seenOn("z".repeat(64))).toEqual([]);
+    store.recordSeen("z".repeat(64), "wss://a"); // never stored → no-op
+    expect(store.seenOn("z".repeat(64))).toEqual([]);
+  });
+
+  it("drops seenOn when the event is removed (NIP-09) and on clear()", () => {
+    const store = db();
+    const note = makeEvent({ id: "n".repeat(64), pubkey: "p".repeat(64) });
+    store.add(note);
+    store.recordSeen(note.id, "wss://a");
+    // Author deletes their own event → removed → seenOn gone.
+    store.add(makeEvent({ pubkey: "p".repeat(64), kind: 5, tags: [["e", note.id]] }));
+    expect(store.seenOn(note.id)).toEqual([]);
+
+    const other = makeEvent({ id: "o".repeat(64) });
+    store.add(other);
+    store.recordSeen(other.id, "wss://a");
+    store.clear();
+    expect(store.seenOn(other.id)).toEqual([]);
+  });
+
   it("bulkLoad does not emit and reports stored count", () => {
     const store = db();
     let emits = 0;

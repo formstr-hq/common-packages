@@ -11,7 +11,7 @@ const settle = () => new Promise((r) => setTimeout(r, 80));
 const reqOn = (sock: { sent: any[] }) => sock.sent.filter((m) => m[0] === "REQ");
 const closeOn = (sock: { sent: any[] }) => sock.sent.filter((m) => m[0] === "CLOSE");
 
-async function wire() {
+async function wire(extra: Partial<ConstructorParameters<typeof RelayService>[0]> = {}) {
   const { client: clientCh, worker: workerCh } = createChannelPair();
   const f = fakeSocketFactory();
   const service = new RelayService({
@@ -20,6 +20,7 @@ async function wire() {
     storage: new MemoryStorage(),
     verify: () => true,
     now: () => NOW,
+    ...extra,
   });
   await service.start();
   const client = new LocalRelayClient(clientCh);
@@ -149,6 +150,180 @@ describe("RelayService — interests drive the network (app cannot)", () => {
     await settle();
     expect(got).toEqual(["g".repeat(64)]);
     expect(service.db.getById("g".repeat(64))).toBeDefined();
+  });
+
+  it("reopens a standing author-less sub on the new relays when the user relay set changes", async () => {
+    const { f, client } = await wire(); // userRelays = ["wss://u1"]
+    // An author-less interest (e.g. the kind-1059 DM stream) opens on user relays.
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+    expect(f.count("wss://dm-inbox")).toBe(0);
+
+    // The user's NIP-17 DM inbox relay folds in (e.g. after store hydration). The
+    // standing sub must reopen on the wider set, else DMs delivered only to
+    // wss://dm-inbox never arrive live — reconcile() alone wouldn't, since the
+    // filter hash is unchanged.
+    client.setUserRelays(["wss://u1", "wss://dm-inbox"]);
+    await settle();
+
+    expect(f.count("wss://dm-inbox")).toBe(1); // now subscribed on the new relay
+    const dmSock = f.last("wss://dm-inbox");
+    dmSock.open();
+    const reqs = reqOn(dmSock);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0][2]).toMatchObject({ kinds: [1059] });
+  });
+
+  it("an unchanged user relay set does not reopen standing subs", async () => {
+    const { f, client } = await wire(); // userRelays = ["wss://u1"]
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+
+    // Same set (different order) → no teardown/reopen churn.
+    client.setUserRelays(["wss://u1"]);
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+    expect(closeOn(f.last("wss://u1"))).toHaveLength(0);
+  });
+
+  it("routes the kind-1059 DM stream to the DM inbox relays", async () => {
+    const { f, client } = await wire(); // userRelays = ["wss://u1"]
+    client.setDmRelays(["wss://dm1"]);
+    await settle();
+
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+
+    expect(f.count("wss://dm1")).toBe(1); // DM inbox relay subscribed
+    const sock = f.last("wss://dm1");
+    sock.open();
+    expect(reqOn(sock)[0][2]).toMatchObject({ kinds: [1059] });
+  });
+
+  it("keeps a general (non-DM) author-less feed read off the DM inbox relays", async () => {
+    const { f, service, client } = await wire();
+    client.setDmRelays(["wss://dm1"]);
+    await settle();
+
+    const got: string[] = [];
+    client.observe([{ kinds: [1] }], { onEvent: (e) => got.push(e.id) });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1); // general read relay
+    expect(f.count("wss://dm1")).toBe(0); // never the DM inbox relay
+
+    // The relay it DID open on is recorded as where the event was seen.
+    const sock = f.last("wss://u1");
+    sock.open();
+    const id = "g".repeat(64);
+    sock.emit(["EVENT", reqOn(sock)[0][1], makeEvent({ id, kind: 1, pubkey: "anyone" })]);
+    await settle();
+    expect(got).toEqual([id]);
+    expect(await client.seenOn(id)).toEqual(["wss://u1"]);
+    expect(service.db.getById(id)).toBeDefined();
+  });
+
+  it("reopens the DM stream on the new inbox relay when the DM relay set changes", async () => {
+    const { f, client } = await wire();
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://dm2")).toBe(0);
+
+    client.setDmRelays(["wss://dm2"]); // inbox relay learned after hydration
+    await settle();
+    expect(f.count("wss://dm2")).toBe(1);
+    const sock = f.last("wss://dm2");
+    sock.open();
+    expect(reqOn(sock)[0][2]).toMatchObject({ kinds: [1059] });
+  });
+
+  it("reports an event's source relays via seenOn (outbox path), empty for unknown ids", async () => {
+    const { f, service, client } = await wire();
+    client.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    const id = "a".repeat(64);
+    sock.emit(["EVENT", reqOn(sock)[0][1], makeEvent({ id, kind: 1, pubkey: "alice" })]);
+    await settle();
+
+    expect(service.db.getById(id)).toBeDefined();
+    expect(await client.seenOn(id)).toEqual(["wss://u1"]);
+    expect(await client.seenOn("z".repeat(64))).toEqual([]); // not stored
+  });
+
+  it("ignores a relay-set change while paused — opens no sockets until resume", async () => {
+    const { f, client } = await wire();
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+    client.pause();
+    await settle();
+
+    client.setDmRelays(["wss://dm9"]); // inbox relay learned while backgrounded
+    await settle();
+    expect(f.count("wss://dm9")).toBe(0); // reopen short-circuits while paused
+
+    client.resume();
+    await settle();
+    expect(f.count("wss://dm9")).toBe(1); // reconnects from standing interests on resume
+  });
+
+  it("drops an author-less event that fails signature verification", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const f = fakeSocketFactory();
+    const service = new RelayService({
+      channel: workerCh,
+      socketFactory: f.factory,
+      storage: new MemoryStorage(),
+      verify: () => false, // reject everything
+      now: () => NOW,
+    });
+    await service.start();
+    const client = new LocalRelayClient(clientCh);
+    client.setUserRelays(["wss://u1"]);
+    await settle();
+
+    client.observe([{ kinds: [1] }], { onEvent: () => {} }); // author-less
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    sock.emit(["EVENT", reqOn(sock)[0][1], makeEvent({ id: "v".repeat(64), kind: 1, pubkey: "x" })]);
+    await settle();
+
+    expect(service.db.getById("v".repeat(64))).toBeUndefined(); // unverified → not stored
+    await service.stop();
+  });
+
+  it("counts a relay that accepts a publish as having seen the event", async () => {
+    const { f, client } = await wire();
+    const id = "p".repeat(64);
+    client.publish(makeEvent({ id, kind: 1, pubkey: "me" }));
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open(); // flush the queued publish
+    sock.emit(["OK", id, true, ""]); // relay accepts → it now holds the event
+    await settle();
+    expect(await client.seenOn(id)).toEqual(["wss://u1"]);
+  });
+
+  it("for an own note, seenOn is the set of relays that ACCEPTED the publish (not the rejecters)", async () => {
+    const { f, client } = await wire();
+    client.setUserRelays(["wss://u1", "wss://u2", "wss://u3"]); // fan out to three
+    await settle();
+
+    const id = "p".repeat(64);
+    client.publish(makeEvent({ id, kind: 1, pubkey: "me" }));
+    await settle();
+
+    for (const url of ["wss://u1", "wss://u2", "wss://u3"]) f.last(url).open();
+    f.last("wss://u1").emit(["OK", id, true, ""]); // accepted → has it
+    f.last("wss://u2").emit(["OK", id, false, "blocked: spam"]); // rejected → does NOT
+    f.last("wss://u3").emit(["OK", id, true, ""]); // accepted → has it
+    await settle();
+
+    // Authoritative for own notes: every accepter, none of the rejecters.
+    expect((await client.seenOn(id)).sort()).toEqual(["wss://u1", "wss://u3"]);
   });
 
   it("publish also targets a mentioned pubkey's inbox (read) relays", async () => {
@@ -433,5 +608,118 @@ describe("RelayService — lifecycle", () => {
     expect(f.count("wss://u1")).toBe(2); // a fresh socket was created
     f.last("wss://u1").open();
     expect(reqOn(f.last("wss://u1"))).toHaveLength(1); // interest re-established
+  });
+});
+
+describe("RelayService — durable outbox (delivery on reconnect)", () => {
+  const okSock = (sock: { sent: any[] }, id: string) =>
+    sock.sent.some((m) => m[0] === "EVENT" && m[1].id === id);
+
+  it("queues publishes that time out as delivery debt (and reschedules across marks)", async () => {
+    const { service, client } = await wire({ publishTimeoutMs: 20 });
+    client.publish(makeEvent({ id: "a".repeat(64), kind: 1, pubkey: "me" }));
+    client.publish(makeEvent({ id: "b".repeat(64), kind: 1, pubkey: "me" }));
+    await settle(); // > publishTimeoutMs, relay never sends OK → both owed
+
+    const diag = await client.diagnostics();
+    expect(diag.delivery.pendingRelays).toBe(2);
+    expect(diag.delivery.records.map((r) => r.eventId).sort()).toEqual(["a".repeat(64), "b".repeat(64)]);
+    expect(diag.delivery.records[0].pending).toEqual(["wss://u1"]);
+
+    await service.stop(); // tears down with the retry timer still armed
+  });
+
+  it("redelivers owed events when the relay comes back (resume re-attempts)", async () => {
+    let clock = NOW;
+    const { f, service, client } = await wire({
+      publishTimeoutMs: 50,
+      now: () => clock,
+      outbox: { baseBackoffMs: 1000 },
+    });
+    const id = "a".repeat(64);
+    client.publish(makeEvent({ id, kind: 1, pubkey: "me" }));
+    await new Promise((r) => setTimeout(r, 150)); // times out → owed (backed off to +1000)
+    expect((await client.diagnostics()).delivery.pendingRelays).toBe(1);
+
+    client.pause(); // tears down the socket + retry timer
+    await settle();
+    clock += 2000; // time passes while offline → the debt is due again
+    client.resume(); // re-attempts the debt on a fresh connection
+    await settle();
+
+    const sock = f.last("wss://u1");
+    sock.open();
+    expect(okSock(sock, id)).toBe(true); // the event was re-sent
+    sock.emit(["OK", id, true, ""]); // now it lands
+    await settle();
+
+    expect((await client.diagnostics()).delivery.pendingRelays).toBe(0); // debt cleared
+    expect(await client.seenOn(id)).toContain("wss://u1");
+    await service.stop();
+  });
+
+  it("a deletion of the event also clears its outbox debt", async () => {
+    const { service, client } = await wire({ publishTimeoutMs: 20 });
+    const id = "a".repeat(64);
+    client.publish(makeEvent({ id, kind: 1, pubkey: "me" }));
+    await settle();
+    expect((await client.diagnostics()).delivery.pendingRelays).toBe(1);
+
+    // Author deletes the event (NIP-09) → store remove → outbox debt dropped.
+    service.db.add(makeEvent({ kind: 5, pubkey: "me", tags: [["e", id]] }));
+    await settle();
+    expect((await client.diagnostics()).delivery.pendingRelays).toBe(0);
+    await service.stop();
+  });
+
+  it("marks delivery FAILED after the give-up cap, then retryDelivery re-arms it", async () => {
+    const { f, service, client } = await wire({ publishTimeoutMs: 300, outbox: { maxAttempts: 1 } });
+    const id = "a".repeat(64);
+    client.publish(makeEvent({ id, kind: 1, pubkey: "me" }));
+    // Initial publish times out → mark; the immediate auto-retry also times out →
+    // attempts hits the cap of 1 → failed (both at the 300ms publish deadline).
+    await new Promise((r) => setTimeout(r, 800));
+
+    let diag = await client.diagnostics();
+    expect(diag.delivery.failed).toBe(1);
+    expect(diag.delivery.pendingRelays).toBe(0); // failed isn't counted as pending
+
+    // Manual retry re-arms it; this time we let the relay accept (well inside the
+    // 300ms deadline).
+    client.retryDelivery(id);
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    sock.emit(["OK", id, true, ""]);
+    await settle();
+
+    diag = await client.diagnostics();
+    expect(diag.delivery.failed).toBe(0);
+    expect(diag.delivery.pendingRelays).toBe(0);
+    expect(await client.seenOn(id)).toContain("wss://u1");
+    await service.stop();
+  });
+});
+
+describe("RelayService — online state", () => {
+  it("online tracks user-relay connectivity with a 30s debounce window", async () => {
+    let clock = NOW;
+    const { f, service, client } = await wire({ now: () => clock });
+
+    expect(await client.online()).toBe(false); // nothing connected yet
+
+    client.observe([{ kinds: [1] }], { onEvent: () => {} }); // opens a user-relay socket
+    await settle();
+    f.last("wss://u1").open(); // onConnect → marks reachability
+    await settle();
+    expect(await client.online()).toBe(true);
+
+    f.last("wss://u1").close(); // socket drops…
+    await settle();
+    expect(await client.online()).toBe(true); // …but still within the 30s window
+
+    clock += 31_000; // window elapses with no reconnect
+    expect(await client.online()).toBe(false);
+    await service.stop();
   });
 });

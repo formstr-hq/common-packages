@@ -20,12 +20,13 @@
  * store — it stays in the account-scoped DM layer. The optional `namespace` is
  * for that rare per-account private store, not for public events.
  */
-import type { Event } from "../core/types";
+import type { Event, OutboxRecord } from "../core/types";
 import { StorageAdapter } from "./StorageAdapter";
 
 const DB_PREFIX = "pollerama-local-relay";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "events";
+const OUTBOX_STORE = "outbox";
 
 /** Database name. Default is the shared public store; a namespace scopes a
  * separate (e.g. per-account private) store. */
@@ -53,6 +54,10 @@ export class IndexedDBStorage implements StorageAdapter {
           if (!db.objectStoreNames.contains(STORE)) {
             db.createObjectStore(STORE, { keyPath: "id" });
           }
+          // v2: durable outbox of un-delivered publishes, keyed by event id.
+          if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+            db.createObjectStore(OUTBOX_STORE, { keyPath: "eventId" });
+          }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => resolve(null);
@@ -64,6 +69,7 @@ export class IndexedDBStorage implements StorageAdapter {
   }
 
   private async tx(
+    storeName: string,
     mode: IDBTransactionMode,
     run: (store: IDBObjectStore) => void
   ): Promise<void> {
@@ -71,26 +77,26 @@ export class IndexedDBStorage implements StorageAdapter {
     if (!db) return;
     await new Promise<void>((resolve) => {
       try {
-        const transaction = db.transaction(STORE, mode);
+        const transaction = db.transaction(storeName, mode);
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => resolve();
         transaction.onabort = () => resolve();
-        run(transaction.objectStore(STORE));
+        run(transaction.objectStore(storeName));
       } catch {
         // A failed transaction (e.g. connection lost) drops this batch; the DB
-        // already has it in memory, so we just lose durability for these events.
+        // already has it in memory, so we just lose durability for these rows.
         resolve();
       }
     });
   }
 
-  async loadAll(): Promise<Event[]> {
+  private async loadAllFrom<T>(storeName: string): Promise<T[]> {
     const db = await this.open();
     if (!db) return [];
     return new Promise((resolve) => {
       try {
-        const req = db.transaction(STORE, "readonly").objectStore(STORE).getAll();
-        req.onsuccess = () => resolve((req.result as Event[]) ?? []);
+        const req = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+        req.onsuccess = () => resolve((req.result as T[]) ?? []);
         req.onerror = () => resolve([]);
       } catch {
         resolve([]);
@@ -98,20 +104,41 @@ export class IndexedDBStorage implements StorageAdapter {
     });
   }
 
+  loadAll(): Promise<Event[]> {
+    return this.loadAllFrom<Event>(STORE);
+  }
+
   async batchPut(events: Event[]): Promise<void> {
-    await this.tx("readwrite", (store) => {
+    await this.tx(STORE, "readwrite", (store) => {
       for (const e of events) store.put(e);
     });
   }
 
   async batchDelete(ids: string[]): Promise<void> {
-    await this.tx("readwrite", (store) => {
+    await this.tx(STORE, "readwrite", (store) => {
       for (const id of ids) store.delete(id);
     });
   }
 
   async clear(): Promise<void> {
-    await this.tx("readwrite", (store) => store.clear());
+    await this.tx(STORE, "readwrite", (store) => store.clear());
+    await this.tx(OUTBOX_STORE, "readwrite", (store) => store.clear());
+  }
+
+  loadOutbox(): Promise<OutboxRecord[]> {
+    return this.loadAllFrom<OutboxRecord>(OUTBOX_STORE);
+  }
+
+  async putOutbox(records: OutboxRecord[]): Promise<void> {
+    await this.tx(OUTBOX_STORE, "readwrite", (store) => {
+      for (const r of records) store.put(r);
+    });
+  }
+
+  async deleteOutbox(eventIds: string[]): Promise<void> {
+    await this.tx(OUTBOX_STORE, "readwrite", (store) => {
+      for (const id of eventIds) store.delete(id);
+    });
   }
 
   /** Close and delete this account's entire database (account removal). */

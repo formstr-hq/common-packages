@@ -95,10 +95,18 @@ export class RelayPool {
   private publishes = new Map<string, PendingPublish>();
   private subCounter = 0;
 
+  /** Notified whenever any relay's socket reaches OPEN (connect or reconnect). */
+  private onConnect: ((relay: string) => void) | null = null;
+
   constructor(
     private factory: SocketFactory = webSocketFactory,
     private connOptions: RelayConnectionOptions = {}
   ) {}
+
+  /** Register a single listener for relay (re)connects (outbox flush / online). */
+  setOnConnect(handler: (relay: string) => void): void {
+    this.onConnect = handler;
+  }
 
   /**
    * Open a logical subscription across `relays`. Returns an id; call
@@ -238,6 +246,7 @@ export class RelayPool {
     if (!conn) {
       const handlers: RelayConnectionHandlers = {
         onEvent: (subId, event) => this.onEvent(subId, event, url),
+        onConnect: (relay) => this.onConnect?.(relay),
         onEose: (subId) => this.markDone(subId, url),
         onClosed: (subId) => this.markDone(subId, url),
         onOk: (eventId, ok, message) => this.onPublishOk(eventId, ok, message, url),

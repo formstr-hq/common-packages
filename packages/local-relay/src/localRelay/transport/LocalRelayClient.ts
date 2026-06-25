@@ -32,6 +32,8 @@ export class LocalRelayClient {
   private subs = new Map<string, Sub>();
   private pendingPublishes = new Map<string, (results: RelayPublishOutcome[]) => void>();
   private pendingHealth = new Map<string, (relays: RelayHealth[]) => void>();
+  private pendingSeenOn = new Map<string, (relays: string[]) => void>();
+  private pendingOnline = new Map<string, (online: boolean) => void>();
   private pendingDiagnostics = new Map<string, (diagnostics: Diagnostics) => void>();
   private counter = 0;
 
@@ -73,6 +75,15 @@ export class LocalRelayClient {
   }
 
   /**
+   * Manually re-attempt delivery of outbox records that exhausted their automatic
+   * retries (one event by id, or all failed ones if omitted). The worker re-arms
+   * them and tries again — fire-and-forget, like publish.
+   */
+  retryDelivery(eventId?: string): void {
+    this.send({ kind: "retryDelivery", eventId });
+  }
+
+  /**
    * Publish an already-signed event; resolves with each relay's outcome (for
    * publish diagnostics). Retry is just another publish — the worker, not the
    * app, decides how to reach dead relays.
@@ -94,6 +105,34 @@ export class LocalRelayClient {
     });
   }
 
+  /**
+   * Relays a stored event was opportunistically observed on — received upstream
+   * on an open subscription, or accepted on publish. Read-only; triggers no
+   * network. Usually ONE relay (the source): the worker never re-fetches an event
+   * it holds and the pool dedups per subscription, so this is a relay hint, not a
+   * "who has it" set. Empty if the event isn't stored or its source is unknown.
+   */
+  seenOn(eventId: string): Promise<string[]> {
+    const reqId = `n${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingSeenOn.set(reqId, resolve);
+      this.send({ kind: "seenOn", reqId, eventId });
+    });
+  }
+
+  /**
+   * Whether the worker currently considers itself online — a user relay is
+   * connected now, or was within the last 30s (debounced). Derived from real
+   * socket state, read-only; triggers no network.
+   */
+  online(): Promise<boolean> {
+    const reqId = `o${this.counter++}`;
+    return new Promise((resolve) => {
+      this.pendingOnline.set(reqId, resolve);
+      this.send({ kind: "online", reqId });
+    });
+  }
+
   /** Read-only snapshot of the worker's state (debugging). Triggers no network. */
   diagnostics(): Promise<Diagnostics> {
     const reqId = `d${this.counter++}`;
@@ -110,6 +149,15 @@ export class LocalRelayClient {
   /** The user's configured relays — a routing-policy input, not a command. */
   setUserRelays(relays: string[]): void {
     this.send({ kind: "setUserRelays", relays });
+  }
+
+  /**
+   * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
+   * are delivered. The worker reads the kind-1059 stream from these specifically;
+   * general feed reads stay off them. Routing-policy input, not a command.
+   */
+  setDmRelays(relays: string[]): void {
+    this.send({ kind: "setDmRelays", relays });
   }
 
   /**
@@ -177,6 +225,24 @@ export class LocalRelayClient {
       if (resolve) {
         this.pendingHealth.delete(m.reqId);
         resolve(m.relays);
+      }
+      return;
+    }
+
+    if (m.kind === "seenOn") {
+      const resolve = this.pendingSeenOn.get(m.reqId);
+      if (resolve) {
+        this.pendingSeenOn.delete(m.reqId);
+        resolve(m.relays);
+      }
+      return;
+    }
+
+    if (m.kind === "online") {
+      const resolve = this.pendingOnline.get(m.reqId);
+      if (resolve) {
+        this.pendingOnline.delete(m.reqId);
+        resolve(m.online);
       }
       return;
     }

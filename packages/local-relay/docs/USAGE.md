@@ -215,9 +215,13 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `publishEvent(event)` | Publish an already-signed event (lists, diagnostics retry). | Yes |
 | `addEvent(event)` / `addEvents(events)` | Add events to the local store (optimistic / out-of-band). | No |
 | `relayHealth()` | Live connection health of the user's relays. | Read-only observation |
+| `seenOn(eventId)` | Relays a cached event was opportunistically observed on (usually one — the source; good for relay hints, not a "who has it" count). Returns `string[]`. | Read-only observation |
+| `online()` | Whether a user relay is connected now or was within the last 30s (debounced). Returns `boolean`. | Read-only observation |
+| `retryDelivery(eventId?)` | Re-attempt delivery of outbox records that exhausted automatic retries (one event, or all failed). | Yes (worker decides) |
 | `diagnostics()` | Read-only snapshot of worker state (paused, interests, upstream routing, cache, enrichment). | Read-only observation |
 | `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
 | `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
+| `setDmRelays(relays)` | The user's NIP-17 DM inbox relays (kind 10050) — where the kind-1059 stream reads. | No |
 | `addGossipRelay(url)` / `removeGossipRelay(url)` | Add/remove a discovered relay to the gossip pool (fetch referenced/missing events). | Discovery only |
 | `pause()` / `resume()` | Lifecycle hints (backgrounded / foregrounded). | Worker decides |
 
@@ -457,7 +461,9 @@ client.setUserRelays(["wss://relay.damus.io", "wss://nos.lol"]);
 This is a **routing-policy input**, not a command to connect. The worker uses it
 as the default read/write set and as a fallback for author-less scopes. Call it
 again whenever the user's relay list changes; the worker reconciles (new relays
-may let pending interests find a home).
+may let pending interests find a home). When the set actually changes, the worker
+**reopens** its standing subscriptions so each re-targets the current relays (an
+unchanged set is a cheap no-op).
 
 ### 11.2 Outbox routing (NIP-65)
 
@@ -492,13 +498,16 @@ touches no sockets and mutates nothing.
 const d = await dataLayer.diagnostics();
 // {
 //   paused,                                   // lifecycle flag (true after pause())
+//   online,                                   // user relay connected now or within last 30s
 //   interests: [{ subId, filters, sync }],    // what the app has declared
 //   upstream:  [{ filterHash, filters, relays }], // what the worker is subscribed to, and where
 //   relays,                                   // RelayHealth[] (same as relayHealth()), each tagged { gossip }
+//   dmRelays: string[],                       // NIP-17 DM inbox relays the kind-1059 stream reads
 //   gossipRelays: string[],                   // discovered relays currently in the pool
 //   connections: { user, outbox, gossip, total }, // counts of CONNECTED relays by source
 //   cache:     { totalEvents, eventsByKind, totalAuthors },
 //   enrichment:{ queuedIds, queuedAuthors, pending },
+//   delivery:  { records: OutboxRecord[], pendingRelays, failed }, // durable outbox (§11.8)
 // }
 ```
 
@@ -559,6 +568,121 @@ Key properties:
 
 `removeGossipRelay(url)` drops a relay so future fetches stop targeting it (an
 already-open socket closes on the next `pause()`/`resume()` cycle).
+
+### 11.6 DM inbox relays (NIP-17)
+
+NIP-17 gift-wrapped DMs (`kind:1059`) are delivered to the recipient's **DM inbox
+relays** (their `kind:10050` list) — which are deliberately *separate* from their
+general read relays. Tell the worker about the user's own inbox relays so the
+standing kind-1059 stream reads from them:
+
+```ts
+client.setDmRelays(["wss://inbox.example", "wss://dm.relay"]);
+// or dataLayer.setDmRelays([...])
+```
+
+How routing then works for **author-less** scopes:
+
+- A scope whose kinds are *all* DM kinds (`{ kinds: [1059] }`) reads from
+  **DM relays ∪ user relays** (user relays are the fallback so DMs still arrive
+  before any `kind:10050` is known). It never touches the gossip pool.
+- Every *other* author-less scope (your feeds, `{ ids }` fetches, …) reads from
+  **user relays ∪ gossip** and **never** touches the DM inbox relays — so a small,
+  often access-restricted DM relay doesn't get your whole feed firehose.
+
+Like `setUserRelays`, this is a routing-policy input: call it once early and again
+whenever the user's `kind:10050` changes (e.g. after store hydration). A real
+change reopens the kind-1059 stream on the new inbox relays; an unchanged set is a
+no-op. `diagnostics().dmRelays` reflects the current set.
+
+### 11.7 Where was an event seen? (`seenOn`)
+
+The worker records relays it **happened to observe** each stored event on —
+received from upstream on an open subscription, or accepted by on publish. Read it
+back (cache-only, **never** touches the network):
+
+```ts
+const relays = await dataLayer.seenOn(eventId); // string[]
+```
+
+**Read this honestly — it is opportunistic, not an inventory of who has the
+event.** Two facts bound it:
+
+- **The worker never re-fetches an event it already holds** — the local store
+  satisfies the read. So it only ever learns about relays that deliver the event
+  *while a subscription is already open for some other reason*; it never goes out
+  to ask "who else has this?"
+- **The pool de-duplicates by event id per subscription**, so on the subscription
+  that fetched it, only the **first** relay to deliver it is recorded.
+
+In practice, for a **received** note that means **usually exactly one relay** —
+the one you first got it from. So for received notes:
+
+- ✅ Good for: deriving a relay **hint** for a quote/reply (`["e", id, hint]`) —
+  you need one relay that has it, and "where we got it" is exactly that; light
+  provenance/debugging ("first seen on …").
+- ❌ Not for: "this note is on N relays" / completeness counts. It cannot answer
+  that, and making it answer that would mean re-querying relays for notes you
+  already have — the exact waste the architecture avoids.
+
+**Your own published notes are the exception — there `seenOn` is authoritative.**
+A publish fans out to every target at once (your write relays ∪ user relays ∪ any
+p-tagged recipient's read relays) and each relay independently returns `OK` /
+reject / timeout. The worker records exactly the relays that **accepted** (`OK
+true`) — i.e. the ones that confirmed they stored it. Because retry is just
+another publish, a retry that finally lands on a previously-dead relay unions in.
+So for an event you authored, `seenOn` *is* the set of relays that have it —
+useful as a "delivered to N relays" confirmation, or to pick a hint you know is
+live.
+
+Empty if the event isn't in the store, or its source wasn't recorded.
+
+### 11.8 Offline publishing & delivery-on-reconnect (the outbox)
+
+`publish` is **offline-safe and durable**. The event is stored locally first (so
+your own UI sees it instantly), then sent upstream. Any target relay that doesn't
+accept becomes **delivery debt** in a persisted outbox, and the worker keeps
+re-delivering on its own until the event lands — you don't re-publish by hand.
+
+What's owed vs not:
+
+- **Accepted** (`OK true`) → the relay has it; done.
+- **Timeout / unreachable** → owed; retried with **exponential backoff** (capped).
+- **Rejected** (`OK false`, e.g. spam/policy) → *terminal*; never retried.
+
+Retries are driven by real reachability, not a guess: when a relay's socket
+(re)connects, the worker flushes what it owes that relay; `resume()` and a backoff
+timer re-attempt the rest. The outbox is **persisted** (IndexedDB), so debt
+survives a worker restart and is re-attempted on boot.
+
+Cleanup is automatic: if the event is **deleted** (NIP-09), **superseded** (a newer
+replaceable), or pruned, its outbox debt is dropped — the worker won't keep trying
+to deliver something that's gone.
+
+After a bounded number of attempts a record is marked **failed** (auto-retry stops,
+but it's *kept*, not dropped). Surface and retry these manually:
+
+```ts
+const { delivery } = await dataLayer.diagnostics();
+// delivery.records: OutboxRecord[]  (each: { eventId, pending, attempts, nextAttemptAt, failed })
+// delivery.pendingRelays: number    (owed pairs still auto-retrying)
+// delivery.failed: number           (records awaiting a manual retry)
+
+dataLayer.retryDelivery(eventId); // re-arm one failed delivery
+dataLayer.retryDelivery();        // re-arm all failed deliveries
+```
+
+### 11.9 Online state
+
+```ts
+const up = await dataLayer.online(); // boolean
+```
+
+`online` is **derived from real socket state**, not `navigator.onLine` (which lies
+about captive portals / LAN-without-WAN): it's true if a **user relay** is
+connected now, or was within the last **30s** — a debounce so a brief drop doesn't
+flap the flag. It's also on `diagnostics().online`. Use it for an offline
+indicator; the outbox already handles *delivery* without you gating on it.
 
 ---
 
@@ -786,7 +910,10 @@ user's relays).
 **Publishing succeeds locally but no relay accepted it.**
 Check `result.relayResults` for per-relay reasons (rejected/timeout/failed), and
 make sure `setUserRelays` is set and/or the author has a `kind:10002` in the
-store for outbox routing. Retry by calling `publish`/`publishEvent` again.
+store for outbox routing. You usually **don't** need to retry by hand: timeout/
+unreachable targets are queued in the durable outbox and re-delivered on reconnect
+(§11.8). Only after a record is marked `failed` (see `diagnostics().delivery`) is a
+manual `retryDelivery(eventId)` needed; a rejection (`OK false`) is terminal.
 
 **Nothing connects.**
 The worker only opens sockets when there's a networked interest **and** somewhere

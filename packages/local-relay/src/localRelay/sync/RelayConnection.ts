@@ -15,6 +15,8 @@ import type { Event, Filter } from "../core/types";
 
 export interface RelayConnectionHandlers {
   onEvent: (subId: string, event: Event, relay: string) => void;
+  /** Socket reached OPEN (initial connect or a reconnect). */
+  onConnect?: (relay: string) => void;
   /** Relay signalled end-of-stored-events for this sub. */
   onEose: (subId: string, relay: string) => void;
   /** Relay closed this sub (e.g. auth-required) — counts as "done" upstream. */
@@ -81,6 +83,9 @@ export class RelayConnection {
       const queued = this.sendQueue;
       this.sendQueue = [];
       for (const msg of queued) this.write(msg);
+      // Signal reachability last, so listeners (outbox flush, online tracking)
+      // run after queued REQs/publishes are already on the wire.
+      this.handlers.onConnect?.(this.url);
     };
     socket.onmessage = (data) => this.onMessage(data);
     socket.onclose = () => this.onDrop();

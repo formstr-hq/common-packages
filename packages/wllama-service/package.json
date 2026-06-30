@@ -36,11 +36,10 @@
     "gguf"
   ],
   "license": "MIT",
-  "peerDependencies": {
-    "@wllama/wllama": ">=3.0.0"
+  "dependencies": {
+    "@wllama/wllama": "^3.5.1"
   },
   "devDependencies": {
-    "@wllama/wllama": "^3.0.0",
     "happy-dom": "^15.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",

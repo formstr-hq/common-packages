@@ -223,17 +223,29 @@ describe("change emitter + hydration", () => {
     expect(store.seenOn(other.id)).toEqual([]);
   });
 
-  it("bulkLoad does not emit and reports stored count", () => {
+  it("bulkLoad suppresses per-event emits, emits ONE reset, reports stored count", () => {
     const store = db();
-    let emits = 0;
-    store.onChange(() => emits++);
+    const changes: string[] = [];
+    store.onChange((c) => changes.push(c.type));
     const added = store.bulkLoad([
       makeEvent({ id: "1".repeat(64) }),
       makeEvent({ id: "2".repeat(64) }),
       makeEvent({ id: "2".repeat(64) }), // duplicate id
     ]);
     expect(added).toBe(2);
-    expect(emits).toBe(0);
+    // Exactly one `reset` (so live-sub owners re-scan once), not two `add`s.
+    expect(changes).toEqual(["reset"]);
     expect(store.allEvents()).toHaveLength(2);
+  });
+
+  it("bulkLoad that stores nothing emits no reset", () => {
+    const store = db();
+    const existing = makeEvent({ id: "1".repeat(64) });
+    store.add(existing);
+    const changes: string[] = [];
+    store.onChange((c) => changes.push(c.type));
+    const added = store.bulkLoad([existing]); // already present
+    expect(added).toBe(0);
+    expect(changes).toEqual([]);
   });
 });

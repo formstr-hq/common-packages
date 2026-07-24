@@ -34,6 +34,10 @@ export class RelayCore {
   constructor(private db: EventDB, private emit: EmitFn) {
     // Fan stored additions out to matching live subscriptions.
     this.detachStore = db.onChange((change) => {
+      if (change.type === "reset") {
+        this.refreshLiveSubs();
+        return;
+      }
       if (change.type !== "add") return;
       this.fanOut(change.event);
     });
@@ -97,6 +101,29 @@ export class RelayCore {
       if (!isValidEventStructure(event)) continue;
       const stored = this.db.add(event);
       if (!stored && isEphemeralEvent(event.kind)) this.fanOut(event);
+    }
+  }
+
+  /**
+   * Re-scan the store for every live sub after a bulk hydration and deliver any
+   * matches it hasn't seen yet. A sub that registered before persistence finished
+   * loading replayed an empty store; this is what finally hands it the hydrated
+   * events (newest-first per sub, matching `onReq` replay order).
+   */
+  private refreshLiveSubs(): void {
+    for (const [subId, sub] of Array.from(this.subs.entries())) {
+      const collected = new Map<string, Event>();
+      for (const filter of sub.filters) {
+        for (const event of this.db.query(filter)) collected.set(event.id, event);
+      }
+      const ordered = Array.from(collected.values()).sort(
+        (a, b) => b.created_at - a.created_at
+      );
+      for (const event of ordered) {
+        if (sub.seen.has(event.id)) continue;
+        sub.seen.add(event.id);
+        this.emit(["EVENT", subId, event]);
+      }
     }
   }
 

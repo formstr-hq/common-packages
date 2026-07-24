@@ -100,10 +100,19 @@ export class RelayService {
    */
   private gossipRelays: string[] = [];
   private readonly maxGossipRelays: number;
-  /** Standing interests by subscription id (the worker's only network input). */
-  private interests = new Map<string, { filters: Filter[]; sync: boolean }>();
-  /** Live upstream subscriptions, deduped by filter-hash across interests. */
-  private upstream = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
+  /** Standing interests by subscription id (the worker's only network input).
+   *  `relays` are optional per-interest read-relay hints (see openSync). */
+  private interests = new Map<
+    string,
+    { filters: Filter[]; sync: boolean; relays?: string[] }
+  >();
+  /** Live upstream subscriptions, deduped by filter-hash across interests.
+   *  `relays` is the union of the per-interest relay hints for this scope, so a
+   *  hint added by a later interest reopens the sub against the wider set. */
+  private upstream = new Map<
+    string,
+    { filters: Filter[]; relays: string[]; handle: SyncHandle | null }
+  >();
   private paused = false;
   private verify: (event: Event) => boolean;
   private now: () => number;
@@ -139,7 +148,8 @@ export class RelayService {
       },
       onAddGossipRelay: (url) => this.addGossipRelay(url),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
-      onObserve: (subId, filters, sync) => this.observe(subId, filters, sync),
+      onObserve: (subId, filters, sync, relays) =>
+        this.observe(subId, filters, sync, relays),
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
       onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
@@ -220,8 +230,13 @@ export class RelayService {
   // --- interests → autonomous upstream reconciliation -----------------------
 
   /** Register/replace a standing interest, then reconcile upstream subscriptions. */
-  private observe(subId: string, filters: Filter[], sync: boolean): void {
-    this.interests.set(subId, { filters, sync });
+  private observe(
+    subId: string,
+    filters: Filter[],
+    sync: boolean,
+    relays?: string[]
+  ): void {
+    this.interests.set(subId, { filters, sync, relays });
     this.reconcile();
   }
 
@@ -236,16 +251,28 @@ export class RelayService {
    */
   private reconcile(): void {
     if (this.paused) return;
-    const desired = new Map<string, Filter[]>();
-    for (const { filters, sync } of Array.from(this.interests.values())) {
+    // Union the per-interest relay hints across every interest that shares a
+    // filter-hash, so one upstream sub reads from the combined hint set.
+    const desired = new Map<string, { filters: Filter[]; relays: string[] }>();
+    for (const { filters, sync, relays } of Array.from(this.interests.values())) {
       if (!sync) continue;
       const key = generateFilterHash(filters, []);
-      if (!desired.has(key)) desired.set(key, filters);
+      const entry = desired.get(key);
+      if (!entry) {
+        desired.set(key, { filters, relays: relays ? Array.from(new Set(relays)) : [] });
+      } else if (relays) {
+        for (const r of relays) if (!entry.relays.includes(r)) entry.relays.push(r);
+      }
     }
-    // Open newly-wanted scopes.
-    for (const [key, filters] of Array.from(desired.entries())) {
-      if (!this.upstream.has(key)) {
-        this.upstream.set(key, { filters, handle: this.openSync(filters) });
+    // Open newly-wanted scopes, or REOPEN one whose relay-hint set changed (a
+    // later interest widened it) so the sub targets the current relays.
+    for (const [key, { filters, relays }] of Array.from(desired.entries())) {
+      const existing = this.upstream.get(key);
+      if (!existing) {
+        this.upstream.set(key, { filters, relays, handle: this.openSync(filters, relays) });
+      } else if (!sameRelaySet(existing.relays, relays)) {
+        existing.handle?.close();
+        this.upstream.set(key, { filters, relays, handle: this.openSync(filters, relays) });
       }
     }
     // Drop scopes no interest wants anymore.
@@ -376,24 +403,32 @@ export class RelayService {
    * firehose); DM (kind-1059) reads hit the user's DM inbox relays; other
    * author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note) hit the
    * user's relays ∪ the gossip pool, so discovered hints can resolve them.
+   *
+   * `hintRelays` are the interest's explicit read-relay hints (e.g. a form's
+   * naddr relays). They're folded into BOTH paths — as an extra floor for the
+   * author-scoped outbox partition (so an author with no known kind-10002 is
+   * still fetched from them) and added to the author-less read set — so a fetch
+   * reaches the relays the app knows hold the data, without the global gossip pool.
    */
-  private openSync(filters: Filter[]): SyncHandle {
+  private openSync(filters: Filter[], hintRelays: string[] = []): SyncHandle {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
       if (filter.authors && filter.authors.length) {
+        const ur = Array.from(new Set([...this.userRelays, ...hintRelays]));
         handles.push(
           this.sync.fetch({
             kinds,
             authors: filter.authors,
-            userRelays: this.userRelays,
+            userRelays: ur,
             since: filter.since,
             until: filter.until,
             limit: filter.limit,
           })
         );
       } else {
-        const relays = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        const base = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        const relays = Array.from(new Set([...base, ...hintRelays]));
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
             onEvent: (event, relay) => {
@@ -615,7 +650,7 @@ export class RelayService {
       upstream: Array.from(this.upstream.entries()).map(([filterHash, u]) => ({
         filterHash,
         filters: u.filters,
-        relays: this.routeRelays(u.filters),
+        relays: Array.from(new Set([...this.routeRelays(u.filters), ...u.relays])),
       })),
       relays,
       dmRelays: [...this.dmRelays],

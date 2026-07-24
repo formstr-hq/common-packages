@@ -52,6 +52,7 @@ export class Persistence {
     if (events.length) this.db.bulkLoad(events);
 
     this.detach = this.db.onChange((change) => {
+      if (change.type === "reset") return; // hydration refresh; nothing to persist
       if (change.type === "add") {
         this.pendingDeletes.delete(change.event.id);
         this.pendingPuts.set(change.event.id, change.event);

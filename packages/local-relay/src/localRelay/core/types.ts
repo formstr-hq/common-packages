@@ -12,7 +12,13 @@ export type { Event, Filter };
 /** Callback fired when the store changes. `type` distinguishes the cause. */
 export type StoreChange =
   | { type: "add"; event: Event }
-  | { type: "remove"; id: string };
+  | { type: "remove"; id: string }
+  // A batch of events entered the store WITHOUT per-event `add` emits (boot
+  // hydration from persistence). Live-sub owners must re-scan the store against
+  // their filters and deliver any now-available matches — a sub registered
+  // before hydration finished replayed an empty store and would otherwise never
+  // see the hydrated events (the later network copy is dropped as a duplicate).
+  | { type: "reset" };
 
 export type StoreListener = (change: StoreChange) => void;
 

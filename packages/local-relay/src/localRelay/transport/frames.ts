@@ -66,7 +66,20 @@ export type ToWorker =
    * warm from relays (it decides which/when). Re-sending the same `subId` with
    * a wider window is how pagination ("load older") works: still declarative.
    */
-  | { kind: "observe"; subId: string; filters: Filter[]; sync: boolean }
+  | {
+      kind: "observe";
+      subId: string;
+      filters: Filter[];
+      sync: boolean;
+      /**
+       * Read-relay hints for THIS interest: relays the app knows hold the data
+       * (e.g. the relays in a form's naddr). Folded into routing for both
+       * author-scoped and author-less reads, so an author whose kind-10002 the
+       * worker hasn't seen is still fetched from the hinted relays — without
+       * polluting the global gossip pool.
+       */
+      relays?: string[];
+    }
   /** Drop a standing interest (worker reconciles its connections). */
   | { kind: "unobserve"; subId: string }
   // --- writes ---

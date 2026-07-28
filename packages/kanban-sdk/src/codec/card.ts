@@ -123,3 +123,102 @@ export function parsePublicCard(event: Event): KanbanCard | null {
     rawTags: event.tags,
   };
 }
+
+/**
+ * Inner tags the private card codec owns.
+ *
+ * Excludes `k`, `e`, `refs/board`, `refs/card` for the same reason the public
+ * list does — a tracker card must keep tracking across an edit. Also excludes
+ * `binned`: a soft-deleted card that silently un-bins itself on the next edit is
+ * worse than one that stays binned.
+ */
+export const PRIVATE_CARD_MANAGED_TAGS = [
+  "d",
+  "a",
+  "title",
+  "description",
+  "rank",
+  "s",
+  "u",
+  "t",
+  "p",
+  "i",
+] as const;
+
+/** The inner tag array of a private card, to be NIP-44'd under the BOARD's view key. */
+export function buildPrivateCardTags(
+  draft: CardDraft,
+  dTag: string,
+  boardCoordinate: string,
+  rank: number,
+): string[][] {
+  const tags: string[][] = [
+    ["d", dTag],
+    // `a` lives inside the payload: the public `b` pointer replaces it for lookup,
+    // but a decrypted card must still say which board it claims to belong to so
+    // the reader can check it (doc 05 §7 step 2).
+    ["a", boardCoordinate],
+    ["title", draft.title],
+    ["description", draft.description ?? ""],
+    ["rank", String(rank)],
+  ];
+
+  // `s` is the column ID, not its name. Renaming a column is then a single board
+  // edit instead of a bulk card rewrite (doc 05 §4).
+  if (draft.status) tags.push(["s", draft.status]);
+  for (const url of draft.attachments ?? []) tags.push(["u", url]);
+  for (const label of draft.labels ?? []) tags.push(["t", label]);
+  // No `zap` duplication: that convention exists so kanbanstr can route zaps, and
+  // kanbanstr cannot read a private card at all.
+  for (const assignee of draft.assignees ?? []) tags.push(["p", assignee]);
+  for (const link of draft.links ?? []) tags.push(buildCardLinkTag(link));
+
+  return tags;
+}
+
+export function parsePrivateCard(event: Event, innerTags: string[][]): KanbanCard | null {
+  const id = innerTags.find((t) => t[0] === "d")?.[1];
+  if (!id) return null;
+  if (event.tags.find((t) => t[0] === "d")?.[1] !== id) return null;
+
+  const boardCoordinate = innerTags.find((t) => t[0] === "a")?.[1];
+  if (!boardCoordinate) return null;
+
+  const rawRank = innerTags.find((t) => t[0] === "rank")?.[1];
+  const parsedRank = rawRank === undefined ? Number.NaN : Number.parseFloat(rawRank);
+
+  const rawTrackedKind = innerTags.find((t) => t[0] === "k")?.[1];
+  const trackedKind = rawTrackedKind ? Number.parseInt(rawTrackedKind, 10) : undefined;
+
+  return {
+    id,
+    pubkey: event.pubkey,
+    eventId: event.id,
+    boardCoordinate,
+    title: innerTags.find((t) => t[0] === "title")?.[1] ?? "Untitled Card",
+    description: innerTags.find((t) => t[0] === "description")?.[1] ?? "",
+    status: innerTags.find((t) => t[0] === "s")?.[1],
+    rank: Number.isNaN(parsedRank) ? 0 : parsedRank,
+    attachments: innerTags.filter((t) => t[0] === "u").map((t) => t[1]),
+    assignees: [...new Set(innerTags.filter((t) => t[0] === "p").map((t) => t[1]))],
+    labels: innerTags.filter((t) => t[0] === "t").map((t) => t[1]),
+    links: innerTags.map(parseCardLink).filter((link): link is CardLink => link !== null),
+    binned: innerTags.some((t) => t[0] === "binned"),
+    isPrivate: true,
+    createdAt: event.created_at,
+    trackedKind,
+    trackedRef: trackedKind === undefined ? undefined : parseTrackedInnerRef(innerTags, trackedKind),
+    rawTags: innerTags,
+  };
+}
+
+/** Tracker refs of a private card live in the payload, not the event tags. */
+function parseTrackedInnerRef(innerTags: string[][], trackedKind: number): TrackedRef {
+  if (trackedKind === 30302 || trackedKind === 32302) {
+    return {
+      boardCoordinate: innerTags.find((t) => t[0] === "refs/board")?.[1],
+      cardDTag: innerTags.find((t) => t[0] === "refs/card")?.[1],
+    };
+  }
+  return { eventId: innerTags.find((t) => t[0] === "e")?.[1] };
+}

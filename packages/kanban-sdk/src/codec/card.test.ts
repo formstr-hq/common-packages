@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Event } from "nostr-tools";
 
-import { buildCardLinkTag, buildPublicCardTags, parseCardLink, parsePublicCard } from "./card";
+import {
+  buildCardLinkTag,
+  buildPublicCardTags,
+  parseCardLink,
+  parsePublicCard,
+  buildPrivateCardTags,
+  parsePrivateCard,
+} from "./card";
 
 const PUBKEY = "a".repeat(64);
 const BOARD_PUBKEY = "b".repeat(64);
@@ -182,5 +189,132 @@ describe("card links", () => {
     const parsed = parseCardLink(["i", `kanban:${BOARD_PUBKEY}:board9:card9`]);
     expect(parsed!.forwardLabel).toBe("");
     expect(parsed!.reverseLabel).toBe("");
+  });
+});
+
+const BOARD_COORDINATE = `32301:${"c".repeat(64)}:board-d`;
+
+function privateCardEvent(dTag: string, pointer = "b".repeat(64)): Event {
+  return {
+    id: "e".repeat(64),
+    pubkey: "c".repeat(64),
+    created_at: 1753600100,
+    kind: 32302,
+    tags: [
+      ["d", dTag],
+      ["b", pointer],
+    ],
+    content: "<encrypted>",
+    sig: "f".repeat(128),
+  } as Event;
+}
+
+describe("buildPrivateCardTags", () => {
+  it("emits the doc 05 §4 inner tags with a inside the payload", () => {
+    const tags = buildPrivateCardTags(
+      {
+        title: "Ship the SDK",
+        description: "body",
+        status: "col-2",
+        attachments: ["https://blossom.example/abc.png"],
+        assignees: ["a".repeat(64)],
+        labels: ["backend"],
+      },
+      "card-d",
+      BOARD_COORDINATE,
+      10,
+    );
+
+    expect(tags).toEqual([
+      ["d", "card-d"],
+      ["a", BOARD_COORDINATE],
+      ["title", "Ship the SDK"],
+      ["description", "body"],
+      ["rank", "10"],
+      ["s", "col-2"],
+      ["u", "https://blossom.example/abc.png"],
+      ["t", "backend"],
+      ["p", "a".repeat(64)],
+    ]);
+  });
+
+  it("omits s when the card is unmapped", () => {
+    const tags = buildPrivateCardTags({ title: "T" }, "card-d", BOARD_COORDINATE, 10);
+    expect(tags.some((t) => t[0] === "s")).toBe(false);
+  });
+
+  it("writes assignees once — the kanbanstr zap-tag duplication is public-interop only", () => {
+    const tags = buildPrivateCardTags(
+      { title: "T", assignees: ["a".repeat(64)] },
+      "card-d",
+      BOARD_COORDINATE,
+      10,
+    );
+    expect(tags.filter((t) => t[0] === "zap")).toHaveLength(0);
+    expect(tags.filter((t) => t[0] === "p")).toHaveLength(1);
+  });
+
+  it("never emits an alt tag", () => {
+    const tags = buildPrivateCardTags({ title: "Secret" }, "card-d", BOARD_COORDINATE, 10);
+    expect(tags.some((t) => t[0] === "alt")).toBe(false);
+  });
+
+  it("round-trips card links", () => {
+    const link = {
+      boardPubkey: "a".repeat(64),
+      boardDTag: "board-2",
+      cardDTag: "card-9",
+      forwardLabel: "is blocked by",
+      reverseLabel: "blocks",
+    };
+    const tags = buildPrivateCardTags({ title: "T", links: [link] }, "d", BOARD_COORDINATE, 10);
+    const card = parsePrivateCard(privateCardEvent("d"), tags);
+    expect(card!.links).toEqual([link]);
+  });
+});
+
+describe("parsePrivateCard", () => {
+  it("reads inner tags and keeps them as rawTags", () => {
+    const inner = buildPrivateCardTags(
+      { title: "Ship the SDK", status: "col-2" },
+      "card-d",
+      BOARD_COORDINATE,
+      10,
+    );
+    const card = parsePrivateCard(privateCardEvent("card-d"), inner);
+
+    expect(card).not.toBeNull();
+    expect(card!.title).toBe("Ship the SDK");
+    expect(card!.status).toBe("col-2");
+    expect(card!.rank).toBe(10);
+    expect(card!.boardCoordinate).toBe(BOARD_COORDINATE);
+    expect(card!.isPrivate).toBe(true);
+    expect(card!.rawTags).toBe(inner);
+  });
+
+  it("rejects a payload whose inner d does not match the outer d", () => {
+    const inner = buildPrivateCardTags({ title: "T" }, "other-card", BOARD_COORDINATE, 10);
+    expect(parsePrivateCard(privateCardEvent("card-d"), inner)).toBeNull();
+  });
+
+  it("rejects a payload with no a tag — the board association is not optional", () => {
+    const inner: string[][] = [
+      ["d", "card-d"],
+      ["title", "T"],
+    ];
+    expect(parsePrivateCard(privateCardEvent("card-d"), inner)).toBeNull();
+  });
+
+  it("preserves tracker tags a newer client wrote", () => {
+    const inner: string[][] = [
+      ["d", "card-d"],
+      ["a", BOARD_COORDINATE],
+      ["title", "Tracker"],
+      ["k", "1621"],
+      ["e", "f".repeat(64)],
+    ];
+    const card = parsePrivateCard(privateCardEvent("card-d"), inner);
+    expect(card!.trackedKind).toBe(1621);
+    expect(card!.trackedRef).toEqual({ eventId: "f".repeat(64) });
   });
 });

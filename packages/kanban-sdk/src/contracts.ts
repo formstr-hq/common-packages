@@ -57,3 +57,23 @@ export class NotAMaintainerError extends Error {
     this.name = "NotAMaintainerError";
   }
 }
+
+export class ViewKeyRequiredError extends Error {
+  constructor(coordinate: string) {
+    super(
+      `No view key for ${coordinate}. Private boards are only readable with their view key — ` +
+        `pass one, or link the board into a board list so it can be recovered.`,
+    );
+    this.name = "ViewKeyRequiredError";
+  }
+}
+
+export class NotBoardOwnerError extends Error {
+  constructor(pubkey: string, coordinate: string) {
+    super(
+      `${pubkey} is not the author of ${coordinate}. Board events are addressable and ` +
+        `single-owner (doc 05 §7): only the author can rename or re-column a board.`,
+    );
+    this.name = "NotBoardOwnerError";
+  }
+}

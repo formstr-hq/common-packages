@@ -4,9 +4,11 @@ import type { Event } from "nostr-tools";
 import {
   BOARD_MANAGED_TAGS,
   boardCoordinate,
+  buildPrivateBoardTags,
   buildPublicBoardTags,
   isLegacyBoard,
   mergeTags,
+  parsePrivateBoard,
   parsePublicBoard,
 } from "./board";
 
@@ -156,5 +158,116 @@ describe("mergeTags", () => {
 describe("boardCoordinate", () => {
   it("builds a NIP-01 address", () => {
     expect(boardCoordinate({ pubkey: PUBKEY, id: "board7" })).toBe(`30301:${PUBKEY}:board7`);
+  });
+});
+
+const PRIVATE_AUTHOR = "c".repeat(64);
+
+function privateBoardEvent(dTag: string, overrides: Partial<Event> = {}): Event {
+  return {
+    id: "e".repeat(64),
+    pubkey: PRIVATE_AUTHOR,
+    created_at: 1753600000,
+    kind: 32301,
+    tags: [["d", dTag]],
+    content: "<encrypted>",
+    sig: "f".repeat(128),
+    ...overrides,
+  } as Event;
+}
+
+describe("buildPrivateBoardTags", () => {
+  it("emits the doc 05 §3 inner tags", () => {
+    const tags = buildPrivateBoardTags(
+      {
+        title: "Q3 Roadmap",
+        description: "Markdown allowed",
+        columns: [
+          { id: "col-1", name: "To Do", order: 0 },
+          { id: "col-2", name: "Done", order: 1 },
+        ],
+        maintainers: ["a".repeat(64)],
+        members: ["b".repeat(64)],
+        noZap: true,
+      },
+      "board-d",
+    );
+
+    expect(tags).toEqual([
+      ["d", "board-d"],
+      ["title", "Q3 Roadmap"],
+      ["description", "Markdown allowed"],
+      ["col", "col-1", "To Do", "0"],
+      ["col", "col-2", "Done", "1"],
+      ["maintainer", "a".repeat(64)],
+      ["member", "b".repeat(64)],
+      ["nozap"],
+    ]);
+  });
+
+  it("never emits an alt tag — NIP-31 would restate the title in plaintext", () => {
+    const tags = buildPrivateBoardTags({ title: "Secret", columns: [] }, "d1");
+    expect(tags.some((t) => t[0] === "alt")).toBe(false);
+  });
+
+  it("uses maintainer/member, never p — p would leak membership and collides with assignee", () => {
+    const tags = buildPrivateBoardTags(
+      { title: "T", columns: [], maintainers: ["a".repeat(64)] },
+      "d1",
+    );
+    expect(tags.some((t) => t[0] === "p")).toBe(false);
+  });
+});
+
+describe("parsePrivateBoard", () => {
+  it("reads the decrypted inner tags and keeps them as rawTags for merging", () => {
+    const inner = buildPrivateBoardTags(
+      {
+        title: "Q3 Roadmap",
+        description: "d",
+        columns: [{ id: "col-1", name: "To Do", order: 0 }],
+        maintainers: ["a".repeat(64)],
+        members: ["b".repeat(64)],
+      },
+      "board-d",
+    );
+    const board = parsePrivateBoard(privateBoardEvent("board-d"), inner);
+
+    expect(board).not.toBeNull();
+    expect(board!.title).toBe("Q3 Roadmap");
+    expect(board!.isPrivate).toBe(true);
+    expect(board!.legacy).toBe(false);
+    expect(board!.maintainers).toEqual(["a".repeat(64)]);
+    expect(board!.members).toEqual(["b".repeat(64)]);
+    expect(board!.rawTags).toBe(inner);
+  });
+
+  it("sorts columns by order", () => {
+    const inner: string[][] = [
+      ["d", "board-d"],
+      ["title", "T"],
+      ["col", "c2", "Second", "1"],
+      ["col", "c1", "First", "0"],
+    ];
+    const board = parsePrivateBoard(privateBoardEvent("board-d"), inner);
+    expect(board!.columns.map((c) => c.id)).toEqual(["c1", "c2"]);
+  });
+
+  it("rejects a payload whose inner d does not match the outer d", () => {
+    const inner = buildPrivateBoardTags({ title: "T", columns: [] }, "other-board");
+    expect(parsePrivateBoard(privateBoardEvent("board-d"), inner)).toBeNull();
+  });
+
+  it("rejects a payload with no inner d", () => {
+    expect(parsePrivateBoard(privateBoardEvent("board-d"), [["title", "T"]])).toBeNull();
+  });
+});
+
+describe("boardCoordinate", () => {
+  it("uses 30301 for public boards and 32301 for private ones", () => {
+    expect(boardCoordinate({ pubkey: PRIVATE_AUTHOR, id: "x" })).toBe(`30301:${PRIVATE_AUTHOR}:x`);
+    expect(boardCoordinate({ pubkey: PRIVATE_AUTHOR, id: "x", isPrivate: true })).toBe(
+      `32301:${PRIVATE_AUTHOR}:x`,
+    );
   });
 });

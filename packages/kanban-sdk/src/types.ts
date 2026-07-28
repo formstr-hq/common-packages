@@ -27,6 +27,8 @@ export interface KanbanBoard {
   description: string;
   columns: Column[];
   maintainers: string[];
+  /** Private boards only: view-key holders who are read-only by client convention. */
+  members: string[];
   noZap: boolean;
   createdAt: number;
   isPrivate: boolean;
@@ -34,6 +36,10 @@ export interface KanbanBoard {
   legacy: boolean;
   /** Original tags, retained so edits can merge rather than rebuild. */
   rawTags: string[][];
+  /** Private boards only: the board view key as an `nsec`, when known. */
+  viewKey?: string;
+  /** Relay that accepted the board event, stored alongside the ref in a board list. */
+  relayHint?: string;
 }
 
 export interface KanbanCard {
@@ -53,6 +59,7 @@ export interface KanbanCard {
   labels: string[];
   links: CardLink[];
   binned: boolean;
+  isPrivate: boolean;
   createdAt: number;
   trackedKind?: number;
   trackedRef?: TrackedRef;
@@ -64,7 +71,15 @@ export interface BoardDraft {
   description?: string;
   columns: Column[];
   maintainers?: string[];
+  /** Private boards only. Client-enforced read-only role — see doc 07 §B3. */
+  members?: string[];
   noZap?: boolean;
+  /** Write a 32301 under a fresh view key instead of a public 30301. */
+  private?: boolean;
+  /** Reuse this view key (`nsec`) instead of minting one. */
+  viewKey?: string;
+  /** Board list (`d` tag) to link a private board into. */
+  listId?: string;
 }
 
 export interface CardDraft {

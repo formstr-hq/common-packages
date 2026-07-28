@@ -116,6 +116,7 @@ export function parsePublicCard(event: Event): KanbanCard | null {
     labels: event.tags.filter((t) => t[0] === "t").map((t) => t[1]),
     links: event.tags.map(parseCardLink).filter((link): link is CardLink => link !== null),
     binned: event.tags.some((t) => t[0] === "binned"),
+    isPrivate: false,
     createdAt: event.created_at,
     trackedKind,
     trackedRef: trackedKind === undefined ? undefined : parseTrackedRef(event, trackedKind),

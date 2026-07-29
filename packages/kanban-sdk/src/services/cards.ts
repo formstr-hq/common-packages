@@ -225,6 +225,18 @@ export async function updatePrivateCard(
   changes: Partial<CardDraft>,
 ): Promise<KanbanCard> {
   await assertMaintainer(ctx, board);
+
+  // Editing a card against the wrong board loses it entirely: the republish would
+  // carry THIS board's blinded pointer but the card's own `a` coordinate, so the
+  // supplied board discards it on the §7 step-2 check while the owning board can
+  // no longer find it under the new pointer — and the new version has already
+  // superseded the old one at that coordinate. Refuse instead.
+  if (card.boardCoordinate !== boardCoordinate(board)) {
+    throw new Error(
+      `Card ${card.id} belongs to ${card.boardCoordinate}, not ${boardCoordinate(board)}`,
+    );
+  }
+
   // The board's existing key, never a fresh one: re-keying here would encrypt the
   // card away from every other member of the board.
   const viewKeyNsec = await resolveBoardViewKey(ctx, board);

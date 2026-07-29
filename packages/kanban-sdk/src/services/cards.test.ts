@@ -427,3 +427,30 @@ describe("deleteCard", () => {
     expect(await fetchPrivateCards(ctx, board)).toEqual([]);
   });
 });
+
+describe("updatePrivateCard board mismatch", () => {
+  it("refuses a card that belongs to another board, instead of losing it from both", async () => {
+    const secret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(secret) });
+    const { board: a } = await createPrivateBoard(ctx, {
+      title: "A",
+      columns: [{ id: "c1", name: "To Do", order: 0 }],
+      private: true,
+    });
+    const { board: b } = await createPrivateBoard(ctx, {
+      title: "B",
+      columns: [{ id: "c1", name: "To Do", order: 0 }],
+      private: true,
+    });
+
+    const card = await createPrivateCard(ctx, a, { title: "lives on A", status: "c1" });
+
+    await expect(updatePrivateCard(ctx, b, card, { title: "edited" })).rejects.toThrow(
+      /belongs to/,
+    );
+
+    // The card is still where it was, untouched.
+    expect((await fetchPrivateCards(ctx, a)).map((c) => c.title)).toEqual(["lives on A"]);
+    expect(await fetchPrivateCards(ctx, b)).toEqual([]);
+  });
+});

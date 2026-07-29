@@ -39,3 +39,28 @@ describe("KanbanSDK", () => {
     expect(cards.map((c) => c.title)).toEqual(["Ship it"]);
   });
 });
+
+describe("KanbanSDK private surface", () => {
+  it("routes createBoard by the private flag", async () => {
+    const runtime = new FakeRuntime();
+    const sdk = new KanbanSDK({ signer: fakeSigner(), runtime, relays: ["wss://test.relay/"] });
+
+    const publicBoard = await sdk.createBoard({ title: "Public", columns: [] });
+    const privateBoard = await sdk.createBoard({ title: "Private", columns: [], private: true });
+
+    expect(publicBoard.isPrivate).toBe(false);
+    expect(privateBoard.isPrivate).toBe(true);
+    expect(runtime.published.some((e) => e.kind === 30301)).toBe(true);
+    expect(runtime.published.some((e) => e.kind === 32301)).toBe(true);
+  });
+
+  it("refuses a private coordinate with no view key", async () => {
+    const sdk = new KanbanSDK({ signer: fakeSigner(), runtime: new FakeRuntime() });
+    expect(() => sdk.fetchBoardByCoordinate(`32301:${"c".repeat(64)}:x`)).toThrow(/No view key/);
+  });
+
+  it("still throws SignerRequiredError for private reads without a signer", async () => {
+    const sdk = new KanbanSDK({ runtime: new FakeRuntime() });
+    await expect(sdk.fetchPrivateBoards()).rejects.toThrow(/requires a signer/);
+  });
+});

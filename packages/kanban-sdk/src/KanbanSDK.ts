@@ -1,14 +1,24 @@
 import {
   SignerRequiredError,
+  ViewKeyRequiredError,
   type KanbanCtx,
   type KanbanSigner,
   type NostrRuntime,
 } from "./contracts";
 import { normalizeRelayList } from "./discovery/relays";
+import { KANBAN_KINDS } from "./kinds";
 import { SimplePoolRuntime } from "./runtime/pool";
+import * as boardLists from "./services/boardLists";
 import * as boards from "./services/boards";
 import * as cards from "./services/cards";
-import type { BoardDraft, CardDraft, KanbanBoard, KanbanCard } from "./types";
+import type {
+  BoardDraft,
+  BoardListRef,
+  CardDraft,
+  KanbanBoard,
+  KanbanBoardList,
+  KanbanCard,
+} from "./types";
 
 /** Cross-app default relay set. Keep any override a superset or boards stop syncing. */
 export const DEFAULT_RELAYS = [
@@ -49,24 +59,49 @@ export class KanbanSDK {
     if (this.ownsRuntime) this.ctx.runtime.dispose?.();
   }
 
-  createBoard(draft: BoardDraft): Promise<KanbanBoard> {
-    return boards.createBoard(this.ctx, draft);
+  /** Private or public — the caller does not branch, the codec does. */
+  async createBoard(draft: BoardDraft): Promise<KanbanBoard> {
+    if (!draft.private) return boards.createBoard(this.ctx, draft);
+    const { board } = await boards.createPrivateBoard(this.ctx, draft);
+    return board;
+  }
+
+  /** The board list the private board was linked into, alongside the board. */
+  createPrivateBoard(draft: BoardDraft): Promise<{ board: KanbanBoard; list: KanbanBoardList }> {
+    return boards.createPrivateBoard(this.ctx, { ...draft, private: true });
   }
 
   updateBoard(board: KanbanBoard, changes: Partial<BoardDraft>): Promise<KanbanBoard> {
-    return boards.updateBoard(this.ctx, board, changes);
+    return board.isPrivate
+      ? boards.updatePrivateBoard(this.ctx, board, changes)
+      : boards.updateBoard(this.ctx, board, changes);
   }
 
   fetchBoards(params: { authors?: string[]; maintainedBy?: string } = {}): Promise<KanbanBoard[]> {
     return boards.fetchBoards(this.ctx, params);
   }
 
-  fetchBoardByCoordinate(coordinate: string): Promise<KanbanBoard | null> {
+  fetchPrivateBoards(): Promise<KanbanBoard[]> {
+    return boards.fetchPrivateBoards(this.ctx);
+  }
+
+  /** A `32301:` coordinate needs its view key; a `30301:` one must not be given one. */
+  fetchBoardByCoordinate(coordinate: string, viewKey?: string): Promise<KanbanBoard | null> {
+    if (coordinate.startsWith(`${KANBAN_KINDS.privateBoard}:`)) {
+      if (!viewKey) throw new ViewKeyRequiredError(coordinate);
+      return boards.fetchPrivateBoardByCoordinate(this.ctx, coordinate, viewKey);
+    }
     return boards.fetchBoardByCoordinate(this.ctx, coordinate);
   }
 
+  deleteBoard(board: KanbanBoard): Promise<void> {
+    return boards.deleteBoard(this.ctx, board);
+  }
+
   createCard(board: KanbanBoard, draft: CardDraft): Promise<KanbanCard> {
-    return cards.createCard(this.ctx, board, draft);
+    return board.isPrivate
+      ? cards.createPrivateCard(this.ctx, board, draft)
+      : cards.createCard(this.ctx, board, draft);
   }
 
   updateCard(
@@ -74,7 +109,9 @@ export class KanbanSDK {
     card: KanbanCard,
     changes: Partial<CardDraft>,
   ): Promise<KanbanCard> {
-    return cards.updateCard(this.ctx, board, card, changes);
+    return board.isPrivate
+      ? cards.updatePrivateCard(this.ctx, board, card, changes)
+      : cards.updateCard(this.ctx, board, card, changes);
   }
 
   moveCard(
@@ -84,10 +121,38 @@ export class KanbanSDK {
     targetStatus: string,
     targetIndex: number,
   ): Promise<KanbanCard> {
-    return cards.moveCard(this.ctx, board, allCards, cardId, targetStatus, targetIndex);
+    return board.isPrivate
+      ? cards.movePrivateCard(this.ctx, board, allCards, cardId, targetStatus, targetIndex)
+      : cards.moveCard(this.ctx, board, allCards, cardId, targetStatus, targetIndex);
   }
 
   fetchCards(board: KanbanBoard): Promise<KanbanCard[]> {
-    return cards.fetchCards(this.ctx, board);
+    return board.isPrivate
+      ? cards.fetchPrivateCards(this.ctx, board)
+      : cards.fetchCards(this.ctx, board);
+  }
+
+  deleteCard(card: KanbanCard): Promise<void> {
+    return cards.deleteCard(this.ctx, card);
+  }
+
+  createBoardList(title?: string): Promise<KanbanBoardList> {
+    return boardLists.createBoardList(this.ctx, title);
+  }
+
+  fetchBoardLists(): Promise<KanbanBoardList[]> {
+    return boardLists.fetchBoardLists(this.ctx);
+  }
+
+  addBoardToList(list: KanbanBoardList, ref: BoardListRef): Promise<KanbanBoardList> {
+    return boardLists.addBoardToList(this.ctx, list, ref);
+  }
+
+  removeBoardFromList(list: KanbanBoardList, coordinate: string): Promise<KanbanBoardList> {
+    return boardLists.removeBoardFromList(this.ctx, list, coordinate);
+  }
+
+  lookupBoardViewKey(coordinate: string): Promise<string | undefined> {
+    return boardLists.lookupBoardViewKey(this.ctx, coordinate);
   }
 }

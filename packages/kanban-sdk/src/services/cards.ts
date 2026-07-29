@@ -1,13 +1,23 @@
 import type { Event } from "nostr-tools";
 
 import { boardCoordinate, mergeTags } from "../codec/board";
-import { CARD_MANAGED_TAGS, buildPublicCardTags, parsePublicCard } from "../codec/card";
+import {
+  CARD_MANAGED_TAGS,
+  PRIVATE_CARD_MANAGED_TAGS,
+  buildPrivateCardTags,
+  buildPublicCardTags,
+  parsePrivateCard,
+  parsePublicCard,
+} from "../codec/card";
 import { computeRank } from "../codec/rank";
 import { NotAMaintainerError, type KanbanCtx } from "../contracts";
+import { blindedPointer } from "../crypto/blindedPointer";
+import { decryptWithViewKey, encryptWithViewKey, viewKeyFromNsec } from "../crypto/viewKey";
 import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { KANBAN_KINDS } from "../kinds";
 import type { CardDraft, KanbanBoard, KanbanCard } from "../types";
+import { resolveBoardViewKey } from "./boards";
 
 const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
@@ -141,6 +151,186 @@ export async function fetchCards(ctx: KanbanCtx, board: KanbanBoard): Promise<Ka
   const cards: KanbanCard[] = [];
   for (const event of newestByDTag(live).values()) {
     const card = parsePublicCard(event);
+    if (card) cards.push(card);
+  }
+  return cards.sort((a, b) => a.rank - b.rank);
+}
+
+// ── Private path (NIP-100E) ─────────────────────────────
+
+/** The `b` tag every card on this board carries. Doc 05 §2. */
+export function boardPointer(board: KanbanBoard, viewKeyNsec: string): string {
+  return blindedPointer(viewKeyFromNsec(viewKeyNsec).pubkey, boardCoordinate(board));
+}
+
+async function publishPrivateCard(
+  ctx: KanbanCtx,
+  innerTags: string[][],
+  pointer: string,
+  viewKeyNsec: string,
+  createdAt: number,
+): Promise<KanbanCard> {
+  const signer = await ctx.getSigner();
+  const dTag = innerTags.find((t) => t[0] === "d")?.[1] ?? "";
+  const content = await encryptWithViewKey(viewKeyNsec, JSON.stringify(innerTags));
+
+  const signed = await signer.signEvent({
+    kind: KANBAN_KINDS.privateCard,
+    created_at: createdAt,
+    tags: [
+      ["d", dTag],
+      ["b", pointer],
+    ],
+    content,
+  });
+  await ctx.runtime.publish(ctx.relays, signed);
+
+  const card = parsePrivateCard(signed, innerTags);
+  if (!card) throw new Error("Built an unparseable private card event");
+  return card;
+}
+
+export async function createPrivateCard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  draft: CardDraft,
+): Promise<KanbanCard> {
+  await assertMaintainer(ctx, board);
+  const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+
+  let rank = draft.rank;
+  if (rank === undefined) {
+    const existing = await fetchPrivateCards(ctx, board);
+    const columnRanks = existing
+      .filter((c) => c.status === draft.status)
+      .map((c) => c.rank)
+      .sort((a, b) => a - b);
+    rank = computeRank(columnRanks, columnRanks.length);
+  }
+
+  const inner = buildPrivateCardTags(draft, crypto.randomUUID(), boardCoordinate(board), rank);
+  return publishPrivateCard(
+    ctx,
+    inner,
+    boardPointer(board, viewKeyNsec),
+    viewKeyNsec,
+    nextCreatedAt(),
+  );
+}
+
+export async function updatePrivateCard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  card: KanbanCard,
+  changes: Partial<CardDraft>,
+): Promise<KanbanCard> {
+  await assertMaintainer(ctx, board);
+  // The board's existing key, never a fresh one: re-keying here would encrypt the
+  // card away from every other member of the board.
+  const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+
+  const draft: CardDraft = {
+    title: changes.title ?? card.title,
+    description: changes.description ?? card.description,
+    status: changes.status ?? card.status,
+    attachments: changes.attachments ?? card.attachments,
+    assignees: changes.assignees ?? card.assignees,
+    labels: changes.labels ?? card.labels,
+    links: changes.links ?? card.links,
+  };
+  const rank = changes.rank ?? card.rank;
+
+  const inner = mergeTags(
+    card.rawTags,
+    buildPrivateCardTags(draft, card.id, card.boardCoordinate, rank),
+    PRIVATE_CARD_MANAGED_TAGS,
+  );
+
+  return publishPrivateCard(
+    ctx,
+    inner,
+    boardPointer(board, viewKeyNsec),
+    viewKeyNsec,
+    nextCreatedAt(card.createdAt),
+  );
+}
+
+export async function movePrivateCard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  cards: KanbanCard[],
+  cardId: string,
+  targetStatus: string,
+  targetIndex: number,
+): Promise<KanbanCard> {
+  const card = cards.find((c) => c.id === cardId);
+  if (!card) throw new Error(`Card not found in the supplied list: ${cardId}`);
+
+  const columnRanks = cards
+    .filter((c) => c.status === targetStatus && c.id !== cardId)
+    .map((c) => c.rank)
+    .sort((a, b) => a - b);
+
+  return updatePrivateCard(ctx, board, card, {
+    status: targetStatus,
+    rank: computeRank(columnRanks, targetIndex),
+  });
+}
+
+/**
+ * Doc 05 §7, in order:
+ *   1. decrypt under the board key — a failure means the writer had no key
+ *   2. inner `a` must equal this board's coordinate — blocks cross-posting
+ *   3. author must be the board owner or a maintainer — blocks card injection
+ *   4. resolve one version per `d` by NIP-01 rules — newest, ties by lowest id
+ *
+ * One relay-side filter on `b`, one on deletions. No client-side scan of a
+ * global kind, and no signer round trip per card.
+ */
+export async function fetchPrivateCards(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+): Promise<KanbanCard[]> {
+  const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+  const coordinate = boardCoordinate(board);
+
+  const events = await ctx.runtime.querySync(ctx.relays, {
+    kinds: [KANBAN_KINDS.privateCard],
+    "#b": [boardPointer(board, viewKeyNsec)],
+  });
+  if (events.length === 0) return [];
+
+  const allowed = new Set([board.pubkey, ...board.maintainers]);
+  const authored = events.filter((event) => allowed.has(event.pubkey));
+  if (authored.length === 0) return [];
+
+  const deletions = await ctx.runtime.querySync(ctx.relays, {
+    kinds: [KANBAN_KINDS.deletion],
+    authors: [...allowed],
+  });
+  const deleted = collectDeleted(deletions);
+  const live = authored.filter((event) => !isDeleted(event, deleted, coordinateOf));
+
+  // Decrypt before resolving: the `a` check needs plaintext, and a payload that
+  // fails it must not be allowed to win its `d` group and hide the real card.
+  const decrypted = new Map<string, string[][]>();
+  const usable: Event[] = [];
+  for (const event of live) {
+    try {
+      const payload = JSON.parse(await decryptWithViewKey(viewKeyNsec, event.content)) as unknown;
+      if (!Array.isArray(payload)) continue;
+      const inner = payload as string[][];
+      if (inner.find((t) => t[0] === "a")?.[1] !== coordinate) continue;
+      decrypted.set(event.id, inner);
+      usable.push(event);
+    } catch {
+      continue;
+    }
+  }
+
+  const cards: KanbanCard[] = [];
+  for (const event of newestByDTag(usable).values()) {
+    const card = parsePrivateCard(event, decrypted.get(event.id)!);
     if (card) cards.push(card);
   }
   return cards.sort((a, b) => a.rank - b.rank);

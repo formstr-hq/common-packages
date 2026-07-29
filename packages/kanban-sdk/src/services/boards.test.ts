@@ -7,6 +7,7 @@ import { fetchBoardLists, removeBoardFromList } from "./boardLists";
 import {
   createBoard,
   createPrivateBoard,
+  deleteBoard,
   fetchBoardByCoordinate,
   fetchBoards,
   fetchPrivateBoardByCoordinate,
@@ -286,5 +287,40 @@ describe("updatePrivateBoard", () => {
     await expect(
       updatePrivateBoard(ctx, { ...board, viewKey: undefined }, { title: "Q4" }),
     ).rejects.toThrow(/No view key/);
+  });
+});
+
+describe("deleteBoard", () => {
+  it("publishes a kind 5 naming both the event id and the coordinate", async () => {
+    const ctx = makeCtx();
+    const { board } = await createPrivateBoard(ctx, { title: "Q3", columns: [], private: true });
+    await deleteBoard(ctx, board);
+
+    const deletion = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.deletion)!;
+    expect(deletion.tags).toContainEqual(["e", board.eventId]);
+    expect(deletion.tags).toContainEqual([
+      "a",
+      `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`,
+    ]);
+    expect(deletion.tags).toContainEqual(["k", String(KANBAN_KINDS.privateBoard)]);
+  });
+
+  it("unlinks the board from every list so no fetch chases a tombstone", async () => {
+    const ctx = makeCtx();
+    const { board } = await createPrivateBoard(ctx, { title: "Q3", columns: [], private: true });
+    await deleteBoard(ctx, board);
+
+    expect((await fetchBoardLists(ctx))[0].boards).toEqual([]);
+    expect(await fetchPrivateBoards(ctx)).toEqual([]);
+  });
+
+  it("uses kind 30301 in the deletion of a public board", async () => {
+    const ctx = makeCtx();
+    const board = await createBoard(ctx, { title: "Public", columns: [] });
+    await deleteBoard(ctx, board);
+
+    const deletion = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.deletion)!;
+    expect(deletion.tags).toContainEqual(["k", String(KANBAN_KINDS.publicBoard)]);
+    expect(await fetchBoards(ctx)).toEqual([]);
   });
 });

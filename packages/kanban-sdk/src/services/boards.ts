@@ -26,7 +26,13 @@ import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardDraft, KanbanBoard, KanbanBoardList } from "../types";
-import { addBoardToList, ensureBoardList, fetchBoardLists, lookupBoardViewKey } from "./boardLists";
+import {
+  addBoardToList,
+  ensureBoardList,
+  fetchBoardLists,
+  lookupBoardViewKey,
+  removeBoardFromList,
+} from "./boardLists";
 
 const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
@@ -290,6 +296,36 @@ export async function fetchPrivateBoards(ctx: KanbanCtx): Promise<KanbanBoard[]>
     }
   }
   return boards;
+}
+
+export async function deleteBoard(ctx: KanbanCtx, board: KanbanBoard): Promise<void> {
+  const signer = await ctx.getSigner();
+  const coordinate = boardCoordinate(board);
+  const kind = board.isPrivate ? KANBAN_KINDS.privateBoard : KANBAN_KINDS.publicBoard;
+
+  const signed = await signer.signEvent({
+    kind: KANBAN_KINDS.deletion,
+    created_at: nextCreatedAt(),
+    // Both `e` and `a`: an addressable event keeps resolving by coordinate after
+    // its id is tombstoned, so naming only one leaves it half-deleted.
+    tags: [
+      ["e", board.eventId],
+      ["a", coordinate],
+      ["k", String(kind)],
+    ],
+    content: "",
+  });
+  await ctx.runtime.publish(ctx.relays, signed);
+
+  if (!board.isPrivate) return;
+
+  // Doc 05 §9: a deleted board must leave its lists too, or every later fetch
+  // retries a coordinate that will never resolve.
+  for (const list of await fetchBoardLists(ctx)) {
+    if (list.boards.some((ref) => ref.coordinate === coordinate)) {
+      await removeBoardFromList(ctx, list, coordinate);
+    }
+  }
 }
 
 export { boardCoordinate };

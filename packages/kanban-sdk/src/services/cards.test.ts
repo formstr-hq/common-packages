@@ -12,6 +12,7 @@ import {
   canEditCards,
   createCard,
   createPrivateCard,
+  deleteCard,
   fetchCards,
   fetchPrivateCards,
   moveCard,
@@ -408,5 +409,21 @@ describe("updatePrivateCard", () => {
       .filter((e) => e.kind === KANBAN_KINDS.privateCard)
       .map((e) => e.tags.find((t) => t[0] === "b")![1]);
     expect(new Set(pointers).size).toBe(1);
+  });
+});
+
+describe("deleteCard", () => {
+  it("removes a private card from later fetches", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, { title: "Doomed", status: "col-1" });
+    await deleteCard(ctx, card);
+
+    const deletion = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.deletion)!;
+    expect(deletion.tags).toContainEqual(["e", card.eventId]);
+    expect(deletion.tags).toContainEqual([
+      "a",
+      `${KANBAN_KINDS.privateCard}:${card.pubkey}:${card.id}`,
+    ]);
+    expect(await fetchPrivateCards(ctx, board)).toEqual([]);
   });
 });

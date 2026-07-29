@@ -335,3 +335,20 @@ export async function fetchPrivateCards(
   }
   return cards.sort((a, b) => a.rank - b.rank);
 }
+
+export async function deleteCard(ctx: KanbanCtx, card: KanbanCard): Promise<void> {
+  const signer = await ctx.getSigner();
+  const kind = card.isPrivate ? KANBAN_KINDS.privateCard : KANBAN_KINDS.publicCard;
+
+  const signed = await signer.signEvent({
+    kind: KANBAN_KINDS.deletion,
+    created_at: nextCreatedAt(),
+    tags: [
+      ["e", card.eventId],
+      ["a", `${kind}:${card.pubkey}:${card.id}`],
+      ["k", String(kind)],
+    ],
+    content: "",
+  });
+  await ctx.runtime.publish(ctx.relays, signed);
+}

@@ -92,3 +92,25 @@ export interface CardDraft {
   labels?: string[];
   links?: CardLink[];
 }
+
+export type BoardRole = "owner" | "maintainer" | "member";
+
+/** One board's entry in a board list: where it is, and the key that opens it. */
+export interface BoardListRef {
+  /** `32301:<author>:<d>` */
+  coordinate: string;
+  relayHint: string;
+  /** The board view key as an `nsec`. Empty when unknown. */
+  viewKey: string;
+  /** Role as last known. Advisory — the board's own tags are authoritative. */
+  role: BoardRole;
+}
+
+export interface KanbanBoardList {
+  /** The `d` tag. */
+  id: string;
+  eventId: string;
+  title: string;
+  boards: BoardListRef[];
+  createdAt: number;
+}

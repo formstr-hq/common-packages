@@ -35,6 +35,17 @@ export interface KanbanCtx {
   getSigner(): Promise<KanbanSigner>;
   runtime: NostrRuntime;
   relays: string[];
+  /**
+   * Gift-wrap kind for invitations. `1053` by default, matching NIP-52E.
+   *
+   * NIP-59's relay-side protection ("serve kind 1059 only to the p-tagged
+   * recipient") is written for 1059 specifically, so 1053 gets none of it: anyone
+   * can subscribe to `{"kinds":[1053]}` and enumerate who is being invited to
+   * private boards. Kept for consistency with the shipped calendar, which has the
+   * same leak; configurable so switching to 1059 is one line. Doc 07 §A6.
+   */
+  wrapKind: number;
+  wrapTimestamps?: "jittered" | "real";
 }
 
 export class SignerRequiredError extends Error {
@@ -75,5 +86,12 @@ export class NotBoardOwnerError extends Error {
         `single-owner (doc 05 §7): only the author can rename or re-column a board.`,
     );
     this.name = "NotBoardOwnerError";
+  }
+}
+
+export class InvitationVerificationError extends Error {
+  constructor(reason: string) {
+    super(`Rejected an invitation: ${reason}`);
+    this.name = "InvitationVerificationError";
   }
 }

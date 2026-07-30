@@ -1,0 +1,167 @@
+import { boardCoordinate } from "../codec/board";
+import { buildInvitationRumorTags, parseInvitationRumor } from "../codec/invitation";
+import { InvitationVerificationError, type KanbanCtx } from "../contracts";
+import { unwrapEvent, wrapEvent } from "../crypto/nip59";
+import { nextCreatedAt } from "../discovery/dedupe";
+import { fetchRelayListsForPubkeys, getInvitationInboxRelays } from "../discovery/relays";
+import { KANBAN_KINDS } from "../kinds";
+import type { BoardInvitation, BoardRole, KanbanBoard, KanbanBoardList } from "../types";
+import { addBoardToList, ensureBoardList, fetchBoardLists } from "./boardLists";
+import { fetchPrivateBoardByCoordinate, resolveBoardViewKey } from "./boards";
+
+/**
+ * Gift-wrap the board's view key to each recipient and publish each wrap to THAT
+ * recipient's inbox relays (doc 05 §10). Publishing to our own relay set instead
+ * is the most common reason an invitation silently never arrives.
+ */
+export async function sendInvitations(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  recipients: { pubkey: string; role: BoardRole }[],
+  message = "",
+): Promise<void> {
+  if (recipients.length === 0) return;
+
+  const signer = await ctx.getSigner();
+  const viewKey = await resolveBoardViewKey(ctx, board);
+  const coordinate = boardCoordinate(board);
+  const relayHint = board.relayHint ?? ctx.relays[0] ?? "";
+
+  const inboxes = await fetchRelayListsForPubkeys(
+    ctx.runtime,
+    ctx.relays,
+    recipients.map((r) => r.pubkey),
+  );
+
+  const publishes: Promise<void>[] = [];
+  for (const recipient of recipients) {
+    // Wrap serially — remote signers (NIP-46) typically reject concurrent
+    // requests — but let the publishes overlap.
+    const wrap = await wrapEvent(
+      {
+        kind: KANBAN_KINDS.inviteRumor,
+        content: message,
+        tags: buildInvitationRumorTags({
+          coordinate,
+          relayHint,
+          viewKey,
+          role: recipient.role,
+        }),
+      },
+      signer,
+      recipient.pubkey,
+      ctx.wrapKind,
+      { timestamps: ctx.wrapTimestamps },
+    );
+    publishes.push(ctx.runtime.publish(inboxes.get(recipient.pubkey) ?? ctx.relays, wrap));
+  }
+  await Promise.all(publishes);
+}
+
+/**
+ * Pending invitations addressed to us: unwrapped, verified, deduplicated by
+ * board, and minus anything already accepted or dismissed.
+ */
+export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[]> {
+  const signer = await ctx.getSigner();
+  const pubkey = await signer.getPublicKey();
+  const inbox = await getInvitationInboxRelays(ctx.runtime, ctx.relays, pubkey);
+
+  const [wraps, removals, lists] = await Promise.all([
+    ctx.runtime.querySync(inbox, { kinds: [ctx.wrapKind], "#p": [pubkey] }),
+    ctx.runtime.querySync(inbox, {
+      kinds: [KANBAN_KINDS.membershipRemoval],
+      authors: [pubkey],
+    }),
+    fetchBoardLists(ctx),
+  ]);
+
+  const dismissed = new Set(
+    removals.flatMap((event) => event.tags.filter((t) => t[0] === "a").map((t) => t[1])),
+  );
+  const accepted = new Set(lists.flatMap((list) => list.boards.map((ref) => ref.coordinate)));
+
+  // One entry per board: a re-invitation (say, after a key rotation) supersedes
+  // the older wrap rather than showing up as a second pending item.
+  const newest = new Map<string, BoardInvitation>();
+  for (const wrap of wraps) {
+    let invitation: BoardInvitation | null;
+    try {
+      const rumor = await unwrapEvent(wrap, signer);
+      invitation = parseInvitationRumor(rumor, wrap.id);
+    } catch {
+      // Not ours, malformed, or failed the seal-signer check. A forged invitation
+      // carries a key the user would act on, so it must never surface.
+      continue;
+    }
+    if (!invitation) continue;
+    if (invitation.inviterPubkey === pubkey) continue; // our own, echoed back
+    if (dismissed.has(invitation.coordinate) || accepted.has(invitation.coordinate)) continue;
+
+    const previous = newest.get(invitation.coordinate);
+    // Newest wins; ties break by lowest wrap id. A rumor's created_at has
+    // one-second resolution, so two invitations sent in the same second are
+    // genuinely indistinguishable in age — the id tie-break only buys
+    // determinism, so every client picks the same one instead of whichever the
+    // relay happened to return first. Accepting a stale key is not silent:
+    // `acceptInvitation` verifies the key opens the board before storing it.
+    if (
+      !previous ||
+      invitation.createdAt > previous.createdAt ||
+      (invitation.createdAt === previous.createdAt && invitation.wrapId < previous.wrapId)
+    ) {
+      newest.set(invitation.coordinate, invitation);
+    }
+  }
+
+  return [...newest.values()];
+}
+
+/**
+ * Accept: prove the key actually opens the board, then store the ref in our own
+ * board list. The proof matters — a ref whose key does not work is a board the
+ * user will see listed and never be able to open.
+ */
+export async function acceptInvitation(
+  ctx: KanbanCtx,
+  invitation: BoardInvitation,
+  opts: { listId?: string } = {},
+): Promise<KanbanBoardList> {
+  const board = await fetchPrivateBoardByCoordinate(ctx, invitation.coordinate, invitation.viewKey);
+  if (!board) {
+    throw new InvitationVerificationError(
+      `the board at ${invitation.coordinate} could not be read with the key offered`,
+    );
+  }
+
+  const list = await ensureBoardList(ctx, opts.listId);
+  return addBoardToList(ctx, list, {
+    coordinate: invitation.coordinate,
+    relayHint: invitation.relayHint,
+    viewKey: invitation.viewKey,
+    role: invitation.role,
+  });
+}
+
+/**
+ * Decline. Publishes the kind-84 membership removal of doc 05 §8 naming ourselves,
+ * which both tells the inviter to stop showing us as a member and is what
+ * `fetchInvitations` filters on so the invitation stays gone locally.
+ */
+export async function dismissInvitation(
+  ctx: KanbanCtx,
+  invitation: BoardInvitation,
+): Promise<void> {
+  const signer = await ctx.getSigner();
+  const signed = await signer.signEvent({
+    kind: KANBAN_KINDS.membershipRemoval,
+    created_at: nextCreatedAt(),
+    tags: [
+      ["a", invitation.coordinate],
+      ["e", invitation.wrapId],
+      ["k", String(KANBAN_KINDS.privateBoard)],
+    ],
+    content: "",
+  });
+  await ctx.runtime.publish(ctx.relays, signed);
+}

@@ -9,6 +9,7 @@ import {
 } from "nostr-tools";
 
 import type { KanbanCtx, KanbanSigner, NostrRuntime, SubscriptionHandle } from "../src/contracts";
+import { KANBAN_KINDS } from "../src/kinds";
 
 /** In-memory relay. Applies NIP-01 addressable replacement so tests see real behaviour. */
 export class FakeRuntime implements NostrRuntime {
@@ -81,5 +82,6 @@ export function makeCtx(
     getSigner: async () => signer,
     runtime,
     relays: ["wss://test.relay/"],
+    wrapKind: KANBAN_KINDS.inviteGiftWrap,
   } as KanbanCtx & { runtime: FakeRuntime };
 }

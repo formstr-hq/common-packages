@@ -341,11 +341,50 @@ export async function fetchPrivateCards(
   }
 
   const cards: KanbanCard[] = [];
-  for (const event of newestByDTag(usable).values()) {
+  for (const event of resolveWithRotation(usable, (e) => decrypted.get(e.id)!).values()) {
     const card = parsePrivateCard(event, decrypted.get(event.id)!);
     if (card) cards.push(card);
   }
   return cards.sort((a, b) => a.rank - b.rank);
+}
+
+/**
+ * NIP-01 resolution per `d`, with the rotation exception of doc 05 §7 step 4.
+ *
+ * A rotation republishes other people's cards under the rotator's pubkey, so two
+ * coordinates end up sharing a `d`: the real author's, and the rotator's copy
+ * carrying `rotated-author`. Resolving those by `created_at` alone hands the card
+ * to whoever wrote last, so its displayed authorship flips on every edit. A
+ * version signed by the recorded original author therefore wins outright; only
+ * when no such version exists does newest-wins decide.
+ *
+ * Exported because comments resolve by exactly the same rules (doc 05 §5b).
+ */
+export function resolveWithRotation(
+  events: Event[],
+  innerOf: (event: Event) => string[][],
+): Map<string, Event> {
+  const byDTag = new Map<string, Event[]>();
+  for (const event of events) {
+    const dTag = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
+    const bucket = byDTag.get(dTag) ?? [];
+    bucket.push(event);
+    byDTag.set(dTag, bucket);
+  }
+
+  const resolved = new Map<string, Event>();
+  for (const [dTag, bucket] of byDTag) {
+    const rotatedAuthor = bucket
+      .map((event) => innerOf(event).find((t) => t[0] === "rotated-author")?.[1])
+      .find((value): value is string => value !== undefined);
+
+    const authored = rotatedAuthor ? bucket.filter((event) => event.pubkey === rotatedAuthor) : [];
+
+    const candidates = authored.length > 0 ? authored : bucket;
+    const winner = newestByDTag(candidates).get(dTag);
+    if (winner) resolved.set(dTag, winner);
+  }
+  return resolved;
 }
 
 export async function deleteCard(ctx: KanbanCtx, card: KanbanCard): Promise<void> {

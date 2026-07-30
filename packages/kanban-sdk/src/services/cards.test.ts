@@ -454,3 +454,107 @@ describe("updatePrivateCard board mismatch", () => {
     expect(await fetchPrivateCards(ctx, b)).toEqual([]);
   });
 });
+
+describe("rotation resolution (doc 05 §7 step 4 exception)", () => {
+  it("prefers the real author's own version over a rotator's copy, whatever the timestamps", async () => {
+    const ownerSecret = generateSecretKey();
+    const bobSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(bobSecret)],
+      private: true,
+    });
+
+    const pointer = boardPointer(board, board.viewKey!);
+    const coordinate = `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`;
+    const seed = async (secret: Uint8Array, inner: string[][], createdAt: number) =>
+      ctx.runtime.seed(
+        finalizeEvent(
+          {
+            kind: KANBAN_KINDS.privateCard,
+            created_at: createdAt,
+            tags: [
+              ["d", "card-7"],
+              ["b", pointer],
+            ],
+            content: await encryptWithViewKey(board.viewKey!, JSON.stringify(inner)),
+          },
+          secret,
+        ),
+      );
+
+    // Bob's own version, written first.
+    await seed(
+      bobSecret,
+      [
+        ["d", "card-7"],
+        ["a", coordinate],
+        ["title", "Bob's own"],
+        ["rank", "5"],
+      ],
+      1000,
+    );
+    // The rotator's copy, written LATER — newest-wins alone would pick this.
+    await seed(
+      ownerSecret,
+      [
+        ["d", "card-7"],
+        ["a", coordinate],
+        ["title", "rotated copy"],
+        ["rank", "5"],
+        ["rotated-author", getPublicKey(bobSecret)],
+      ],
+      2000,
+    );
+
+    const [card] = await fetchPrivateCards(ctx, board);
+    expect(card.title).toBe("Bob's own");
+    expect(card.authorPubkey).toBe(getPublicKey(bobSecret));
+  });
+
+  it("falls back to newest-wins among rotator copies only", async () => {
+    const ownerSecret = generateSecretKey();
+    const bob = getPublicKey(generateSecretKey());
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      private: true,
+    });
+
+    const pointer = boardPointer(board, board.viewKey!);
+    const coordinate = `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`;
+    for (const [title, createdAt] of [
+      ["first rotation", 1000],
+      ["second rotation", 2000],
+    ] as const) {
+      ctx.runtime.seed(
+        finalizeEvent(
+          {
+            kind: KANBAN_KINDS.privateCard,
+            created_at: createdAt,
+            tags: [
+              ["d", "card-7"],
+              ["b", pointer],
+            ],
+            content: await encryptWithViewKey(
+              board.viewKey!,
+              JSON.stringify([
+                ["d", "card-7"],
+                ["a", coordinate],
+                ["title", title],
+                ["rank", "5"],
+                ["rotated-author", bob],
+              ]),
+            ),
+          },
+          ownerSecret,
+        ),
+      );
+    }
+
+    expect((await fetchPrivateCards(ctx, board))[0].title).toBe("second rotation");
+  });
+});

@@ -45,7 +45,16 @@ export interface KanbanBoard {
 export interface KanbanCard {
   /** The `d` tag. */
   id: string;
+  /** Who signed this version — the rotator, after a rotation republished it. */
   pubkey: string;
+  /**
+   * Who actually wrote this card. Equals `pubkey` normally; after a key rotation
+   * republished someone else's card, it is the original author recorded in the
+   * payload (doc 05 §8) while `pubkey` is the rotator.
+   */
+  authorPubkey: string;
+  /** True when this version is a rotator's copy of somebody else's card. */
+  rotated: boolean;
   eventId: string;
   /** `30301:<pubkey>:<d>` of the owning board. */
   boardCoordinate: string;

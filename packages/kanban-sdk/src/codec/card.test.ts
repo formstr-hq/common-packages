@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "nostr-tools";
 
 import {
+  PRIVATE_CARD_MANAGED_TAGS,
   buildCardLinkTag,
+  buildPrivateCardTags,
   buildPublicCardTags,
   parseCardLink,
-  parsePublicCard,
-  buildPrivateCardTags,
   parsePrivateCard,
+  parsePublicCard,
 } from "./card";
 
 const PUBKEY = "a".repeat(64);
@@ -316,5 +317,33 @@ describe("parsePrivateCard", () => {
     const card = parsePrivateCard(privateCardEvent("card-d"), inner);
     expect(card!.trackedKind).toBe(1621);
     expect(card!.trackedRef).toEqual({ eventId: "f".repeat(64) });
+  });
+});
+
+describe("rotated-author", () => {
+  it("reports the recorded original author, not the rotator who republished it", () => {
+    const inner: string[][] = [
+      ["d", "card-d"],
+      ["a", BOARD_COORDINATE],
+      ["title", "Bob's card, rotated by Alice"],
+      ["rotated-author", "b".repeat(64)],
+    ];
+    const card = parsePrivateCard(privateCardEvent("card-d"), inner);
+
+    expect(card!.pubkey).toBe("c".repeat(64)); // the signer: Alice
+    expect(card!.authorPubkey).toBe("b".repeat(64)); // the real author: Bob
+    expect(card!.rotated).toBe(true);
+  });
+
+  it("falls back to the event author when no rotation has happened", () => {
+    const inner = buildPrivateCardTags({ title: "T" }, "card-d", BOARD_COORDINATE, 10);
+    const card = parsePrivateCard(privateCardEvent("card-d"), inner);
+
+    expect(card!.authorPubkey).toBe(card!.pubkey);
+    expect(card!.rotated).toBe(false);
+  });
+
+  it("keeps rotated-author out of the managed tags so an edit cannot drop it", () => {
+    expect(PRIVATE_CARD_MANAGED_TAGS).not.toContain("rotated-author");
   });
 });

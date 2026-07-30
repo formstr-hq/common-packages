@@ -4,6 +4,7 @@ export * from "./types";
 export {
   BoardNotFoundError,
   NotAMaintainerError,
+  InvitationVerificationError,
   NotBoardOwnerError,
   SignerRequiredError,
   ViewKeyRequiredError,
@@ -63,3 +64,20 @@ export {
 } from "./codec/boardList";
 export { boardPointer } from "./services/cards";
 export { resolveBoardViewKey } from "./services/boards";
+
+// Sharing (Plan 3).
+export {
+  createRumor,
+  createSeal,
+  createWrap,
+  unwrapEvent,
+  wrapEvent,
+  wrapManyEvents,
+  type WrapOptions,
+} from "./crypto/nip59";
+export { fetchRelayListsForPubkeys, getInvitationInboxRelays } from "./discovery/relays";
+export { buildInvitationRumorTags, parseInvitationRumor } from "./codec/invitation";
+export { COMMENT_MANAGED_TAGS, buildCommentTags, parseComment } from "./codec/comment";
+export { canComment } from "./services/comments";
+export { resolveWithRotation } from "./services/cards";
+export type { BoardMember, RotationResult } from "./services/members";

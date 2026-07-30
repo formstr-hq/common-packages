@@ -11,13 +11,19 @@ import { SimplePoolRuntime } from "./runtime/pool";
 import * as boardLists from "./services/boardLists";
 import * as boards from "./services/boards";
 import * as cards from "./services/cards";
+import * as comments from "./services/comments";
+import * as invitations from "./services/invitations";
+import * as members from "./services/members";
 import type {
   BoardDraft,
+  BoardInvitation,
   BoardListRef,
   CardDraft,
+  CommentDraft,
   KanbanBoard,
   KanbanBoardList,
   KanbanCard,
+  KanbanComment,
 } from "./types";
 
 /** Cross-app default relay set. Keep any override a superset or boards stop syncing. */
@@ -160,4 +166,66 @@ export class KanbanSDK {
   lookupBoardViewKey(coordinate: string): Promise<string | undefined> {
     return boardLists.lookupBoardViewKey(this.ctx, coordinate);
   }
+
+  // ── Sharing (Plan 3) ──────────────────────────────────
+
+  invite(
+    board: KanbanBoard,
+    invitees: { pubkey: string; role: "maintainer" | "member" }[],
+    message?: string,
+  ): Promise<KanbanBoard> {
+    return members.inviteMembers(this.ctx, board, invitees, message);
+  }
+
+  fetchMembers(board: KanbanBoard): Promise<members.BoardMember[]> {
+    return members.fetchMembers(this.ctx, board);
+  }
+
+  removeMember(board: KanbanBoard, pubkey: string): Promise<KanbanBoard> {
+    return members.removeMember(this.ctx, board, pubkey);
+  }
+
+  /** Cuts off removed members. O(cards), not atomic, and not retroactive. */
+  rotateBoardKey(
+    board: KanbanBoard,
+    opts: { remove?: string[] } = {},
+  ): Promise<members.RotationResult> {
+    return members.rotateBoardKey(this.ctx, board, opts);
+  }
+
+  fetchInvitations(): Promise<BoardInvitation[]> {
+    return invitations.fetchInvitations(this.ctx);
+  }
+
+  acceptInvitation(
+    invitation: BoardInvitation,
+    opts: { listId?: string } = {},
+  ): Promise<KanbanBoardList> {
+    return invitations.acceptInvitation(this.ctx, invitation, opts);
+  }
+
+  dismissInvitation(invitation: BoardInvitation): Promise<void> {
+    return invitations.dismissInvitation(this.ctx, invitation);
+  }
+
+  createComment(board: KanbanBoard, cardId: string, draft: CommentDraft): Promise<KanbanComment> {
+    return comments.createComment(this.ctx, board, cardId, draft);
+  }
+
+  updateComment(
+    board: KanbanBoard,
+    comment: KanbanComment,
+    changes: Partial<CommentDraft>,
+  ): Promise<KanbanComment> {
+    return comments.updateComment(this.ctx, board, comment, changes);
+  }
+
+  fetchComments(board: KanbanBoard, cardId?: string): Promise<KanbanComment[]> {
+    return comments.fetchComments(this.ctx, board, cardId);
+  }
+
+  deleteComment(comment: KanbanComment): Promise<void> {
+    return comments.deleteComment(this.ctx, comment);
+  }
+
 }

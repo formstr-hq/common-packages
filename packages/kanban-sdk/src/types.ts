@@ -139,3 +139,31 @@ export interface BoardInvitation {
   wrapId: string;
   createdAt: number;
 }
+
+export interface KanbanComment {
+  /** The `d` tag. */
+  id: string;
+  /** Who signed this version — the rotator, after a rotation republished it. */
+  pubkey: string;
+  /** Who actually wrote it: `rotated-author` when present, else `pubkey`. */
+  authorPubkey: string;
+  /** True when this version is a rotator's copy of somebody else's comment. */
+  rotated: boolean;
+  eventId: string;
+  /** `32301:<author>:<d>` of the owning board. */
+  boardCoordinate: string;
+  /** The `d` identifier of the card being commented on. */
+  cardId: string;
+  content: string;
+  mentions: string[];
+  /** Parent comment's `d`, for one level of threading. */
+  replyTo?: string;
+  createdAt: number;
+  rawTags: string[][];
+}
+
+export interface CommentDraft {
+  content: string;
+  mentions?: string[];
+  replyTo?: string;
+}

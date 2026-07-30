@@ -114,3 +114,19 @@ export interface KanbanBoardList {
   boards: BoardListRef[];
   createdAt: number;
 }
+
+/** A board key delivered by gift wrap, after verification. Doc 05 §6. */
+export interface BoardInvitation {
+  /** `32301:<author>:<d>` */
+  coordinate: string;
+  relayHint: string;
+  /** The board view key as an `nsec` — this is what the invitation is FOR. */
+  viewKey: string;
+  /** Advisory. The decrypted board's own tags are authoritative. */
+  role: BoardRole;
+  inviterPubkey: string;
+  message: string;
+  /** Event id of the gift wrap, so a client can dedupe and dismiss. */
+  wrapId: string;
+  createdAt: number;
+}

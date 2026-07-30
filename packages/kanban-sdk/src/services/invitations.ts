@@ -76,10 +76,25 @@ export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[
     fetchBoardLists(ctx),
   ]);
 
-  const dismissed = new Set(
-    removals.flatMap((event) => event.tags.filter((t) => t[0] === "a").map((t) => t[1])),
-  );
-  const accepted = new Set(lists.flatMap((list) => list.boards.map((ref) => ref.coordinate)));
+  // When we declined, and for which board. A later re-invitation must still
+  // surface: declining is about the invitation in hand, not a standing refusal
+  // of the board forever.
+  const dismissedAt = new Map<string, number>();
+  for (const event of removals) {
+    for (const tag of event.tags) {
+      if (tag[0] !== "a" || !tag[1]) continue;
+      dismissedAt.set(tag[1], Math.max(dismissedAt.get(tag[1]) ?? 0, event.created_at));
+    }
+  }
+
+  // Which key we already hold for each board. A re-invitation carrying a
+  // DIFFERENT key is a rotation (doc 05 §8 step 4) and must surface — our stored
+  // key is stale and opens nothing. Suppressing it by coordinate alone would
+  // leave the member silently locked out of a board they still belong to.
+  const acceptedKeys = new Map<string, string>();
+  for (const list of lists) {
+    for (const ref of list.boards) acceptedKeys.set(ref.coordinate, ref.viewKey);
+  }
 
   // One entry per board: a re-invitation (say, after a key rotation) supersedes
   // the older wrap rather than showing up as a second pending item.
@@ -96,7 +111,8 @@ export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[
     }
     if (!invitation) continue;
     if (invitation.inviterPubkey === pubkey) continue; // our own, echoed back
-    if (dismissed.has(invitation.coordinate) || accepted.has(invitation.coordinate)) continue;
+    if (acceptedKeys.get(invitation.coordinate) === invitation.viewKey) continue;
+    if ((dismissedAt.get(invitation.coordinate) ?? 0) >= invitation.createdAt) continue;
 
     const previous = newest.get(invitation.coordinate);
     // Newest wins; ties break by lowest wrap id. A rumor's created_at has

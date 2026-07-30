@@ -4,8 +4,11 @@ import { describe, expect, it } from "vitest";
 import { FakeRuntime, fakeSigner, makeCtx } from "../../test/helpers";
 import { KANBAN_KINDS } from "../kinds";
 import { createPrivateBoard, fetchPrivateBoards } from "./boards";
-import { fetchInvitations } from "./invitations";
-import { fetchMembers, inviteMembers, removeMember } from "./members";
+import { fetchBoardLists } from "./boardLists";
+import { boardPointer, createPrivateCard, fetchPrivateCards } from "./cards";
+import { createComment, fetchComments } from "./comments";
+import { acceptInvitation, fetchInvitations } from "./invitations";
+import { fetchMembers, inviteMembers, removeMember, rotateBoardKey } from "./members";
 
 async function fixture() {
   const runtime = new FakeRuntime();
@@ -98,5 +101,117 @@ describe("removeMember", () => {
     // Doc 05 §8: removal alone takes no key away. Only rotateBoardKey does.
     const stillReadable = await fetchPrivateBoards(alice);
     expect(stillReadable[0].viewKey).toBe(board.viewKey);
+  });
+});
+
+describe("rotateBoardKey", () => {
+  it("mints a new key, re-encrypts everything, and leaves the board readable", async () => {
+    const { alice, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    await createPrivateCard(alice, withBob, { title: "Ship it", status: "col-1" });
+
+    const result = await rotateBoardKey(alice, withBob, { remove: [bobPubkey] });
+
+    expect(result.board.viewKey).not.toBe(board.viewKey);
+    expect(result.cardsRewritten).toBe(1);
+    expect(result.board.maintainers).toEqual([]);
+    expect((await fetchPrivateCards(alice, result.board)).map((c) => c.title)).toEqual(["Ship it"]);
+  });
+
+  it("changes the blinded pointer, so cards move to a new label", async () => {
+    const { alice, board } = await fixture();
+    await createPrivateCard(alice, board, { title: "Ship it", status: "col-1" });
+    const before = boardPointer(board, board.viewKey!);
+
+    const result = await rotateBoardKey(alice, board);
+    expect(boardPointer(result.board, result.board.viewKey!)).not.toBe(before);
+  });
+
+  it("cuts off the removed member: their stored key no longer opens the board", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+    await createPrivateCard(alice, withBob, { title: "secret", status: "col-1" });
+
+    await rotateBoardKey(alice, withBob, { remove: [bobPubkey] });
+
+    // Bob's list still holds the OLD key; it opens nothing current.
+    expect(await fetchPrivateBoards(bob)).toEqual([]);
+  });
+
+  it("re-invites everyone who remains, with the new key", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [first] = await fetchInvitations(bob);
+    await acceptInvitation(bob, first);
+
+    const result = await rotateBoardKey(alice, withBob);
+    expect(result.invited).toEqual([bobPubkey]);
+
+    // Bob is re-invited with the new key and can accept again.
+    const [second] = await fetchInvitations(bob);
+    expect(second.viewKey).toBe(result.board.viewKey);
+    await acceptInvitation(bob, second);
+    expect((await fetchPrivateBoards(bob))[0].title).toBe("Q3");
+  });
+
+  it("records the original author on a card it did not write", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+
+    const bobsBoard = (await fetchPrivateBoards(bob))[0];
+    await createPrivateCard(bob, bobsBoard, { title: "Bob wrote this", status: "col-1" });
+
+    const result = await rotateBoardKey(alice, withBob);
+    const [card] = await fetchPrivateCards(alice, result.board);
+
+    expect(card.title).toBe("Bob wrote this");
+    expect(card.pubkey).toBe(board.pubkey); // signed by Alice, the rotator
+    expect(card.authorPubkey).toBe(bobPubkey); // but attributed to Bob
+    expect(card.rotated).toBe(true);
+  });
+
+  it("does not overwrite an author recorded by an earlier rotation", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+    await createPrivateCard(bob, (await fetchPrivateBoards(bob))[0], {
+      title: "Bob wrote this",
+      status: "col-1",
+    });
+
+    const once = await rotateBoardKey(alice, withBob);
+    const twice = await rotateBoardKey(alice, once.board);
+
+    expect((await fetchPrivateCards(alice, twice.board))[0].authorPubkey).toBe(bobPubkey);
+  });
+
+  it("carries comments across the rotation too", async () => {
+    const { alice, board } = await fixture();
+    const card = await createPrivateCard(alice, board, { title: "Ship it", status: "col-1" });
+    await createComment(alice, board, card.id, { content: "shipping Friday" });
+
+    const result = await rotateBoardKey(alice, board);
+    expect(result.commentsRewritten).toBe(1);
+    expect((await fetchComments(alice, result.board, card.id)).map((c) => c.content)).toEqual([
+      "shipping Friday",
+    ]);
+  });
+
+  it("updates the owner's own board-list ref to the new key", async () => {
+    const { alice, board } = await fixture();
+    const result = await rotateBoardKey(alice, board);
+
+    const [list] = await fetchBoardLists(alice);
+    expect(list.boards[0].viewKey).toBe(result.board.viewKey);
+  });
+
+  it("refuses a rotator who is not the board author", async () => {
+    const { bob, board } = await fixture();
+    await expect(rotateBoardKey(bob, board)).rejects.toThrow(/is not the author/);
   });
 });

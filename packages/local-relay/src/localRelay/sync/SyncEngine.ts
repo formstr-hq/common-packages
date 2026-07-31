@@ -14,7 +14,7 @@
 import type { Event, Filter } from "../core/types";
 import { verifyEvent } from "nostr-tools";
 import { RelayPool } from "./RelayPool";
-import { partitionAuthorsByRelay } from "./outbox";
+import { buildRelayQueryPlan } from "./outbox";
 
 export interface SyncEngineDeps {
   pool: RelayPool;
@@ -32,6 +32,8 @@ export type FetchSpec = Filter & {
   kinds: number[];
   authors: string[];
   userRelays: string[];
+  /** Explicit per-query relays, always queried outside outbox relay caps. */
+  additionalRelays?: string[];
   eoseDeadlineMs?: number;
 };
 
@@ -53,8 +55,10 @@ export class SyncEngine {
   * `close()`. `onEose` fires once when every relay bucket has completed.
   */
   fetch(spec: FetchSpec, onEose?: () => void): SyncHandle {
-    const { userRelays, eoseDeadlineMs, ...baseFilter } = spec;
-    const plan = partitionAuthorsByRelay(spec.authors, userRelays, this.deps.getWriteRelays);
+    const { userRelays, additionalRelays = [], eoseDeadlineMs, ...baseFilter } = spec;
+    const plan = buildRelayQueryPlan(spec.authors, userRelays, this.deps.getWriteRelays, {
+      additionalRelays,
+    });
 
     const buckets = Array.from(plan.entries()).filter(([, authors]) => authors.size > 0);
     if (buckets.length === 0) {

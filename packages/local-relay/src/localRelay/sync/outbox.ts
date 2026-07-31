@@ -12,11 +12,13 @@
  * with a plain map and has no network/storage/cache dependency.
  */
 
-export interface PartitionOptions {
+export interface RelayQueryPlanOptions {
   /** Fan each author to at most this many of their write relays (redundancy vs load). */
   maxRelaysPerAuthor?: number;
   /** Cap on total relays in the plan (mobile WebViews limit concurrent sockets). */
   maxRelays?: number;
+  /** Explicit per-query relays, added outside the relay caps unless already planned. */
+  additionalRelays?: string[];
 }
 
 const DEFAULTS = { maxRelaysPerAuthor: 10, maxRelays: 20 };
@@ -26,11 +28,11 @@ const DEFAULTS = { maxRelaysPerAuthor: 10, maxRelays: 20 };
  * at least one relay (authors with no known outbox fall back to `userRelays`),
  * so no author is silently dropped.
  */
-export function partitionAuthorsByRelay(
+export function buildRelayQueryPlan(
   authors: string[],
   userRelays: string[],
   getWriteRelays: (pubkey: string) => string[],
-  options: PartitionOptions = {},
+  options: RelayQueryPlanOptions = {},
 ): Map<string, Set<string>> {
   const maxPerAuthor =
     options.maxRelaysPerAuthor ?? DEFAULTS.maxRelaysPerAuthor;
@@ -80,6 +82,13 @@ export function partitionAuthorsByRelay(
       // Coverage guarantee: never drop an author.
       for (const r of userRelays) addTo(r, author);
     }
+  }
+
+  // Additional relays bypass both caps and query every author. If normal
+  // routing already planned the relay, retain that scoped bucket instead of
+  // broadening it or creating a duplicate query.
+  for (const relay of new Set(options.additionalRelays ?? [])) {
+    if (!plan.has(relay)) plan.set(relay, new Set(uniqueAuthors));
   }
 
   return plan;

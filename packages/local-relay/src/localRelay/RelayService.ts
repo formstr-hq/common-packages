@@ -429,23 +429,23 @@ export class RelayService {
    * user's relays ∪ the gossip pool, so discovered hints can resolve them.
    *
    * `hintRelays` are the interest's explicit read-relay hints (e.g. a form's
-   * naddr relays). They're folded into BOTH paths — as an extra floor for the
-   * author-scoped outbox partition (so an author with no known kind-10002 is
-   * still fetched from them) and added to the author-less read set — so a fetch
-   * reaches the relays the app knows hold the data, without the global gossip pool.
+   * naddr relays). They're folded into BOTH paths — as uncapped additional
+   * relays for author-scoped outbox queries and as additions to author-less
+   * reads — so a fetch reaches relays the app knows hold the data without
+   * mutating the global gossip pool.
    */
   private openSync(filters: Filter[], hintRelays: string[] = []): SyncHandle {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
       if (filter.authors && filter.authors.length) {
-        const ur = Array.from(new Set([...this.userRelays, ...hintRelays]));
         handles.push(
           this.sync.fetch({
             ...filter,
             kinds,
             authors: filter.authors,
-            userRelays: ur,
+            userRelays: this.userRelays,
+            additionalRelays: hintRelays,
           }),
         );
       } else {

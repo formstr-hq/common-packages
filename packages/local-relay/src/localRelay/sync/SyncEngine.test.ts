@@ -101,6 +101,27 @@ describe("SyncEngine", () => {
     expect(filter.limit).toBe(50);
   });
 
+  it("preserves tag filters in author-scoped relay requests", () => {
+    const { f, engine } = setup();
+    engine.fetch({
+      kinds: [32678],
+      authors: ["alice"],
+      "#d": ["private-event-id"],
+      "#p": ["participant"],
+      userRelays: ["wss://u1"],
+      eoseDeadlineMs: 10 ** 9,
+    });
+    f.last("wss://r1").open();
+
+    const filter = reqOn(f.last("wss://r1"))![2];
+    expect(filter).toEqual({
+      kinds: [32678],
+      authors: ["alice"],
+      "#d": ["private-event-id"],
+      "#p": ["participant"],
+    });
+  });
+
   it("fires EOSE immediately when no authors resolve to a relay bucket", () => {
     const { engine } = setup();
     let eosed = 0;

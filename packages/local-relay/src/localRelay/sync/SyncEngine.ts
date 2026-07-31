@@ -28,15 +28,12 @@ export interface SyncEngineDeps {
   recordSeen?: (eventId: string, relay: string) => void;
 }
 
-export interface FetchSpec {
+export type FetchSpec = Filter & {
   kinds: number[];
   authors: string[];
   userRelays: string[];
-  since?: number;
-  until?: number;
-  limit?: number;
   eoseDeadlineMs?: number;
-}
+};
 
 export interface SyncHandle {
   close(): void;
@@ -53,10 +50,11 @@ export class SyncEngine {
 
   /**
    * Open an outbox-partitioned fetch. Stays live (streaming + ingesting) until
-   * `close()`. `onEose` fires once when every relay bucket has completed.
-   */
+  * `close()`. `onEose` fires once when every relay bucket has completed.
+  */
   fetch(spec: FetchSpec, onEose?: () => void): SyncHandle {
-    const plan = partitionAuthorsByRelay(spec.authors, spec.userRelays, this.deps.getWriteRelays);
+    const { userRelays, eoseDeadlineMs, ...baseFilter } = spec;
+    const plan = partitionAuthorsByRelay(spec.authors, userRelays, this.deps.getWriteRelays);
 
     const buckets = Array.from(plan.entries()).filter(([, authors]) => authors.size > 0);
     if (buckets.length === 0) {
@@ -98,10 +96,9 @@ export class SyncEngine {
     };
 
     for (const [relay, authorSet] of buckets) {
-      const filter: Filter = { kinds: spec.kinds, authors: Array.from(authorSet) };
-      if (spec.since !== undefined) filter.since = spec.since;
-      if (spec.until !== undefined) filter.until = spec.until;
-      if (spec.limit !== undefined) filter.limit = spec.limit;
+      // Preserve the complete NIP-01 filter (including #d/#e/etc.) while routing
+      // only the authors assigned to this relay by the outbox plan.
+      const filter: Filter = { ...baseFilter, authors: Array.from(authorSet) };
 
       const id = this.deps.pool.subscribe(
         [relay],
@@ -114,7 +111,7 @@ export class SyncEngine {
           },
           onEose: onBucketEose,
         },
-        { eoseDeadlineMs: spec.eoseDeadlineMs }
+        { eoseDeadlineMs }
       );
       subIds.push(id);
     }

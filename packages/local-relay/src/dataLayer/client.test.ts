@@ -372,6 +372,11 @@ describe("DataLayer per-interest relay hints", () => {
     expect(f.count("wss://form-relay")).toBe(1); // dialed the hinted relay
     const sock = f.last("wss://form-relay");
     sock.open();
+    expect(sock.sent.find((m) => m[0] === "REQ")![2]).toEqual({
+      kinds: [30168],
+      authors: ["formkey"],
+      "#d": ["abc"],
+    });
     sock.emit([
       "EVENT",
       reqSub(sock),

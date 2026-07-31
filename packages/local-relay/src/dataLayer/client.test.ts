@@ -357,11 +357,11 @@ describe("DataLayer gossip relays", () => {
 describe("DataLayer per-interest relay hints", () => {
   const reqSub = (sock: { sent: any[] }) => sock.sent.find((m) => m[0] === "REQ")![1] as string;
 
-  it("routes an AUTHOR-SCOPED read to a relay hint even when the author has no kind-10002", async () => {
-    // The failing production case: a form's signing key has no outbox (kind-10002),
-    // so the outbox partition would fall back to user relays only and never touch
-    // the relays in the form's naddr. The hint must fold into that floor.
+  it("routes an AUTHOR-SCOPED read to a relay hint even when the author has a known outbox", async () => {
     const { f, service, dataLayer } = await wire();
+    service.db.add(
+      makeEvent({ kind: 10002, pubkey: "formkey", tags: [["r", "wss://author-outbox"]] }),
+    );
     dataLayer.observe(
       [{ kinds: [30168], authors: ["formkey"], "#d": ["abc"] }],
       { onEvent: () => {} },
@@ -370,8 +370,14 @@ describe("DataLayer per-interest relay hints", () => {
     await settle();
 
     expect(f.count("wss://form-relay")).toBe(1); // dialed the hinted relay
+    expect(f.count("wss://author-outbox")).toBe(1); // retained normal outbox routing
     const sock = f.last("wss://form-relay");
     sock.open();
+    expect(sock.sent.find((m) => m[0] === "REQ")![2]).toEqual({
+      kinds: [30168],
+      authors: ["formkey"],
+      "#d": ["abc"],
+    });
     sock.emit([
       "EVENT",
       reqSub(sock),

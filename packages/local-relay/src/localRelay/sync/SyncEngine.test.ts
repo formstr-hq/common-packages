@@ -39,6 +39,41 @@ describe("SyncEngine", () => {
     expect(r2Filter.authors).toEqual(["bob"]);
   });
 
+  it("queries every author on additional relays outside the outbox relay cap", () => {
+    const { f, engine } = setup();
+    const additionalRelays = Array.from({ length: 21 }, (_, i) => `wss://additional-${i}`);
+
+    engine.fetch({
+      kinds: [1],
+      authors: ["alice", "bob"],
+      userRelays: ["wss://u1"],
+      additionalRelays,
+      eoseDeadlineMs: 10 ** 9,
+    });
+
+    for (const relay of additionalRelays) {
+      const socket = f.last(relay);
+      socket.open();
+      expect(reqOn(socket)![2].authors).toEqual(["alice", "bob"]);
+    }
+  });
+
+  it("does not broaden or duplicate an additional relay already in the outbox plan", () => {
+    const { f, engine } = setup();
+
+    engine.fetch({
+      kinds: [1],
+      authors: ["alice", "bob"],
+      userRelays: ["wss://u1"],
+      additionalRelays: ["wss://r1"],
+      eoseDeadlineMs: 10 ** 9,
+    });
+
+    expect(f.count("wss://r1")).toBe(1);
+    f.last("wss://r1").open();
+    expect(reqOn(f.last("wss://r1"))![2].authors).toEqual(["alice"]);
+  });
+
   it("verifies, then ingests events from all buckets", async () => {
     const { f, engine, ingested } = setup();
     engine.fetch({ kinds: [1], authors: ["alice", "bob"], userRelays: ["wss://u1"], eoseDeadlineMs: 10 ** 9 });
@@ -99,6 +134,27 @@ describe("SyncEngine", () => {
     expect(filter.since).toBe(1000);
     expect(filter.until).toBe(5000);
     expect(filter.limit).toBe(50);
+  });
+
+  it("preserves tag filters in author-scoped relay requests", () => {
+    const { f, engine } = setup();
+    engine.fetch({
+      kinds: [32678],
+      authors: ["alice"],
+      "#d": ["private-event-id"],
+      "#p": ["participant"],
+      userRelays: ["wss://u1"],
+      eoseDeadlineMs: 10 ** 9,
+    });
+    f.last("wss://r1").open();
+
+    const filter = reqOn(f.last("wss://r1"))![2];
+    expect(filter).toEqual({
+      kinds: [32678],
+      authors: ["alice"],
+      "#d": ["private-event-id"],
+      "#p": ["participant"],
+    });
   });
 
   it("fires EOSE immediately when no authors resolve to a relay bucket", () => {

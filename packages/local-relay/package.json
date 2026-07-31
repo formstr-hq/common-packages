@@ -1,9 +1,9 @@
 {
   "name": "@formstr/local-relay",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "NIP-01 Web Worker local relay + an intent-only data layer for Nostr apps. The app declares interests and publishes; the worker owns every connection decision.",
   "license": "MIT",
-  "author": "Abhay <toabhayraizada@gmail.com>",
+  "author": "Formstr <heyformstr@gmail.com>",
   "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/local-relay#readme",
   "repository": {
     "type": "git",

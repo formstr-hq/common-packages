@@ -53,6 +53,14 @@ describe("partitionAuthorsByRelay", () => {
     for (const set of Array.from(plan.values())) if (set.has("alice")) count++;
     expect(count).toBe(2);
   });
+
+  it("fans a single author out to at most 10 relays by default", () => {
+    const writes = Array.from({ length: 12 }, (_, i) => `wss://r${i + 1}`);
+    const plan = partitionAuthorsByRelay(["alice"], [], () => writes);
+
+    expect(Array.from(plan.keys())).toEqual(writes.slice(0, 10));
+    for (const authors of plan.values()) expect(authors.has("alice")).toBe(true);
+  });
 });
 
 describe("relaysForAuthors", () => {

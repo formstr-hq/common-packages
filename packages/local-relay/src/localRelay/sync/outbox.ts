@@ -19,7 +19,7 @@ export interface PartitionOptions {
   maxRelays?: number;
 }
 
-const DEFAULTS = { maxRelaysPerAuthor: 3, maxRelays: 20 };
+const DEFAULTS = { maxRelaysPerAuthor: 10, maxRelays: 20 };
 
 /**
  * Build a relay → authors plan. Every input author is guaranteed to appear under
@@ -30,9 +30,10 @@ export function partitionAuthorsByRelay(
   authors: string[],
   userRelays: string[],
   getWriteRelays: (pubkey: string) => string[],
-  options: PartitionOptions = {}
+  options: PartitionOptions = {},
 ): Map<string, Set<string>> {
-  const maxPerAuthor = options.maxRelaysPerAuthor ?? DEFAULTS.maxRelaysPerAuthor;
+  const maxPerAuthor =
+    options.maxRelaysPerAuthor ?? DEFAULTS.maxRelaysPerAuthor;
   const maxRelays = options.maxRelays ?? DEFAULTS.maxRelays;
   const uniqueAuthors = Array.from(new Set(authors));
 
@@ -40,7 +41,10 @@ export function partitionAuthorsByRelay(
   const authorRelays = new Map<string, string[]>();
   const score = new Map<string, number>();
   for (const author of uniqueAuthors) {
-    const relays = Array.from(new Set(getWriteRelays(author))).slice(0, maxPerAuthor);
+    const relays = Array.from(new Set(getWriteRelays(author))).slice(
+      0,
+      maxPerAuthor,
+    );
     authorRelays.set(author, relays);
     for (const r of relays) score.set(r, (score.get(r) ?? 0) + 1);
   }
@@ -67,7 +71,9 @@ export function partitionAuthorsByRelay(
   };
 
   for (const author of uniqueAuthors) {
-    const relays = (authorRelays.get(author) ?? []).filter((r) => chosen.has(r));
+    const relays = (authorRelays.get(author) ?? []).filter((r) =>
+      chosen.has(r),
+    );
     if (relays.length > 0) {
       for (const r of relays) addTo(r, author);
     } else {
@@ -88,7 +94,7 @@ export function relaysForAuthors(
   authors: string[],
   userRelays: string[],
   getWriteRelays: (pubkey: string) => string[],
-  maxExtra = DEFAULTS.maxRelays
+  maxExtra = DEFAULTS.maxRelays,
 ): string[] {
   const userSet = new Set(userRelays);
   const score = new Map<string, number>();

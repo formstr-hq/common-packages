@@ -73,7 +73,7 @@ export function buildRelayQueryPlan(
   };
 
   for (const author of uniqueAuthors) {
-    const relays = (authorRelays.get(author) ?? []).filter((r) =>
+    const relays = authorRelays.get(author)!.filter((r) =>
       chosen.has(r),
     );
     if (relays.length > 0) {

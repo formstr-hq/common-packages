@@ -158,6 +158,7 @@ describe("LocalRelayClient frame routing", () => {
 
     const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
     handle.unobserve();
+    handle.unobserve(); // pending grace timer makes repeated teardown a no-op
 
     // Within the grace: NO teardown frame yet — an identical re-declare here
     // (UI churn) would coalesce onto the still-live upstream.
@@ -167,6 +168,20 @@ describe("LocalRelayClient frame routing", () => {
     // After the grace elapses, the teardown frame is finally sent.
     await new Promise((r) => setTimeout(r, 45));
     expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(1);
+  });
+
+  it("cancels a pending unobserve when the worker closes the subscription", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const sent: any[] = [];
+    workerCh.onMessage((m) => sent.push(m));
+    const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 30 });
+
+    const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
+    handle.unobserve();
+    workerCh.post({ kind: "nostr", msg: ["CLOSED", handle.id, "relay closed"] });
+    await new Promise((r) => setTimeout(r, 45));
+
+    expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(0);
   });
 
   it("keeps delivering to an unobserved sub during the grace window", async () => {

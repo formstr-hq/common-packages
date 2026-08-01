@@ -62,37 +62,51 @@ export async function inviteMembers(
 }
 
 /**
- * Remove someone from the board's tags and publish the kind-84 notification of
- * doc 05 §8.
+ * Remove someone and re-key the board so the removal means something.
  *
- * **This does not revoke anything.** The removed person still holds the view key
- * and can still decrypt every version of the board and its cards published under
- * it, past and future. Only `rotateBoardKey` actually cuts access, and even that
- * cannot un-read what they have already read.
+ * Dropping their tag alone revokes **nothing**: they keep the view key and go on
+ * decrypting the board and every card written after they were removed. That is a
+ * trap in an API called `removeMember`, so rotation is the default.
+ *
+ * Pass `{ rotate: false }` to stage a removal without re-keying — worth it only
+ * when removing several people, since each rotation republishes every card and
+ * comment. Do the untagged removals first, then one `rotateBoardKey({ remove })`
+ * for the lot. Until that call lands, everyone dropped this way still has access.
+ *
+ * Even with rotation this is not retroactive. Nothing un-reads what they read.
  */
 export async function removeMember(
   ctx: KanbanCtx,
   board: KanbanBoard,
   pubkey: string,
+  opts: { rotate?: boolean } = {},
 ): Promise<KanbanBoard> {
-  const updated = await updatePrivateBoard(ctx, board, {
-    maintainers: board.maintainers.filter((p) => p !== pubkey),
-    members: board.members.filter((p) => p !== pubkey),
-  });
+  // The pointer has to be computed under the key being retired: it is the only
+  // one the removed member holds, so it is the only one they can match against.
+  const retiringViewKey = await resolveBoardViewKey(ctx, board);
+  const pointer = boardPointer(board, retiringViewKey);
+
+  const updated =
+    opts.rotate === false
+      ? await updatePrivateBoard(ctx, board, {
+          maintainers: board.maintainers.filter((p) => p !== pubkey),
+          members: board.members.filter((p) => p !== pubkey),
+        })
+      : // Rotation drops them from the board itself, so no separate update.
+        (await rotateBoardKey(ctx, board, { remove: [pubkey] })).board;
 
   // Tagged with the blinded pointer, never `a` or `p`. An `a` tag would publish
   // "someone was removed from THIS private board" in the clear, and `p` would
   // name them — the board's contents are encrypted, so leaking its membership
-  // changes in plaintext gives away the roster for free. `b` is computed from
-  // the view key, so only key holders can link the notice to a board, and the
-  // removed member still holds the old key and can still compute it.
-  const viewKey = await resolveBoardViewKey(ctx, board);
+  // changes in plaintext gives away the roster for free. Published after the
+  // rotation, so a failed rotation does not announce a removal that did not
+  // happen.
   const signer = await ctx.getSigner();
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.membershipRemoval,
     created_at: nextCreatedAt(),
     tags: [
-      ["b", boardPointer(board, viewKey)],
+      ["b", pointer],
       ["k", String(KANBAN_KINDS.privateBoard)],
     ],
     content: "",

@@ -47,11 +47,28 @@ removed means refetching every board in your list and diffing its member tags.
 compute the pointer, so an unauthenticated notice would let any member evict any
 other in every client that believed it.
 
+## `removeMember` rotates by default
+
+Separately from the tags: dropping someone's tag revokes nothing. They keep the
+view key and go on decrypting cards written *after* they were removed. Shipping
+that behind a method called `removeMember` is a trap, so it now calls
+`rotateBoardKey({ remove: [pubkey] })` unless told otherwise.
+
+`{ rotate: false }` stages a removal without re-keying. That exists because each
+rotation republishes every card and comment, so evicting several people wants one
+rotation and not N — untag them all, then rotate once. Until that call lands,
+everyone staged still has full access.
+
+The notice's pointer is computed under the **retiring** key, before rotation. It
+is the only key the removed member holds, so it is the only pointer they can
+match. The notice is published after the rotation succeeds, so a failed rotation
+does not announce a removal that did not happen.
+
 ## Costs
 
-- Still a notification, not a revocation. The removed member keeps the key and
-  keeps reading — including content written after removal — until
-  `rotateBoardKey` runs. Rotation is also not retroactive.
+- Rotation is not retroactive. Nothing un-reads what they already read.
+- The default makes `removeMember` O(cards) publishes and non-atomic — a real
+  cost, accepted because the alternative silently does nothing.
 - An observer still sees that the owner published *a* removal, and the owner's
   pubkey is public. Only the target and the board are hidden.
 - Kind 84 is unregistered (`84` in the NIPs README is the *NIP* number, for

@@ -184,8 +184,13 @@ export class KanbanSDK {
     return members.fetchMembers(this.ctx, board);
   }
 
-  removeMember(board: KanbanBoard, pubkey: string): Promise<KanbanBoard> {
-    return members.removeMember(this.ctx, board, pubkey);
+  /** Rotates the board key by default, because an un-rotated removal revokes nothing. */
+  removeMember(
+    board: KanbanBoard,
+    pubkey: string,
+    opts: { rotate?: boolean } = {},
+  ): Promise<KanbanBoard> {
+    return members.removeMember(this.ctx, board, pubkey, opts);
   }
 
   /** Boards whose owner has signalled we were removed. Advisory — see the service. */

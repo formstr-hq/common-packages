@@ -131,14 +131,36 @@ describe("removeMember", () => {
     expect(await fetchRemovalNotices(bob)).toEqual([]);
   });
 
-  it("is a notification, not a revocation — the old key still opens the board", async () => {
-    const { alice, bobPubkey, board } = await fixture();
+  it("rotates by default, so the removed member's key stops working", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
     const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
-    await removeMember(alice, withBob, bobPubkey);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+    await createPrivateCard(alice, withBob, { title: "Ship it", status: "col-1" });
 
-    // Doc 05 §8: removal alone takes no key away. Only rotateBoardKey does.
-    const stillReadable = await fetchPrivateBoards(alice);
-    expect(stillReadable[0].viewKey).toBe(board.viewKey);
+    const without = await removeMember(alice, withBob, bobPubkey);
+
+    expect(without.viewKey).not.toBe(board.viewKey);
+    expect(without.maintainers).toEqual([]);
+    // Bob's stored key is the retired one: it no longer points anywhere.
+    expect(await fetchPrivateBoards(bob)).toEqual([]);
+    // Alice keeps hers, re-encrypted.
+    expect((await fetchPrivateCards(alice, without)).map((c) => c.title)).toEqual(["Ship it"]);
+  });
+
+  it("with rotate: false it only stages the removal — the old key still opens the board", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+
+    const without = await removeMember(alice, withBob, bobPubkey, { rotate: false });
+
+    // Doc 05 §8: dropping the tag takes no key away. This is the batching path,
+    // and until rotateBoardKey runs the removed member still reads everything.
+    expect(without.maintainers).toEqual([]);
+    expect(without.viewKey).toBe(board.viewKey);
+    expect((await fetchPrivateBoards(bob))[0].viewKey).toBe(board.viewKey);
   });
 });
 

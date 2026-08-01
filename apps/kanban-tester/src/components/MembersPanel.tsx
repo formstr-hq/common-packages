@@ -51,12 +51,16 @@ export function MembersPanel({
     }
   }
 
-  async function remove(pubkey: string) {
+  async function remove(pubkey: string, rotate: boolean) {
     setBusy(true);
     try {
-      await sdk!.removeMember(board, pubkey);
-      setPendingRemoval((current) => [...new Set([...current, pubkey])]);
-      toast.notify("Removed from the board tags — they still hold the old view key until you rotate");
+      await sdk!.removeMember(board, pubkey, { rotate });
+      if (rotate) {
+        toast.notify("Removed and board re-keyed — their old key opens nothing new", "success");
+      } else {
+        setPendingRemoval((current) => [...new Set([...current, pubkey])]);
+        toast.notify("Staged only — they keep full access until you rotate");
+      }
       onChanged();
       await members.refresh();
     } catch (error) {
@@ -93,9 +97,19 @@ export function MembersPanel({
               <div className="muted small">{member.role}</div>
             </div>
             {isOwner && member.role !== "owner" && (
-              <button className="link" disabled={busy} onClick={() => void remove(member.pubkey)}>
-                Remove
-              </button>
+              <div className="row-actions">
+                <button disabled={busy} onClick={() => void remove(member.pubkey, true)}>
+                  Remove &amp; re-key
+                </button>
+                <button
+                  className="link"
+                  disabled={busy}
+                  title="Drops their tag without re-keying. They keep reading until you rotate — use when removing several people at once."
+                  onClick={() => void remove(member.pubkey, false)}
+                >
+                  Stage only
+                </button>
+              </div>
             )}
           </li>
         ))}

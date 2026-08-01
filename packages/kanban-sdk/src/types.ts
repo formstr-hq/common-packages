@@ -138,6 +138,12 @@ export interface BoardInvitation {
   /** Event id of the gift wrap, so a client can dedupe and dismiss. */
   wrapId: string;
   createdAt: number;
+  /**
+   * nsec of the key the wrap was signed with, when the inviter supplied one.
+   * Dismissal uses it to sign a NIP-09 deletion *as the wrap's own author*,
+   * which is the only way a recipient can delete a wrap they did not sign.
+   */
+  signingNsec?: string;
 }
 
 export interface KanbanComment {

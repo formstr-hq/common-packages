@@ -206,12 +206,52 @@ describe("fetchInvitations", () => {
   });
 
   it("hides an invitation the user dismissed", async () => {
-    const { alice, bob, bobSecret, board } = await sharedFixture();
+    const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
     await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
 
     const [invitation] = await fetchInvitations(bob);
     await dismissInvitation(bob, invitation);
 
+    // FakeRuntime never honours NIP-09, so the wrap is still sitting there.
+    // That is the point: the deletion is a request, and the invitation has to
+    // stay gone on a relay that ignored it.
+    expect(runtime.published.some((e) => e.id === invitation.wrapId)).toBe(true);
+    expect(await fetchInvitations(bob)).toEqual([]);
+  });
+
+  it("dismisses as the wrap's own author, naming neither the user nor the board", async () => {
+    const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+
+    const [invitation] = await fetchInvitations(bob);
+    await dismissInvitation(bob, invitation);
+
+    const deletions = runtime.published.filter((e) => e.kind === KANBAN_KINDS.deletion);
+    expect(deletions).toHaveLength(1);
+    const wrap = runtime.published.find((e) => e.id === invitation.wrapId)!;
+
+    // Signed by the ephemeral key that authored the wrap — which is what makes
+    // it a deletion a relay will honour, per NIP-09's same-author rule.
+    expect(deletions[0].pubkey).toBe(wrap.pubkey);
+    expect(deletions[0].pubkey).not.toBe(getPublicKey(bobSecret));
+    expect(deletions[0].tags).toContainEqual(["e", invitation.wrapId]);
+    // The old kind-84 opt-out carried the board coordinate in the clear.
+    expect(JSON.stringify(deletions[0])).not.toContain(board.id);
+  });
+
+  it("falls back to the kind-84 opt-out when the invitation carries no signing key", async () => {
+    const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+
+    const [invitation] = await fetchInvitations(bob);
+    // Invitations sent before `signing_nsec` existed look exactly like this.
+    await dismissInvitation(bob, { ...invitation, signingNsec: undefined });
+
+    const removals = runtime.published.filter(
+      (e) => e.kind === KANBAN_KINDS.membershipRemoval,
+    );
+    expect(removals).toHaveLength(1);
+    expect(removals[0].tags).toContainEqual(["a", invitation.coordinate]);
     expect(await fetchInvitations(bob)).toEqual([]);
   });
 });

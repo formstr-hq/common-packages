@@ -67,6 +67,7 @@ export { resolveBoardViewKey } from "./services/boards";
 
 // Sharing (Plan 3).
 export {
+  buildSelfSignedDeletion,
   createRumor,
   createSeal,
   createWrap,

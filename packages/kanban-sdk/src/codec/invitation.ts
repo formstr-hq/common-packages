@@ -17,12 +17,23 @@ export function buildInvitationRumorTags(ref: {
   relayHint: string;
   viewKey: string;
   role: BoardRole;
+  /**
+   * nsec of the ephemeral key this wrap is signed with. Handing it to the
+   * recipient is what lets them delete the wrap: NIP-09 only honours a deletion
+   * from the target's own author, and the wrap's author is this throwaway key.
+   * Safe to share — it signs one wrap and nothing else, and the seal inside is
+   * signed by the inviter's real key, so it cannot be used to forge an
+   * invitation from them.
+   */
+  signingNsec?: string;
 }): string[][] {
-  return [
+  const tags: string[][] = [
     ["a", ref.coordinate, ref.relayHint],
     ["viewKey", ref.viewKey],
     ["role", ref.role],
   ];
+  if (ref.signingNsec) tags.push(["signing_nsec", ref.signingNsec]);
+  return tags;
 }
 
 export function parseInvitationRumor(
@@ -54,5 +65,8 @@ export function parseInvitationRumor(
     message: rumor.content ?? "",
     wrapId,
     createdAt: rumor.created_at,
+    // Absent on invitations sent before this field existed; dismissal falls
+    // back to the kind-84 opt-out for those.
+    signingNsec: rumor.tags.find((t) => t[0] === "signing_nsec")?.[1],
   };
 }

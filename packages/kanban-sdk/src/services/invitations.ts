@@ -1,8 +1,9 @@
 import { boardCoordinate } from "../codec/board";
 import { buildInvitationRumorTags, parseInvitationRumor } from "../codec/invitation";
 import { InvitationVerificationError, type KanbanCtx } from "../contracts";
-import { unwrapEvent, wrapEvent } from "../crypto/nip59";
+import { buildSelfSignedDeletion, unwrapEvent, wrapEvent } from "../crypto/nip59";
 import { nextCreatedAt } from "../discovery/dedupe";
+import { collectDeleted } from "../discovery/deletions";
 import { fetchRelayListsForPubkeys, getInvitationInboxRelays } from "../discovery/relays";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardInvitation, BoardRole, KanbanBoard, KanbanBoardList } from "../types";
@@ -38,7 +39,9 @@ export async function sendInvitations(
     // Wrap serially — remote signers (NIP-46) typically reject concurrent
     // requests — but let the publishes overlap.
     const wrap = await wrapEvent(
-      {
+      // Function form: the wrap's signing key has to be known while the rumor is
+      // still being built, because the rumor carries it (see `signing_nsec`).
+      (signingNsec) => ({
         kind: KANBAN_KINDS.inviteRumor,
         content: message,
         tags: buildInvitationRumorTags({
@@ -46,8 +49,9 @@ export async function sendInvitations(
           relayHint,
           viewKey,
           role: recipient.role,
+          signingNsec,
         }),
-      },
+      }),
       signer,
       recipient.pubkey,
       ctx.wrapKind,
@@ -85,7 +89,23 @@ export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[
     fetchBoardLists(ctx),
   ]);
   // A caller who set wrapKind === wrapType gets the same events from both.
-  const wraps = [...new Map([...current, ...legacy].map((e) => [e.id, e])).values()];
+  const deduped = [...new Map([...current, ...legacy].map((e) => [e.id, e])).values()];
+
+  // Dismissal deletes the wrap, but NIP-09 is a request: a relay may ignore it,
+  // and a relay that never received it still serves the wrap. Without this the
+  // invitation returns on every refresh. Authors are the wraps' own ephemeral
+  // keys, which is who signs a dismissal.
+  const wraps =
+    deduped.length === 0
+      ? deduped
+      : await (async () => {
+          const deletions = await ctx.runtime.querySync(inbox, {
+            kinds: [KANBAN_KINDS.deletion],
+            authors: [...new Set(deduped.map((wrap) => wrap.pubkey))],
+          });
+          const deleted = collectDeleted(deletions);
+          return deduped.filter((wrap) => !deleted.ids.has(wrap.id));
+        })();
 
   // When we declined, and for which board. A later re-invitation must still
   // surface: declining is about the invitation in hand, not a standing refusal
@@ -171,14 +191,32 @@ export async function acceptInvitation(
 }
 
 /**
- * Decline. Publishes the kind-84 membership removal of doc 05 §8 naming ourselves,
- * which both tells the inviter to stop showing us as a member and is what
- * `fetchInvitations` filters on so the invitation stays gone locally.
+ * Decline.
+ *
+ * Preferred path: a NIP-09 deletion of the wrap, signed with the wrap's own
+ * ephemeral key. Relays that honour NIP-09 stop serving it, and the deletion
+ * says nothing about us — an anonymous author and an `e` tag, with no link to
+ * our pubkey and none to the board.
+ *
+ * The kind-84 fallback is the opposite on both counts: authored by us and
+ * carrying the board coordinate in plaintext, so it announces to anyone
+ * watching which private board we were invited to and declined. Used only for
+ * invitations sent before `signing_nsec` existed, where nothing else can work.
  */
 export async function dismissInvitation(
   ctx: KanbanCtx,
   invitation: BoardInvitation,
 ): Promise<void> {
+  if (invitation.signingNsec) {
+    const deletion = buildSelfSignedDeletion(
+      invitation.signingNsec,
+      [invitation.wrapId],
+      ctx.wrapKind,
+    );
+    await ctx.runtime.publish(ctx.relays, deletion);
+    return;
+  }
+
   const signer = await ctx.getSigner();
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.membershipRemoval,

@@ -1,4 +1,4 @@
-import { finalizeEvent, generateSecretKey, verifyEvent } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, nip19, verifyEvent } from "nostr-tools";
 import type { Event, EventTemplate } from "nostr-tools";
 import * as nip44 from "nostr-tools/nip44";
 
@@ -29,6 +29,14 @@ export interface WrapOptions {
    * by, such as the `k` type discriminator.
    */
   tags?: string[][];
+  /**
+   * Sign the wrap with this key instead of a freshly generated one. Exists so a
+   * caller can mint the key first and put its nsec inside the rumor, letting the
+   * recipient delete the wrap later (NIP-09 needs the target's own author).
+   * Still one key per wrap — never reuse one across recipients, or the wraps
+   * become linkable to each other.
+   */
+  ephemeralKey?: Uint8Array;
 }
 
 /** Randomize up to two days into the PAST. Past-only; see above. */
@@ -73,7 +81,7 @@ export async function createWrap(
   opts: WrapOptions = {},
 ): Promise<Event> {
   // A fresh key per wrap: the outer author must not identify the inviter.
-  const ephemeralKey = generateSecretKey();
+  const ephemeralKey = opts.ephemeralKey ?? generateSecretKey();
   const now = Math.floor(Date.now() / 1000);
 
   const conversationKey = nip44.v2.utils.getConversationKey(ephemeralKey, recipientPubkey);
@@ -90,20 +98,63 @@ export async function createWrap(
   );
 }
 
+/**
+ * Pass a function to see the wrap's signing key while building the rumor — the
+ * rumor is sealed before the wrap exists, so a caller wanting the nsec *inside*
+ * the payload has to be handed it up front.
+ */
 export async function wrapEvent(
-  event: Partial<EventTemplate> & { kind: number },
+  event:
+    | (Partial<EventTemplate> & { kind: number })
+    | ((signingNsec: string) => Partial<EventTemplate> & { kind: number }),
   signer: KanbanSigner,
   recipientPubkey: string,
   wrapKind = 1059,
   opts: WrapOptions = {},
 ): Promise<Event> {
-  const rumor = createRumor(event);
+  const ephemeralKey = opts.ephemeralKey ?? generateSecretKey();
+  const resolved = typeof event === "function" ? event(nip19.nsecEncode(ephemeralKey)) : event;
+
+  const rumor = createRumor(resolved);
   rumor.pubkey = await signer.getPublicKey();
   const seal = await createSeal(rumor, signer, recipientPubkey, opts);
-  return createWrap(seal, recipientPubkey, wrapKind, opts);
+  return createWrap(seal, recipientPubkey, wrapKind, { ...opts, ephemeralKey });
 }
 
-/** One seal per recipient — a seal is encrypted to exactly one pubkey. */
+/**
+ * NIP-09 deletion of a gift wrap, signed with the wrap's OWN ephemeral key.
+ *
+ * A recipient cannot delete a wrap with their own signature — NIP-09 honours a
+ * deletion only from the target event's author, and that author is a throwaway
+ * key. Sending the nsec inside the rumor (`signing_nsec`) hands the recipient
+ * exactly enough authority to retract the one event addressed to them.
+ */
+export function buildSelfSignedDeletion(
+  signingNsec: string,
+  eventIds: string[],
+  wrapKind: number,
+): Event {
+  const decoded = nip19.decode(signingNsec);
+  if (decoded.type !== "nsec") {
+    throw new Error(`Expected an nsec signing key, got ${decoded.type}`);
+  }
+  return finalizeEvent(
+    {
+      kind: 5,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [...eventIds.map((id) => ["e", id]), ["k", String(wrapKind)]],
+      content: "",
+    },
+    decoded.data,
+  );
+}
+
+/**
+ * One seal per recipient — a seal is encrypted to exactly one pubkey.
+ *
+ * Builds the rumor once and shares it, so it cannot embed a per-recipient
+ * `signing_nsec`. Callers needing that (invitations do) loop over `wrapEvent`.
+ */
 export async function wrapManyEvents(
   event: Partial<EventTemplate> & { kind: number },
   signer: KanbanSigner,

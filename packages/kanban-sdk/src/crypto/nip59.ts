@@ -12,7 +12,7 @@ type UnsignedEvent = Omit<Event, "sig">;
  * Three layers:
  *   1. Rumor (unsigned) — keeps its REAL created_at; recipients sort on it.
  *   2. Seal (kind 13), NIP-44 encrypted to the recipient, signed by the inviter.
- *   3. Wrap (kind 1053 by default), signed by a fresh ephemeral key.
+ *   3. Wrap (kind 1059 by default), signed by a fresh ephemeral key.
  *
  * Seal/wrap timestamps default to real, matching the shipped calendar. Pass
  * `{ timestamps: "jittered" }` for NIP-59's anti-correlation recommendation: a
@@ -23,6 +23,12 @@ type UnsignedEvent = Omit<Event, "sig">;
 
 export interface WrapOptions {
   timestamps?: "jittered" | "real";
+  /**
+   * Extra outer tags on the wrap, alongside the mandatory `p`. Everything here
+   * is PLAINTEXT on the relay — use it only for what a wrap must be filterable
+   * by, such as the `k` type discriminator.
+   */
+  tags?: string[][];
 }
 
 /** Randomize up to two days into the PAST. Past-only; see above. */
@@ -63,7 +69,7 @@ export async function createSeal(
 export async function createWrap(
   seal: Event,
   recipientPubkey: string,
-  wrapKind = 1053,
+  wrapKind = 1059,
   opts: WrapOptions = {},
 ): Promise<Event> {
   // A fresh key per wrap: the outer author must not identify the inviter.
@@ -77,7 +83,7 @@ export async function createWrap(
     {
       kind: wrapKind,
       created_at: opts.timestamps === "jittered" ? randomizeTimestamp(now) : now,
-      tags: [["p", recipientPubkey]],
+      tags: [["p", recipientPubkey], ...(opts.tags ?? [])],
       content: encrypted,
     },
     ephemeralKey,
@@ -88,7 +94,7 @@ export async function wrapEvent(
   event: Partial<EventTemplate> & { kind: number },
   signer: KanbanSigner,
   recipientPubkey: string,
-  wrapKind = 1053,
+  wrapKind = 1059,
   opts: WrapOptions = {},
 ): Promise<Event> {
   const rumor = createRumor(event);
@@ -102,7 +108,7 @@ export async function wrapManyEvents(
   event: Partial<EventTemplate> & { kind: number },
   signer: KanbanSigner,
   recipientPubkeys: string[],
-  wrapKind = 1053,
+  wrapKind = 1059,
   opts: WrapOptions = {},
 ): Promise<Event[]> {
   const rumor = createRumor(event);

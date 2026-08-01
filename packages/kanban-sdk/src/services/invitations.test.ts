@@ -37,7 +37,10 @@ describe("sendInvitations", () => {
 
     const wraps = runtime.published.filter((e) => e.kind === KANBAN_KINDS.inviteGiftWrap);
     expect(wraps).toHaveLength(1);
-    expect(wraps[0].tags).toEqual([["p", getPublicKey(bobSecret)]]);
+    expect(wraps[0].tags).toEqual([
+      ["p", getPublicKey(bobSecret)],
+      ["k", String(KANBAN_KINDS.inviteWrapType)],
+    ]);
     expect(wraps[0].content).not.toContain(board.viewKey);
     expect(wraps[0].content).not.toContain(board.id);
   });
@@ -113,9 +116,43 @@ describe("fetchInvitations", () => {
       id: "",
     };
     const seal = await createSeal(forged, mallory, getPublicKey(bobSecret));
-    runtime.seed(await createWrap(seal, getPublicKey(bobSecret), KANBAN_KINDS.inviteGiftWrap));
+    // Wrap it exactly as a real inviter would — `k` included — so the empty
+    // result proves the seal-signer check rejected it, not that the inbox
+    // filter never returned it.
+    runtime.seed(
+      await createWrap(seal, getPublicKey(bobSecret), KANBAN_KINDS.inviteGiftWrap, {
+        tags: [["k", String(KANBAN_KINDS.inviteWrapType)]],
+      }),
+    );
 
     expect(await fetchInvitations(bob)).toEqual([]);
+  });
+
+  it("still surfaces pre-1059 wraps, which carry no k tag", async () => {
+    const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
+    const coordinate = `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`;
+
+    runtime.seed(
+      await wrapEvent(
+        {
+          kind: KANBAN_KINDS.inviteRumor,
+          content: "",
+          tags: [
+            ["a", coordinate, ""],
+            ["viewKey", board.viewKey!],
+            ["role", "member"],
+          ],
+        },
+        await alice.getSigner(),
+        getPublicKey(bobSecret),
+        // The old wire kind, and no `k` tag — exactly what shipped before.
+        KANBAN_KINDS.inviteWrapType,
+      ),
+    );
+
+    const [invitation] = await fetchInvitations(bob);
+    expect(invitation.coordinate).toBe(coordinate);
+    expect(invitation.viewKey).toBe(board.viewKey);
   });
 
   it("collapses repeat invitations to the same board into one pending entry", async () => {
@@ -148,6 +185,7 @@ describe("fetchInvitations", () => {
         await alice.getSigner(),
         getPublicKey(bobSecret),
         KANBAN_KINDS.inviteGiftWrap,
+        { tags: [["k", String(KANBAN_KINDS.inviteWrapType)]] },
       ),
     );
     await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
@@ -214,6 +252,7 @@ describe("acceptInvitation", () => {
         mallory,
         getPublicKey(bobSecret),
         KANBAN_KINDS.inviteGiftWrap,
+        { tags: [["k", String(KANBAN_KINDS.inviteWrapType)]] },
       ),
     );
 

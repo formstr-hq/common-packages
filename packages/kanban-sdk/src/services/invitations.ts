@@ -51,7 +51,8 @@ export async function sendInvitations(
       signer,
       recipient.pubkey,
       ctx.wrapKind,
-      { timestamps: ctx.wrapTimestamps },
+      // `k` is what keeps the inbox query narrow once every app shares kind 1059.
+      { timestamps: ctx.wrapTimestamps, tags: [["k", String(ctx.wrapType)]] },
     );
     publishes.push(ctx.runtime.publish(inboxes.get(recipient.pubkey) ?? ctx.relays, wrap));
   }
@@ -67,14 +68,24 @@ export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[
   const pubkey = await signer.getPublicKey();
   const inbox = await getInvitationInboxRelays(ctx.runtime, ctx.relays, pubkey);
 
-  const [wraps, removals, lists] = await Promise.all([
-    ctx.runtime.querySync(inbox, { kinds: [ctx.wrapKind], "#p": [pubkey] }),
+  const [current, legacy, removals, lists] = await Promise.all([
+    ctx.runtime.querySync(inbox, {
+      kinds: [ctx.wrapKind],
+      "#p": [pubkey],
+      "#k": [String(ctx.wrapType)],
+    }),
+    // Wraps sent before the move to 1059 carry no `k` tag and used the private
+    // kind as the wire kind. Dropping this query would silently strand every
+    // invitation already in flight.
+    ctx.runtime.querySync(inbox, { kinds: [ctx.wrapType], "#p": [pubkey] }),
     ctx.runtime.querySync(inbox, {
       kinds: [KANBAN_KINDS.membershipRemoval],
       authors: [pubkey],
     }),
     fetchBoardLists(ctx),
   ]);
+  // A caller who set wrapKind === wrapType gets the same events from both.
+  const wraps = [...new Map([...current, ...legacy].map((e) => [e.id, e])).values()];
 
   // When we declined, and for which board. A later re-invitation must still
   // surface: declining is about the invitation in hand, not a standing refusal

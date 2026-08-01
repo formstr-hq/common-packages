@@ -19,7 +19,21 @@ export const KANBAN_KINDS = {
   privateCard: 32302,
   boardList: 32303,
   privateComment: 32304,
-  inviteGiftWrap: 1053,
+  /**
+   * Invitations go on the wire as NIP-59 gift wraps. 1059 is the registered
+   * kind, and the ONLY one relays give NIP-59's protection to ("serve this
+   * kind only to the p-tagged recipient"). A private kind such as 1053 gets
+   * none of it: anyone can subscribe to it and enumerate who is being invited
+   * to which private boards.
+   */
+  inviteGiftWrap: 1059,
+  /**
+   * What kind of wrap this is, carried as a `["k", …]` tag on the 1059.
+   * `k` is single-letter, so clients still filter server-side by wrap type
+   * instead of fetching every 1059 on the relay. Also the pre-1059 wire kind,
+   * still read so invitations sent before the switch keep arriving.
+   */
+  inviteWrapType: 1053,
   inviteRumor: 53,
   membershipRemoval: 84,
 

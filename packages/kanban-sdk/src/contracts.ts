@@ -36,15 +36,18 @@ export interface KanbanCtx {
   runtime: NostrRuntime;
   relays: string[];
   /**
-   * Gift-wrap kind for invitations. `1053` by default, matching NIP-52E.
-   *
-   * NIP-59's relay-side protection ("serve kind 1059 only to the p-tagged
-   * recipient") is written for 1059 specifically, so 1053 gets none of it: anyone
-   * can subscribe to `{"kinds":[1053]}` and enumerate who is being invited to
-   * private boards. Kept for consistency with the shipped calendar, which has the
-   * same leak; configurable so switching to 1059 is one line. Doc 07 §A6.
+   * Wire kind for invitation gift wraps. `1059` by default — the registered
+   * NIP-59 kind, and the only one relays apply NIP-59's "serve only to the
+   * p-tagged recipient" rule to. Doc 07 §A6.
    */
   wrapKind: number;
+  /**
+   * Value of the `["k", …]` discriminator on those wraps, `1053` by default.
+   * Every app's wraps share kind 1059, so without this the inbox query returns
+   * calendar invitations, DMs and everything else — each costing a signer round
+   * trip to decrypt and discard. Doubles as the legacy wire kind on read.
+   */
+  wrapType: number;
   wrapTimestamps?: "jittered" | "real";
 }
 

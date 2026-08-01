@@ -83,5 +83,6 @@ export function makeCtx(
     runtime,
     relays: ["wss://test.relay/"],
     wrapKind: KANBAN_KINDS.inviteGiftWrap,
+    wrapType: KANBAN_KINDS.inviteWrapType,
   } as KanbanCtx & { runtime: FakeRuntime };
 }

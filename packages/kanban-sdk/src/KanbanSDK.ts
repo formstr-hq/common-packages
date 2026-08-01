@@ -38,8 +38,10 @@ export interface KanbanSDKOptions {
   signer?: KanbanSigner;
   relays?: string[];
   runtime?: NostrRuntime;
-  /** Invitation gift-wrap kind. Defaults to 1053 — see `KanbanCtx.wrapKind`. */
+  /** Invitation gift-wrap wire kind. Defaults to 1059 — see `KanbanCtx.wrapKind`. */
   wrapKind?: number;
+  /** `k` discriminator on those wraps. Defaults to 1053 — see `KanbanCtx.wrapType`. */
+  wrapType?: number;
   wrapTimestamps?: "jittered" | "real";
 }
 
@@ -58,6 +60,7 @@ export class KanbanSDK {
       runtime,
       relays: normalizeRelayList(options.relays ?? DEFAULT_RELAYS),
       wrapKind: options.wrapKind ?? KANBAN_KINDS.inviteGiftWrap,
+      wrapType: options.wrapType ?? KANBAN_KINDS.inviteWrapType,
       wrapTimestamps: options.wrapTimestamps,
     };
   }

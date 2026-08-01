@@ -44,6 +44,14 @@ export interface DataLayerDeps {
 export interface ObserveOptions {
   /** Pure store read — no network. The worker syncs upstream when false (default). */
   localOnly?: boolean;
+  /**
+   * Read-relay hints for this interest — relays the app knows hold the data
+   * (e.g. the relays in a form's naddr). The worker folds them into routing for
+   * this read (author-scoped and author-less alike). These relays are always
+   * queried and do not count toward outbox relay caps, without mutating the
+   * global gossip pool.
+   */
+  relays?: string[];
 }
 
 export interface ObserveHandle {

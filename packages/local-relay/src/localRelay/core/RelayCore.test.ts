@@ -60,6 +60,43 @@ describe("RelayCore REQ", () => {
     core.handle(["EVENT", e]);
     expect(eventsFor(out, "sub1")).toEqual(["a".repeat(64)]);
   });
+
+  // Regression: a sub that registered before persistence finished loading (so it
+  // replayed an empty store) must still receive the hydrated events. Without the
+  // bulkLoad→reset→refresh path it never would: the hydrated copy fans out to no
+  // one (bulkLoad suppresses per-event emits) and the later network copy is
+  // dropped as a duplicate. This hung the responses view on "Loading form…".
+  it("delivers bulk-hydrated events to a sub that registered before hydration", () => {
+    const { db, core, out } = setup();
+
+    // Sub registers first — store is still empty, replay delivers nothing.
+    core.handle(["REQ", "sub1", { kinds: [30168], authors: ["alice"] }]);
+    expect(eventsFor(out, "sub1")).toEqual([]);
+
+    // Persistence hydrates the matching event afterwards (no per-event emit).
+    const hydrated = makeEvent({ id: "d".repeat(64), kind: 30168, pubkey: "alice", created_at: 200 });
+    db.bulkLoad([
+      hydrated,
+      makeEvent({ id: "e".repeat(64), kind: 1, pubkey: "bob" }), // non-matching
+    ]);
+
+    // The reset refresh hands the matching hydrated event to the waiting sub.
+    expect(eventsFor(out, "sub1")).toEqual(["d".repeat(64)]);
+
+    // And a later duplicate (the network copy) does NOT re-deliver.
+    core.handle(["INGEST", [hydrated]]);
+    expect(eventsFor(out, "sub1")).toEqual(["d".repeat(64)]);
+  });
+
+  it("bulkLoad with no new events emits no reset churn", () => {
+    const { db, core, out } = setup();
+    const e = makeEvent({ id: "a".repeat(64), kind: 1 });
+    db.add(e);
+    core.handle(["REQ", "sub1", { kinds: [1] }]);
+    out.length = 0;
+    db.bulkLoad([e]); // already present → added 0 → no reset, no re-delivery
+    expect(eventsFor(out, "sub1")).toEqual([]);
+  });
 });
 
 describe("RelayCore EVENT / INGEST", () => {

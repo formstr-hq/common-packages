@@ -74,7 +74,11 @@ export interface RelayServiceOptions {
   /** Max wait for a relay's publish OK before it's marked timeout/failed. */
   publishTimeoutMs?: number;
   /** Tuning for the durable delivery outbox (retry backoff + give-up cap). */
-  outbox?: { baseBackoffMs?: number; maxBackoffMs?: number; maxAttempts?: number };
+  outbox?: {
+    baseBackoffMs?: number;
+    maxBackoffMs?: number;
+    maxAttempts?: number;
+  };
 }
 
 export class RelayService {
@@ -100,10 +104,19 @@ export class RelayService {
    */
   private gossipRelays: string[] = [];
   private readonly maxGossipRelays: number;
-  /** Standing interests by subscription id (the worker's only network input). */
-  private interests = new Map<string, { filters: Filter[]; sync: boolean }>();
-  /** Live upstream subscriptions, deduped by filter-hash across interests. */
-  private upstream = new Map<string, { filters: Filter[]; handle: SyncHandle | null }>();
+  /** Standing interests by subscription id (the worker's only network input).
+   *  `relays` are optional per-interest read-relay hints (see openSync). */
+  private interests = new Map<
+    string,
+    { filters: Filter[]; sync: boolean; relays?: string[] }
+  >();
+  /** Live upstream subscriptions, deduped by filter-hash across interests.
+   *  `relays` is the union of the per-interest relay hints for this scope, so a
+   *  hint added by a later interest reopens the sub against the wider set. */
+  private upstream = new Map<
+    string,
+    { filters: Filter[]; relays: string[]; handle: SyncHandle | null }
+  >();
   private paused = false;
   private verify: (event: Event) => boolean;
   private now: () => number;
@@ -139,14 +152,18 @@ export class RelayService {
       },
       onAddGossipRelay: (url) => this.addGossipRelay(url),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
-      onObserve: (subId, filters, sync) => this.observe(subId, filters, sync),
+      onObserve: (subId, filters, sync, relays) =>
+        this.observe(subId, filters, sync, relays),
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event) => this.publishUpstream(pubId, event),
-      onRelayHealth: (reqId) => this.host.postRelayHealth(reqId, this.relayHealth()),
-      onSeenOn: (reqId, eventId) => this.host.postSeenOn(reqId, this.db.seenOn(eventId)),
+      onRelayHealth: (reqId) =>
+        this.host.postRelayHealth(reqId, this.relayHealth()),
+      onSeenOn: (reqId, eventId) =>
+        this.host.postSeenOn(reqId, this.db.seenOn(eventId)),
       onOnline: (reqId) => this.host.postOnline(reqId, this.isOnline()),
       onRetryDelivery: (eventId) => this.outbox.retry(eventId),
-      onDiagnostics: (reqId) => this.host.postDiagnostics(reqId, this.diagnostics()),
+      onDiagnostics: (reqId) =>
+        this.host.postDiagnostics(reqId, this.diagnostics()),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
       // onSetAccount handled by the cutover wiring (retarget feeds); the shared
@@ -173,7 +190,8 @@ export class RelayService {
           onResult: (results) => {
             // A redelivery that lands still means the relay now has the event.
             for (const r of results) {
-              if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
+              if (r.status === "accepted")
+                this.db.recordSeen(event.id, r.relay);
             }
             onResult(results);
           },
@@ -220,8 +238,13 @@ export class RelayService {
   // --- interests → autonomous upstream reconciliation -----------------------
 
   /** Register/replace a standing interest, then reconcile upstream subscriptions. */
-  private observe(subId: string, filters: Filter[], sync: boolean): void {
-    this.interests.set(subId, { filters, sync });
+  private observe(
+    subId: string,
+    filters: Filter[],
+    sync: boolean,
+    relays?: string[],
+  ): void {
+    this.interests.set(subId, { filters, sync, relays });
     this.reconcile();
   }
 
@@ -236,16 +259,42 @@ export class RelayService {
    */
   private reconcile(): void {
     if (this.paused) return;
-    const desired = new Map<string, Filter[]>();
-    for (const { filters, sync } of Array.from(this.interests.values())) {
+    // Union the per-interest relay hints across every interest that shares a
+    // filter-hash, so one upstream sub reads from the combined hint set.
+    const desired = new Map<string, { filters: Filter[]; relays: string[] }>();
+    for (const { filters, sync, relays } of Array.from(
+      this.interests.values(),
+    )) {
       if (!sync) continue;
       const key = generateFilterHash(filters, []);
-      if (!desired.has(key)) desired.set(key, filters);
+      const entry = desired.get(key);
+      if (!entry) {
+        desired.set(key, {
+          filters,
+          relays: relays ? Array.from(new Set(relays)) : [],
+        });
+      } else if (relays) {
+        for (const r of relays)
+          if (!entry.relays.includes(r)) entry.relays.push(r);
+      }
     }
-    // Open newly-wanted scopes.
-    for (const [key, filters] of Array.from(desired.entries())) {
-      if (!this.upstream.has(key)) {
-        this.upstream.set(key, { filters, handle: this.openSync(filters) });
+    // Open newly-wanted scopes, or REOPEN one whose relay-hint set changed (a
+    // later interest widened it) so the sub targets the current relays.
+    for (const [key, { filters, relays }] of Array.from(desired.entries())) {
+      const existing = this.upstream.get(key);
+      if (!existing) {
+        this.upstream.set(key, {
+          filters,
+          relays,
+          handle: this.openSync(filters, relays),
+        });
+      } else if (!sameRelaySet(existing.relays, relays)) {
+        existing.handle?.close();
+        this.upstream.set(key, {
+          filters,
+          relays,
+          handle: this.openSync(filters, relays),
+        });
       }
     }
     // Drop scopes no interest wants anymore.
@@ -281,7 +330,8 @@ export class RelayService {
    */
   private reopenUpstream(): void {
     if (this.paused) return;
-    for (const entry of Array.from(this.upstream.values())) entry.handle?.close();
+    for (const entry of Array.from(this.upstream.values()))
+      entry.handle?.close();
     this.upstream.clear();
     this.reconcile();
   }
@@ -307,7 +357,8 @@ export class RelayService {
       for (const tag of event.tags) {
         if ((tag[0] === "e" || tag[0] === "q") && tag[1]) {
           const id = tag[1];
-          if (!this.enrichRequested.has(id) && !this.db.getById(id)) this.enrichIds.add(id);
+          if (!this.enrichRequested.has(id) && !this.db.getById(id))
+            this.enrichIds.add(id);
         }
       }
       const pk = event.pubkey;
@@ -376,24 +427,32 @@ export class RelayService {
    * firehose); DM (kind-1059) reads hit the user's DM inbox relays; other
    * author-less ones (e.g. a `{ ids }` fetch of a DM-referenced note) hit the
    * user's relays ∪ the gossip pool, so discovered hints can resolve them.
+   *
+   * `hintRelays` are the interest's explicit read-relay hints (e.g. a form's
+   * naddr relays). They're folded into BOTH paths — as uncapped additional
+   * relays for author-scoped outbox queries and as additions to author-less
+   * reads — so a fetch reaches relays the app knows hold the data without
+   * mutating the global gossip pool.
    */
-  private openSync(filters: Filter[]): SyncHandle {
+  private openSync(filters: Filter[], hintRelays: string[] = []): SyncHandle {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
       if (filter.authors && filter.authors.length) {
         handles.push(
           this.sync.fetch({
+            ...filter,
             kinds,
             authors: filter.authors,
             userRelays: this.userRelays,
-            since: filter.since,
-            until: filter.until,
-            limit: filter.limit,
-          })
+            additionalRelays: hintRelays,
+          }),
         );
       } else {
-        const relays = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        const base = this.isDmFilter(filter)
+          ? this.dmReadRelays()
+          : this.readRelays();
+        const relays = Array.from(new Set([...base, ...hintRelays]));
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
             onEvent: (event, relay) => {
@@ -431,18 +490,23 @@ export class RelayService {
           // Accepted → it has the event (count as seen). Timeout/failed → owed,
           // retry later. Rejected → terminal refusal, never retried.
           if (r.status === "accepted") this.db.recordSeen(event.id, r.relay);
-          else if (r.status === "timeout" || r.status === "failed") owed.push(r.relay);
+          else if (r.status === "timeout" || r.status === "failed")
+            owed.push(r.relay);
         }
         // Only queue debt for an event that's actually in the store (skip
         // ephemerals, which aren't stored and so can't be re-sent).
-        if (owed.length && this.db.getById(event.id)) this.outbox.mark(event.id, owed);
+        if (owed.length && this.db.getById(event.id))
+          this.outbox.mark(event.id, owed);
         this.host.postPublishResult(pubId, results);
       },
     });
   }
 
   private publishTargets(event: Event): string[] {
-    const targets = new Set<string>([...this.getWriteRelays(event.pubkey), ...this.userRelays]);
+    const targets = new Set<string>([
+      ...this.getWriteRelays(event.pubkey),
+      ...this.userRelays,
+    ]);
     for (const tag of event.tags) {
       if (tag[0] === "p" && tag[1]) {
         for (const relay of this.getReadRelays(tag[1])) targets.add(relay);
@@ -492,7 +556,8 @@ export class RelayService {
    * to this relay right away (it's demonstrably up).
    */
   private onRelayConnect(relay: string): void {
-    if (this.userRelays.includes(relay)) this.lastUserRelayConnectedAt = this.now();
+    if (this.userRelays.includes(relay))
+      this.lastUserRelayConnectedAt = this.now();
     this.outbox.flushRelay(relay);
   }
 
@@ -502,8 +567,13 @@ export class RelayService {
    * (`navigator.onLine` lies about captive portals / LAN-without-WAN).
    */
   isOnline(): boolean {
-    const connectedNow = this.pool.relayHealth(this.userRelays).some((h) => h.connected);
-    return connectedNow || this.now() - this.lastUserRelayConnectedAt < ONLINE_WINDOW_MS;
+    const connectedNow = this.pool
+      .relayHealth(this.userRelays)
+      .some((h) => h.connected);
+    return (
+      connectedNow ||
+      this.now() - this.lastUserRelayConnectedAt < ONLINE_WINDOW_MS
+    );
   }
 
   /** Arm a single one-shot timer for the next due outbox retry (backoff sweep). */
@@ -533,7 +603,8 @@ export class RelayService {
     const existing = this.gossipRelays.indexOf(url);
     if (existing !== -1) this.gossipRelays.splice(existing, 1);
     this.gossipRelays.push(url);
-    if (this.gossipRelays.length > this.maxGossipRelays) this.gossipRelays.shift();
+    if (this.gossipRelays.length > this.maxGossipRelays)
+      this.gossipRelays.shift();
   }
 
   /**
@@ -583,7 +654,11 @@ export class RelayService {
 
   /** Parse a pubkey's latest kind-10002, returning the relays for one direction. */
   private relaysFromNip65(pubkey: string, dir: "read" | "write"): string[] {
-    const [event] = this.db.query({ kinds: [10002], authors: [pubkey], limit: 1 });
+    const [event] = this.db.query({
+      kinds: [10002],
+      authors: [pubkey],
+      limit: 1,
+    });
     if (!event) return [];
     const out: string[] = [];
     for (const tag of event.tags) {
@@ -615,7 +690,9 @@ export class RelayService {
       upstream: Array.from(this.upstream.entries()).map(([filterHash, u]) => ({
         filterHash,
         filters: u.filters,
-        relays: this.routeRelays(u.filters),
+        relays: Array.from(
+          new Set([...this.routeRelays(u.filters), ...u.relays]),
+        ),
       })),
       relays,
       dmRelays: [...this.dmRelays],
@@ -623,7 +700,8 @@ export class RelayService {
       connections: {
         user: connected.filter((r) => userSet.has(r.relay)).length,
         gossip: connected.filter((r) => r.gossip).length,
-        outbox: connected.filter((r) => !userSet.has(r.relay) && !r.gossip).length,
+        outbox: connected.filter((r) => !userSet.has(r.relay) && !r.gossip)
+          .length,
         total: connected.length,
       },
       cache: this.db.stats(),
@@ -654,7 +732,9 @@ export class RelayService {
         }
         for (const relay of this.userRelays) relays.add(relay);
       } else {
-        const targets = this.isDmFilter(filter) ? this.dmReadRelays() : this.readRelays();
+        const targets = this.isDmFilter(filter)
+          ? this.dmReadRelays()
+          : this.readRelays();
         for (const relay of targets) relays.add(relay);
       }
     }
@@ -670,7 +750,13 @@ export class RelayService {
     const seen = new Set(fromPool.map((h) => h.relay));
     const missing: RelayHealth[] = Array.from(new Set(this.userRelays))
       .filter((r) => !seen.has(r))
-      .map((relay) => ({ relay, connected: false, connecting: false, reconnecting: false, gossip: false }));
+      .map((relay) => ({
+        relay,
+        connected: false,
+        connecting: false,
+        reconnecting: false,
+        gossip: false,
+      }));
     const userSet = new Set(this.userRelays);
     const gossipSet = new Set(this.gossipRelays);
     return [...fromPool, ...missing].map((h) => ({

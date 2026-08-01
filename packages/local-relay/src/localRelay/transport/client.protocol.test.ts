@@ -132,7 +132,9 @@ describe("LocalRelayClient frame routing", () => {
     const { client: clientCh, worker: workerCh } = createChannelPair();
     const sent: any[] = [];
     workerCh.onMessage((m) => sent.push(m));
-    const client = new LocalRelayClient(clientCh); // no onSignRequest configured
+    // grace 0: assert the unobserve FRAME semantics synchronously (deferred
+    // teardown is covered by its own test below).
+    const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 0 }); // no onSignRequest configured
 
     const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
     handle.unobserve();
@@ -146,6 +148,61 @@ describe("LocalRelayClient frame routing", () => {
 
     expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(1);
     expect(sent.find((m) => m.kind === "signResult")).toEqual({ kind: "signResult", reqId: "r1", event: null });
+  });
+
+  it("defers the unobserve frame by the grace window (survives churn re-declare)", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const sent: any[] = [];
+    workerCh.onMessage((m) => sent.push(m));
+    const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 30 });
+
+    const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
+    handle.unobserve();
+    handle.unobserve(); // pending grace timer makes repeated teardown a no-op
+
+    // Within the grace: NO teardown frame yet — an identical re-declare here
+    // (UI churn) would coalesce onto the still-live upstream.
+    await tick();
+    expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(0);
+
+    // After the grace elapses, the teardown frame is finally sent.
+    await new Promise((r) => setTimeout(r, 45));
+    expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(1);
+  });
+
+  it("cancels a pending unobserve when the worker closes the subscription", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const sent: any[] = [];
+    workerCh.onMessage((m) => sent.push(m));
+    const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 30 });
+
+    const handle = client.observe([{ kinds: [1] }], { onEvent: () => {} });
+    handle.unobserve();
+    workerCh.post({ kind: "nostr", msg: ["CLOSED", handle.id, "relay closed"] });
+    await new Promise((r) => setTimeout(r, 45));
+
+    expect(sent.filter((m) => m.kind === "unobserve")).toHaveLength(0);
+  });
+
+  it("keeps delivering to an unobserved sub during the grace window", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 30 });
+
+    const got: string[] = [];
+    const handle = client.observe([{ kinds: [1] }], { onEvent: (e) => got.push(e.id) });
+    handle.unobserve();
+
+    // An event fanned out to this sub during the grace still delivers — this is
+    // exactly the in-flight event a synchronous teardown would have dropped.
+    workerCh.post({ kind: "nostr", msg: ["EVENT", handle.id, makeEvent({ id: "a".repeat(64) })] });
+    await tick();
+    expect(got).toEqual(["a".repeat(64)]);
+
+    // After the grace, the sub is gone and late events are dropped.
+    await new Promise((r) => setTimeout(r, 45));
+    workerCh.post({ kind: "nostr", msg: ["EVENT", handle.id, makeEvent({ id: "b".repeat(64) })] });
+    await tick();
+    expect(got).toEqual(["a".repeat(64)]);
   });
 
   it("ignores publishResult / relayHealth frames for unknown ids", async () => {

@@ -22,6 +22,18 @@ export interface SubscribeHandlers {
 export interface LocalRelayClientOptions {
   /** Signs NIP-42 AUTH (and any worker-initiated) templates. Returns null to refuse. */
   onSignRequest?: (template: EventTemplate) => Promise<Event | null>;
+  /**
+   * Grace period before an `unobserve` actually tears the interest down. UI churn
+   * routinely drops an interest and re-declares an identical one within the same
+   * tick (React StrictMode's mount→cleanup→mount, or a re-render keyed on an async
+   * value like the signed-in pubkey resolving). Tearing the upstream down on the
+   * drop and rebuilding it on the re-declare loses the in-flight fetch, so a just
+   * fetched-and-ingested event fans out to no live subscriber and is silently
+   * dropped — a one-shot read then hangs forever. Deferring the teardown by this
+   * grace lets the re-declare coalesce onto the SAME still-live upstream. Set 0 to
+   * tear down immediately (tests that assert synchronous teardown). Default 1000ms.
+   */
+  unobserveGraceMs?: number;
 }
 
 interface Sub {
@@ -35,9 +47,13 @@ export class LocalRelayClient {
   private pendingSeenOn = new Map<string, (relays: string[]) => void>();
   private pendingOnline = new Map<string, (online: boolean) => void>();
   private pendingDiagnostics = new Map<string, (diagnostics: Diagnostics) => void>();
+  /** Interests whose teardown is deferred (see `unobserveGraceMs`). */
+  private pendingUnobserve = new Map<string, ReturnType<typeof setTimeout>>();
   private counter = 0;
+  private readonly unobserveGraceMs: number;
 
   constructor(private channel: Channel, private opts: LocalRelayClientOptions = {}) {
+    this.unobserveGraceMs = opts.unobserveGraceMs ?? 1000;
     channel.onMessage((m) => this.onMessage(m as FromWorker));
   }
 
@@ -51,22 +67,38 @@ export class LocalRelayClient {
   observe(
     filters: Filter[],
     handlers: SubscribeHandlers,
-    options: { localOnly?: boolean } = {}
+    options: { localOnly?: boolean; relays?: string[] } = {}
   ): { id: string; update: (filters: Filter[]) => void; unobserve: () => void } {
     const id = `c${this.counter++}`;
     const sync = !options.localOnly;
+    const relays = options.relays;
     this.subs.set(id, { handlers });
-    this.send({ kind: "observe", subId: id, filters, sync });
+    this.send({ kind: "observe", subId: id, filters, sync, relays });
     return {
       id,
-      update: (next) => this.send({ kind: "observe", subId: id, filters: next, sync }),
+      update: (next) =>
+        this.send({ kind: "observe", subId: id, filters: next, sync, relays }),
       unobserve: () => this.unobserve(id),
     };
   }
 
   private unobserve(id: string): void {
-    if (!this.subs.delete(id)) return;
-    this.send({ kind: "unobserve", subId: id });
+    if (!this.subs.has(id)) return;
+    if (this.pendingUnobserve.has(id)) return;
+    if (this.unobserveGraceMs <= 0) {
+      this.subs.delete(id);
+      this.send({ kind: "unobserve", subId: id });
+      return;
+    }
+    // Defer the real teardown. If the app re-declares an identical interest in the
+    // meantime (new subId), reconcile coalesces both onto one still-live upstream,
+    // so the in-flight fetch survives the churn. Keep THIS sub's handlers live
+    // during the grace so an event already fanned out to it still delivers.
+    const timer = setTimeout(() => {
+      this.pendingUnobserve.delete(id);
+      if (this.subs.delete(id)) this.send({ kind: "unobserve", subId: id });
+    }, this.unobserveGraceMs);
+    this.pendingUnobserve.set(id, timer);
   }
 
   /** Add events to the local store without publishing upstream (optimistic/import). */
@@ -203,6 +235,11 @@ export class LocalRelayClient {
         case "CLOSED": {
           this.subs.get(msg[1])?.handlers.onEose?.();
           this.subs.delete(msg[1]);
+          const timer = this.pendingUnobserve.get(msg[1]);
+          if (timer) {
+            clearTimeout(timer);
+            this.pendingUnobserve.delete(msg[1]);
+          }
           break;
         }
         // OK (local store ack) is not surfaced — publish resolves via publishResult.

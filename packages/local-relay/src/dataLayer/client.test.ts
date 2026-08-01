@@ -353,3 +353,69 @@ describe("DataLayer gossip relays", () => {
     expect((await dataLayer.diagnostics()).gossipRelays).toEqual(["wss://a", "wss://c"]);
   });
 });
+
+describe("DataLayer per-interest relay hints", () => {
+  const reqSub = (sock: { sent: any[] }) => sock.sent.find((m) => m[0] === "REQ")![1] as string;
+
+  it("routes an AUTHOR-SCOPED read to a relay hint even when the author has a known outbox", async () => {
+    const { f, service, dataLayer } = await wire();
+    service.db.add(
+      makeEvent({ kind: 10002, pubkey: "formkey", tags: [["r", "wss://author-outbox"]] }),
+    );
+    dataLayer.observe(
+      [{ kinds: [30168], authors: ["formkey"], "#d": ["abc"] }],
+      { onEvent: () => {} },
+      { relays: ["wss://form-relay"] },
+    );
+    await settle();
+
+    expect(f.count("wss://form-relay")).toBe(1); // dialed the hinted relay
+    expect(f.count("wss://author-outbox")).toBe(1); // retained normal outbox routing
+    const sock = f.last("wss://form-relay");
+    sock.open();
+    expect(sock.sent.find((m) => m[0] === "REQ")![2]).toEqual({
+      kinds: [30168],
+      authors: ["formkey"],
+      "#d": ["abc"],
+    });
+    sock.emit([
+      "EVENT",
+      reqSub(sock),
+      makeEvent({ id: "f".repeat(64), kind: 30168, pubkey: "formkey", tags: [["d", "abc"]] }),
+    ]);
+    await settle();
+    expect(service.db.getById("f".repeat(64))).toBeDefined(); // fetched + ingested
+  });
+
+  it("adds a relay hint to an AUTHOR-LESS read's relay set (alongside user relays)", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }, { relays: ["wss://hint"] });
+    await settle();
+
+    expect(f.count("wss://hint")).toBe(1); // the hint
+    expect(f.count("wss://u1")).toBe(1); // and the user relay
+  });
+
+  it("unions the hints of two same-filter interests into ONE upstream subscription", async () => {
+    const { dataLayer } = await wire();
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }, { relays: ["wss://a"] });
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }, { relays: ["wss://b"] });
+    await settle();
+
+    const diag = await dataLayer.diagnostics();
+    const scope = diag.upstream.filter((u) =>
+      u.filters.some((flt) => (flt.kinds ?? []).includes(1)),
+    );
+    expect(scope).toHaveLength(1); // deduped by filter-hash to one scope
+    expect(scope[0].relays).toEqual(
+      expect.arrayContaining(["wss://a", "wss://b", "wss://u1"]),
+    );
+  });
+
+  it("does not touch the global gossip pool (hints are per-interest)", async () => {
+    const { dataLayer } = await wire();
+    dataLayer.observe([{ kinds: [1] }], { onEvent: () => {} }, { relays: ["wss://hint"] });
+    await settle();
+    expect((await dataLayer.diagnostics()).gossipRelays).toEqual([]);
+  });
+});

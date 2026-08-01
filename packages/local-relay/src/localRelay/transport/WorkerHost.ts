@@ -23,8 +23,14 @@ export interface WorkerHostHooks {
   /** A discovered relay was added to / removed from the gossip pool. */
   onAddGossipRelay?: (url: string) => void;
   onRemoveGossipRelay?: (url: string) => void;
-  /** A standing interest was registered/updated — the worker decides upstream. */
-  onObserve?: (subId: string, filters: Filter[], sync: boolean) => void;
+  /** A standing interest was registered/updated — the worker decides upstream.
+   *  `relays` are optional per-interest read-relay hints. */
+  onObserve?: (
+    subId: string,
+    filters: Filter[],
+    sync: boolean,
+    relays?: string[]
+  ) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
   onUnobserve?: (subId: string) => void;
   /** A client published an event: store it locally + send upstream with tracking. */
@@ -99,7 +105,7 @@ export class WorkerHost {
         // Local subscription (cache replay + live tail) for this interest...
         this.relayCore.handle(["REQ", m.subId, ...m.filters]);
         // ...and hand the interest to the worker's autonomous sync (if requested).
-        this.hooks.onObserve?.(m.subId, m.filters, m.sync);
+        this.hooks.onObserve?.(m.subId, m.filters, m.sync, m.relays);
         break;
       case "unobserve":
         this.relayCore.handle(["CLOSE", m.subId]);

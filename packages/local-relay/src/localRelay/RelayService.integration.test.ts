@@ -23,7 +23,10 @@ async function wire(extra: Partial<ConstructorParameters<typeof RelayService>[0]
     ...extra,
   });
   await service.start();
-  const client = new LocalRelayClient(clientCh);
+  // Synchronous teardown for these tests — they assert unobserve → upstream close
+  // directly. The deferred-teardown grace is covered separately in the client
+  // protocol suite.
+  const client = new LocalRelayClient(clientCh, { unobserveGraceMs: 0 });
   client.setUserRelays(["wss://u1"]);
   await settle();
   return { f, service, client };

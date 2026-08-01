@@ -207,9 +207,14 @@ export class EventDB {
   }
 
   /**
-   * Bulk-load (boot hydration). Suppresses change emits for the whole batch so
-   * hydration doesn't trigger a storm of live-sub fan-out; callers refresh once
-   * afterwards. Returns the number of events actually stored.
+   * Bulk-load (boot hydration). Suppresses per-event change emits for the whole
+   * batch so hydration doesn't trigger a storm of live-sub fan-out; instead it
+   * emits ONE `reset` at the end so live-sub owners re-scan once. This refresh is
+   * mandatory, not optional: an interest can register (and replay an as-yet-empty
+   * store) before this async hydration completes, so without the reset it would
+   * never see the hydrated events — and the later network copy of the same event
+   * is dropped as a duplicate, so it never fans out either. Returns the number of
+   * events actually stored.
    */
   bulkLoad(events: Event[]): number {
     const saved = this.listeners;
@@ -222,6 +227,7 @@ export class EventDB {
     } finally {
       this.listeners = saved;
     }
+    if (added > 0) this.emit({ type: "reset" });
     return added;
   }
 

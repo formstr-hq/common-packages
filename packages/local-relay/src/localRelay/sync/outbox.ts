@@ -12,27 +12,30 @@
  * with a plain map and has no network/storage/cache dependency.
  */
 
-export interface PartitionOptions {
+export interface RelayQueryPlanOptions {
   /** Fan each author to at most this many of their write relays (redundancy vs load). */
   maxRelaysPerAuthor?: number;
   /** Cap on total relays in the plan (mobile WebViews limit concurrent sockets). */
   maxRelays?: number;
+  /** Explicit per-query relays, added outside the relay caps unless already planned. */
+  additionalRelays?: string[];
 }
 
-const DEFAULTS = { maxRelaysPerAuthor: 3, maxRelays: 20 };
+const DEFAULTS = { maxRelaysPerAuthor: 10, maxRelays: 20 };
 
 /**
  * Build a relay → authors plan. Every input author is guaranteed to appear under
  * at least one relay (authors with no known outbox fall back to `userRelays`),
  * so no author is silently dropped.
  */
-export function partitionAuthorsByRelay(
+export function buildRelayQueryPlan(
   authors: string[],
   userRelays: string[],
   getWriteRelays: (pubkey: string) => string[],
-  options: PartitionOptions = {}
+  options: RelayQueryPlanOptions = {},
 ): Map<string, Set<string>> {
-  const maxPerAuthor = options.maxRelaysPerAuthor ?? DEFAULTS.maxRelaysPerAuthor;
+  const maxPerAuthor =
+    options.maxRelaysPerAuthor ?? DEFAULTS.maxRelaysPerAuthor;
   const maxRelays = options.maxRelays ?? DEFAULTS.maxRelays;
   const uniqueAuthors = Array.from(new Set(authors));
 
@@ -40,7 +43,10 @@ export function partitionAuthorsByRelay(
   const authorRelays = new Map<string, string[]>();
   const score = new Map<string, number>();
   for (const author of uniqueAuthors) {
-    const relays = Array.from(new Set(getWriteRelays(author))).slice(0, maxPerAuthor);
+    const relays = Array.from(new Set(getWriteRelays(author))).slice(
+      0,
+      maxPerAuthor,
+    );
     authorRelays.set(author, relays);
     for (const r of relays) score.set(r, (score.get(r) ?? 0) + 1);
   }
@@ -67,13 +73,22 @@ export function partitionAuthorsByRelay(
   };
 
   for (const author of uniqueAuthors) {
-    const relays = (authorRelays.get(author) ?? []).filter((r) => chosen.has(r));
+    const relays = authorRelays.get(author)!.filter((r) =>
+      chosen.has(r),
+    );
     if (relays.length > 0) {
       for (const r of relays) addTo(r, author);
     } else {
       // Coverage guarantee: never drop an author.
       for (const r of userRelays) addTo(r, author);
     }
+  }
+
+  // Additional relays bypass both caps and query every author. If normal
+  // routing already planned the relay, retain that scoped bucket instead of
+  // broadening it or creating a duplicate query.
+  for (const relay of new Set(options.additionalRelays ?? [])) {
+    if (!plan.has(relay)) plan.set(relay, new Set(uniqueAuthors));
   }
 
   return plan;
@@ -88,7 +103,7 @@ export function relaysForAuthors(
   authors: string[],
   userRelays: string[],
   getWriteRelays: (pubkey: string) => string[],
-  maxExtra = DEFAULTS.maxRelays
+  maxExtra = DEFAULTS.maxRelays,
 ): string[] {
   const userSet = new Set(userRelays);
   const score = new Map<string, number>();

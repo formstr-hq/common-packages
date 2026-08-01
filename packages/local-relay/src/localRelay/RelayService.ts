@@ -14,7 +14,7 @@
  */
 import type { Event, Filter } from "./core/types";
 import { EventDB } from "./core/EventDB";
-import { generateFilterHash } from "./core/matchFilter";
+import { generateFilterHash, matchFilter } from "./core/matchFilter";
 import { Channel } from "./transport/channel";
 import { WorkerHost } from "./transport/WorkerHost";
 import type { Diagnostics } from "./transport/frames";
@@ -90,6 +90,8 @@ export class RelayService {
   private persistence: Persistence | null;
   private storage: StorageAdapter | null;
   private userRelays: string[] = [];
+  /** Dedicated NIP-50 relays, kept out of ordinary feed and publish routing. */
+  private searchRelays: string[] = [];
   /**
    * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
    * are delivered. Kept separate from `userRelays` so the kind-1059 stream can
@@ -143,6 +145,11 @@ export class RelayService {
       onSetUserRelays: (relays) => {
         const changed = !sameRelaySet(this.userRelays, relays);
         this.userRelays = relays;
+        this.onRelaySetChanged(changed);
+      },
+      onSetSearchRelays: (relays) => {
+        const changed = !sameRelaySet(this.searchRelays, relays);
+        this.searchRelays = relays;
         this.onRelaySetChanged(changed);
       },
       onSetDmRelays: (relays) => {
@@ -323,8 +330,8 @@ export class RelayService {
 
   /**
    * Tear down every standing upstream sub and reconcile from scratch, so each
-   * scope is reopened against the CURRENT relay set. Used when `userRelays` or
-   * `dmRelays` changes (every standing sub's target relays derive from them —
+   * scope is reopened against the CURRENT relay set. Used when `userRelays`,
+   * `searchRelays`, or `dmRelays` changes (standing subs derive from them —
    * author-scoped via SyncEngine's floor, author-less via `readRelays()`, DM
    * subs via `dmReadRelays()`).
    */
@@ -438,7 +445,21 @@ export class RelayService {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
-      if (filter.authors && filter.authors.length) {
+      if (this.isSearchFilter(filter)) {
+        const relays = Array.from(
+          new Set([...this.searchReadRelays(), ...hintRelays]),
+        );
+        if (relays.length) {
+          const id = this.pool.subscribe(relays, [filter], {
+            onEvent: (event, relay) => {
+              if (!this.verify(event) || !matchFilter(event, filter)) return;
+              this.ingest([event]);
+              this.db.recordSeen(event.id, relay);
+            },
+          });
+          handles.push({ close: () => this.pool.unsubscribe(id) });
+        }
+      } else if (filter.authors && filter.authors.length) {
         handles.push(
           this.sync.fetch({
             ...filter,
@@ -621,6 +642,13 @@ export class RelayService {
     return Array.from(new Set([...this.userRelays, ...this.gossipRelays]));
   }
 
+  /** Dedicated search relays, falling back to the ordinary read set. */
+  private searchReadRelays(): string[] {
+    return this.searchRelays.length
+      ? Array.from(new Set(this.searchRelays))
+      : this.readRelays();
+  }
+
   /**
    * Relays a DM (kind-1059) read targets: the user's NIP-17 inbox relays, with
    * the user's general relays as a fallback so DMs still arrive before any 10050
@@ -638,6 +666,10 @@ export class RelayService {
   private isDmFilter(filter: Filter): boolean {
     const kinds = filter.kinds;
     return !!kinds && kinds.length > 0 && kinds.every((k) => DM_KINDS.has(k));
+  }
+
+  private isSearchFilter(filter: Filter): boolean {
+    return typeof filter.search === "string" && filter.search.trim().length > 0;
   }
 
   // --- helpers --------------------------------------------------------------
@@ -696,6 +728,7 @@ export class RelayService {
       })),
       relays,
       dmRelays: [...this.dmRelays],
+      searchRelays: [...this.searchRelays],
       gossipRelays: [...this.gossipRelays],
       connections: {
         user: connected.filter((r) => userSet.has(r.relay)).length,
@@ -726,7 +759,9 @@ export class RelayService {
   private routeRelays(filters: Filter[]): string[] {
     const relays = new Set<string>();
     for (const filter of filters) {
-      if (filter.authors && filter.authors.length) {
+      if (this.isSearchFilter(filter)) {
+        for (const relay of this.searchReadRelays()) relays.add(relay);
+      } else if (filter.authors && filter.authors.length) {
         for (const pubkey of filter.authors) {
           for (const relay of this.getWriteRelays(pubkey)) relays.add(relay);
         }

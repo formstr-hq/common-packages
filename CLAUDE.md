@@ -5,7 +5,7 @@ Public boards are byte-compatible with kanbanstr.com; private boards add a NIP-1
 
 ## Where things are
 
-- **Code lives here** (`common-packages-kanban`), NOT in the sibling `common-packages` clone. Plan 1's text said otherwise and cost a session's confusion — trust this file.
+- **This directory is a git worktree of `../common-packages`, not a separate clone.** Same `.git`, same remotes; it just has a different branch checked out (`git worktree list` proves it). Treating them as two repos has cost a session more than once. Code lives here; `../common-packages` holds `calendar-sdk` work on its own branch.
 - **Spec and plans live in `../kanban/docs/`.** Code comments cite them by section (`doc 05 §7`, `doc 07 §B2`); read the cited section before changing the behaviour it explains.
   - `05-private-kanban-spec.md` — the protocol (view keys, blinded pointer, access control, rotation)
   - `07-gaps-risks.md` — every known limitation, and which are decided vs open
@@ -24,13 +24,19 @@ Bash cwd persists between calls but is easy to lose — prefer absolute paths in
 
 ## Status
 
-Plans 1–3 are shipped and committed on branch `kanban-sdk` (unpushed). 265 tests green.
+Plans 1–3 are shipped and committed on branch `main` (unpushed; `kanban-sdk` points at the same
+history). 270 tests green.
 
 | Plan | Scope | State |
 |---|---|---|
 | 01 | Public NIP-100 boards/cards (30301/30302) | shipped |
 | 02 | Private boards, cards, board lists (32301/32302/32303) | shipped |
 | 03 | Invitations, members, comments (32304), `rotateBoardKey` | shipped |
+| — | Privacy pass: 1059 wraps, kind-5 dismissal, blinded removal notice | shipped |
+| — | `apps/kanban-tester` — React demo host with an event-log drawer | shipped |
+
+Wire-format decisions live in `packages/kanban-sdk/docs/adr/`. Read the relevant ADR before
+changing invitations or the removal notice — each records what was tried and rejected.
 
 Known-open, all documented and none blocking: reactions/zaps on private cards (doc 07 §C1);
 board/card writes are not NIP-65 outbox-routed (only invitations are); no cryptographic read-only

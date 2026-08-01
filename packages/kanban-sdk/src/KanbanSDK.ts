@@ -188,6 +188,11 @@ export class KanbanSDK {
     return members.removeMember(this.ctx, board, pubkey);
   }
 
+  /** Boards whose owner has signalled we were removed. Advisory — see the service. */
+  fetchRemovalNotices(): Promise<members.RemovalNotice[]> {
+    return members.fetchRemovalNotices(this.ctx);
+  }
+
   /** Cuts off removed members. O(cards), not atomic, and not retroactive. */
   rotateBoardKey(
     board: KanbanBoard,

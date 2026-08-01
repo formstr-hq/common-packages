@@ -8,7 +8,13 @@ import { fetchBoardLists } from "./boardLists";
 import { boardPointer, createPrivateCard, fetchPrivateCards } from "./cards";
 import { createComment, fetchComments } from "./comments";
 import { acceptInvitation, fetchInvitations } from "./invitations";
-import { fetchMembers, inviteMembers, removeMember, rotateBoardKey } from "./members";
+import {
+  fetchMembers,
+  fetchRemovalNotices,
+  inviteMembers,
+  removeMember,
+  rotateBoardKey,
+} from "./members";
 
 async function fixture() {
   const runtime = new FakeRuntime();
@@ -89,8 +95,40 @@ describe("removeMember", () => {
     const removal = (alice.runtime as FakeRuntime).published.find(
       (e) => e.kind === KANBAN_KINDS.membershipRemoval,
     )!;
-    expect(removal.tags).toContainEqual(["a", `32301:${board.pubkey}:${board.id}`]);
-    expect(removal.tags).toContainEqual(["p", bobPubkey]);
+    // Blinded, so a relay cannot tell which board this is or who left.
+    expect(removal.tags).toContainEqual(["b", boardPointer(board, board.viewKey!)]);
+    expect(JSON.stringify(removal)).not.toContain(board.id);
+    expect(JSON.stringify(removal)).not.toContain(bobPubkey);
+  });
+
+  it("lets the removed member find the notice with one query across every board", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+    await removeMember(alice, withBob, bobPubkey);
+
+    const notices = await fetchRemovalNotices(bob);
+    expect(notices.map((n) => n.coordinate)).toEqual([`32301:${board.pubkey}:${board.id}`]);
+  });
+
+  it("ignores a removal notice that did not come from the board owner", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const [invitation] = await fetchInvitations(bob);
+    await acceptInvitation(bob, invitation);
+
+    // Bob holds the view key, so he can compute the pointer — but forging an
+    // eviction must not work, or any member could remove any other.
+    const forged = await (await bob.getSigner()).signEvent({
+      kind: KANBAN_KINDS.membershipRemoval,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["b", boardPointer(withBob, board.viewKey!)]],
+      content: "",
+    });
+    (bob.runtime as FakeRuntime).seed(forged);
+
+    expect(await fetchRemovalNotices(bob)).toEqual([]);
   });
 
   it("is a notification, not a revocation — the old key still opens the board", async () => {

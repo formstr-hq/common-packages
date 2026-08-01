@@ -1,13 +1,13 @@
 import { boardCoordinate, buildPrivateBoardTags } from "../codec/board";
 import { NotBoardOwnerError, type KanbanCtx } from "../contracts";
 import { blindedPointer } from "../crypto/blindedPointer";
-import { encryptWithViewKey, generateViewKey } from "../crypto/viewKey";
+import { encryptWithViewKey, generateViewKey, viewKeyFromNsec } from "../crypto/viewKey";
 import { nextCreatedAt } from "../discovery/dedupe";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardRole, KanbanBoard } from "../types";
 import { fetchBoardLists, updateBoardList } from "./boardLists";
-import { updatePrivateBoard } from "./boards";
-import { fetchPrivateCards } from "./cards";
+import { resolveBoardViewKey, updatePrivateBoard } from "./boards";
+import { boardPointer, fetchPrivateCards } from "./cards";
 import { fetchComments } from "./comments";
 import { sendInvitations } from "./invitations";
 
@@ -80,14 +80,19 @@ export async function removeMember(
     members: board.members.filter((p) => p !== pubkey),
   });
 
+  // Tagged with the blinded pointer, never `a` or `p`. An `a` tag would publish
+  // "someone was removed from THIS private board" in the clear, and `p` would
+  // name them — the board's contents are encrypted, so leaking its membership
+  // changes in plaintext gives away the roster for free. `b` is computed from
+  // the view key, so only key holders can link the notice to a board, and the
+  // removed member still holds the old key and can still compute it.
+  const viewKey = await resolveBoardViewKey(ctx, board);
   const signer = await ctx.getSigner();
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.membershipRemoval,
     created_at: nextCreatedAt(),
     tags: [
-      ["a", boardCoordinate(board)],
-      ["e", board.eventId],
-      ["p", pubkey],
+      ["b", boardPointer(board, viewKey)],
       ["k", String(KANBAN_KINDS.privateBoard)],
     ],
     content: "",
@@ -95,6 +100,63 @@ export async function removeMember(
   await ctx.runtime.publish(ctx.relays, signed);
 
   return updated;
+}
+
+export interface RemovalNotice {
+  /** `32301:<author>:<d>` of the board we were removed from. */
+  coordinate: string;
+  removedAt: number;
+}
+
+/**
+ * Boards whose owner has published a removal notice matching a key we hold.
+ *
+ * One query for every board at once, which is the only reason the notice earns
+ * its place: without it, finding out you were removed means refetching every
+ * board in your list and diffing its member tags. It is still only a
+ * notification — the authoritative state is the board event, and actual
+ * revocation is `rotateBoardKey`.
+ *
+ * Only the owner's notices count. Anyone holding the view key can compute the
+ * same pointer, so an unauthenticated notice would let any member evict any
+ * other from every client that believed it.
+ */
+export async function fetchRemovalNotices(ctx: KanbanCtx): Promise<RemovalNotice[]> {
+  const lists = await fetchBoardLists(ctx);
+
+  const byPointer = new Map<string, { coordinate: string; owner: string }>();
+  for (const list of lists) {
+    for (const ref of list.boards) {
+      if (!ref.viewKey) continue;
+      const [, owner] = ref.coordinate.split(":");
+      if (!owner) continue;
+      const pointer = blindedPointer(viewKeyFromNsec(ref.viewKey).pubkey, ref.coordinate);
+      byPointer.set(pointer, { coordinate: ref.coordinate, owner });
+    }
+  }
+  if (byPointer.size === 0) return [];
+
+  const events = await ctx.runtime.querySync(ctx.relays, {
+    kinds: [KANBAN_KINDS.membershipRemoval],
+    "#b": [...byPointer.keys()],
+  });
+
+  const notices = new Map<string, RemovalNotice>();
+  for (const event of events) {
+    for (const tag of event.tags) {
+      if (tag[0] !== "b" || !tag[1]) continue;
+      const board = byPointer.get(tag[1]);
+      if (!board || event.pubkey !== board.owner) continue;
+      const previous = notices.get(board.coordinate);
+      if (!previous || event.created_at > previous.removedAt) {
+        notices.set(board.coordinate, {
+          coordinate: board.coordinate,
+          removedAt: event.created_at,
+        });
+      }
+    }
+  }
+  return [...notices.values()];
 }
 
 export interface RotationResult {

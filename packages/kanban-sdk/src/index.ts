@@ -81,4 +81,5 @@ export { buildInvitationRumorTags, parseInvitationRumor } from "./codec/invitati
 export { COMMENT_MANAGED_TAGS, buildCommentTags, parseComment } from "./codec/comment";
 export { canComment } from "./services/comments";
 export { resolveWithRotation } from "./services/cards";
-export type { BoardMember, RotationResult } from "./services/members";
+export { fetchRemovalNotices } from "./services/members";
+export type { BoardMember, RemovalNotice, RotationResult } from "./services/members";

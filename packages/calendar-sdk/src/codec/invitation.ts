@@ -1,4 +1,5 @@
 import { nip19 } from "nostr-tools";
+import type { Filter } from "nostr-tools";
 
 import { CALENDAR_KINDS } from "../kinds";
 import type { Invitation } from "../types";
@@ -141,14 +142,14 @@ export function invitationInboxFilters(params: {
   since?: number;
   until?: number;
   limit?: number;
-}): Record<string, unknown>[] {
+}): Filter[] {
   const window = {
     ...(params.since !== undefined && { since: params.since }),
     ...(params.until !== undefined && { until: params.until }),
     ...(params.limit !== undefined && { limit: params.limit }),
   };
 
-  const filters: Record<string, unknown>[] = [
+  const filters: Filter[] = [
     {
       kinds: [params.wrapKind],
       "#p": params.pubkeys,

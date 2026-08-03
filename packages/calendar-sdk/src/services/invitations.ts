@@ -274,7 +274,11 @@ export async function dismissInvitation(
     tags: buildDeletionTags({
       eventIds: [invitation.giftWrapId],
       coordinates: [invitation.coordinate],
-      kinds: [ctx.wrapKind],
+      // Both kinds. This path only ever runs for a wrap with no
+      // `signing_nsec` — that is, a pre-NIP-17 wrap, whose wire kind is
+      // `wrapType` (1052), not `wrapKind`. Naming only 1059 would describe the
+      // wrong kind for exactly the events this branch handles.
+      kinds: [ctx.wrapKind, ctx.wrapType],
     }),
   });
 }

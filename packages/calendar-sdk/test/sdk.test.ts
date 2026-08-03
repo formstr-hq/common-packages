@@ -268,6 +268,22 @@ describe("invitations", () => {
     expect(await bobSdk.fetchInvitations()).toHaveLength(0);
   });
 
+  it("the legacy dismissal names the legacy wrap kind, not just 1059", async () => {
+    // This branch only runs for a wrap with no signing_nsec — a pre-NIP-17
+    // wrap, whose wire kind is 1052.
+    const bobSdk = new CalendarSDK({ signer: bob.signer, runtime, relays: ["wss://test.relay"] });
+    await sdk.publishPrivateEvent({ ...draft, participants: [bob.pubkey] }, {});
+
+    const [invitation] = await bobSdk.fetchInvitations();
+    await bobSdk.dismissInvitation({ ...invitation, signingNsec: undefined });
+
+    const deletion = runtime.publishedOfKind(CALENDAR_KINDS.deletion).at(-1)!;
+    expect(deletion.tags).toContainEqual(["k", "1059"]);
+    expect(deletion.tags).toContainEqual(["k", "1052"]);
+    expect(deletion.tags).toContainEqual(["e", invitation.giftWrapId]);
+    expect(deletion.tags).toContainEqual(["a", invitation.coordinate]);
+  });
+
   it("a dismissed invitation stays dismissed when re-sent under a new wrap", async () => {
     // Matching on wrap id alone would resurrect it — the sender's second
     // invitation is a different event.

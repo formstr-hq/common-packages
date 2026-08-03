@@ -125,6 +125,41 @@ export async function sendInvitations(
   return wraps;
 }
 
+/**
+ * Wraps that have been retracted by a kind-5 signed with the wrap's OWN key.
+ *
+ * A compliant relay stops serving a deleted event, so on a good relay this
+ * finds nothing. But NIP-09 enforcement is optional and uneven, and a
+ * self-signed dismissal is authored by the wrap's ephemeral key — not by the
+ * dismisser — so the caller's own-deletions index cannot see it either. Without
+ * this check a dismissed invitation reappears on the next read.
+ *
+ * The author check IS the authorization: NIP-09 honours a deletion only from
+ * the target event's author, so a kind-5 naming a wrap counts only when it was
+ * signed by that wrap's own pubkey.
+ */
+async function fetchRetractedWraps(
+  ctx: CalendarCtx,
+  wraps: Map<string, Event>,
+): Promise<Set<string>> {
+  const retracted = new Set<string>();
+  if (wraps.size === 0) return retracted;
+
+  const deletions = await ctx.runtime.querySync(ctx.relays, {
+    kinds: [CALENDAR_KINDS.deletion],
+    "#e": [...wraps.keys()],
+  });
+
+  for (const deletion of deletions) {
+    for (const tag of deletion.tags) {
+      if (tag[0] !== "e" || !tag[1]) continue;
+      const wrap = wraps.get(tag[1]);
+      if (wrap && deletion.pubkey === wrap.pubkey) retracted.add(tag[1]);
+    }
+  }
+  return retracted;
+}
+
 export interface FetchInvitationsOptions {
   since?: number;
   until?: number;
@@ -168,18 +203,21 @@ export async function fetchInvitations(
     }
   }
 
-  const dismissals =
-    options.honourDismissals === false
-      ? indexDeletions([])
-      : indexDeletions(
-          await ctx.runtime.querySync(ctx.relays, {
-            kinds: [CALENDAR_KINDS.deletion, CALENDAR_KINDS.participantRemoval],
-            authors: [pubkey],
-          }),
-        );
+  const honour = options.honourDismissals !== false;
+  const dismissals = honour
+    ? indexDeletions(
+        await ctx.runtime.querySync(ctx.relays, {
+          kinds: [CALENDAR_KINDS.deletion, CALENDAR_KINDS.participantRemoval],
+          authors: [pubkey],
+        }),
+      )
+    : indexDeletions([]);
+
+  const retracted = honour ? await fetchRetractedWraps(ctx, wraps) : new Set<string>();
 
   const invitations: Invitation[] = [];
   for (const wrap of wraps.values()) {
+    if (retracted.has(wrap.id)) continue;
     if (isDeleted(dismissals, { id: wrap.id })) continue;
     let invitation: Invitation | null = null;
     try {

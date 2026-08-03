@@ -1,6 +1,20 @@
-import { RRule } from "rrule";
+import * as rruleModule from "rrule";
 
 import { RepeatingFrequency } from "../types";
+
+/**
+ * `rrule` 2.8 ships CJS and ESM but declares no `exports` map, so Node resolves
+ * it to the CJS build and its lexer does not see `RRule` as a named export —
+ * `import { RRule }` throws for any consumer on plain Node ESM. A bundler
+ * follows the `module` field instead, where the namespace IS the named exports
+ * and there is no `default`. Reading both covers the two worlds.
+ */
+type RRuleClass = typeof rruleModule.RRule;
+type RRuleInstance = InstanceType<RRuleClass>;
+
+const RRuleCtor: RRuleClass =
+  (rruleModule as { RRule?: RRuleClass }).RRule ??
+  (rruleModule as unknown as { default: { RRule: RRuleClass } }).default.RRule;
 
 /**
  * Recurrence, mirroring nostr-calendar's `src/utils/repeatingEventsHelper.ts`.
@@ -49,9 +63,9 @@ export function rruleToFrequency(rule: string): RepeatingFrequency | null {
  * `DTSTART` is written as a compact UTC stamp, byte-identical to upstream's
  * `parseRRule`. Changing the format changes which occurrences `rrule` produces.
  */
-function buildRule(rrule: string, dtstart: Date): RRule {
+function buildRule(rrule: string, dtstart: Date): RRuleInstance {
   const stamp = dtstart.toISOString().replace(/[-:]/g, "").split(".")[0];
-  return RRule.fromString(`DTSTART:${stamp}Z\nRRULE:${normalizeRule(rrule)}`);
+  return RRuleCtor.fromString(`DTSTART:${stamp}Z\nRRULE:${normalizeRule(rrule)}`);
 }
 
 export interface Occurrence {
@@ -77,7 +91,7 @@ export function occurrenceStartsInRange(
   }
   return buildRule(rrule, new Date(begin))
     .between(new Date(Math.max(begin, rangeStart)), new Date(rangeEnd), true)
-    .map((occurrence) => occurrence.getTime());
+    .map((occurrence: Date) => occurrence.getTime());
 }
 
 /** Occurrences as `{begin, end}` pairs, preserving the event's duration. */
@@ -123,7 +137,7 @@ export function isEventInDateRange(
     true,
   );
 
-  return occurrences.some((occurrence) => {
+  return occurrences.some((occurrence: Date) => {
     const occStart = occurrence.getTime();
     return occStart <= rangeEnd && occStart + duration >= rangeStart;
   });

@@ -297,7 +297,11 @@ key's nsec in the (encrypted) rumor, and the recipient self-signs:
 kind 5, signed by the ephemeral key, tags: [["e", wrapId]]
 ```
 
-Upstream's `buildSelfSignedDeletion` (`crypto.ts:250`) writes **`e` rows only** — no `k` row.
+Upstream's `buildSelfSignedDeletion` (`crypto.ts:250`) writes **`e` rows only**. This SDK adds
+`["k", "1059"]`: NIP-09 says a deletion MUST carry `k`, upstream never *reads* deletion events
+so this cannot desync the two clients, and a relay that enforces the rule would otherwise
+reject the request and leave dismissal silently broken. Same class of read-compatible
+deviation as the busy-list timestamp in §9.
 
 **Fallback** for legacy wraps with no `signing_nsec`: a signer-authored kind 5 with
 `["e", wrapId]` and `["k", "1059"]`. It will not be honoured by a strict relay, but it serves

@@ -100,6 +100,16 @@ export interface CardDraft {
   assignees?: string[];
   labels?: string[];
   links?: CardLink[];
+  /**
+   * Host-owned tags the SDK writes verbatim and never interprets. They ride
+   * inside the encrypted payload on a private card. Read them back off
+   * `KanbanCard.rawTags`. On an update, the keys present here are treated as
+   * managed for that write, so they overlay in place instead of duplicating;
+   * keys absent from an update are preserved untouched (e.g. a plain move keeps
+   * them). Use non-managed keys — the SDK does not police collisions with its
+   * own (`d`, `title`, `s`, `rank`, …).
+   */
+  extraTags?: string[][];
 }
 
 export type BoardRole = "owner" | "maintainer" | "member";

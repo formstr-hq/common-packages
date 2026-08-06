@@ -29,6 +29,19 @@ export function canEditCards(board: KanbanBoard, pubkey: string): boolean {
   return board.maintainers.includes(pubkey);
 }
 
+/**
+ * Keys a single write manages. The static set plus any host-owned `extraTags`
+ * keys the caller supplied, so those overlay in place instead of duplicating
+ * against the copies preserved from the previous version.
+ */
+function managedFor(
+  base: readonly string[],
+  extraTags: string[][] | undefined,
+): readonly string[] {
+  if (!extraTags?.length) return base;
+  return [...base, ...extraTags.map((t) => t[0])];
+}
+
 async function assertMaintainer(ctx: KanbanCtx, board: KanbanBoard): Promise<string> {
   const signer = await ctx.getSigner();
   const pubkey = await signer.getPublicKey();
@@ -94,6 +107,7 @@ export async function updateCard(
     assignees: changes.assignees ?? card.assignees,
     labels: changes.labels ?? card.labels,
     links: changes.links ?? card.links,
+    extraTags: changes.extraTags,
   };
   const rank = changes.rank ?? card.rank;
 
@@ -102,7 +116,7 @@ export async function updateCard(
   const tags = mergeTags(
     card.rawTags,
     buildPublicCardTags(draft, card.id, card.boardCoordinate, rank),
-    CARD_MANAGED_TAGS,
+    managedFor(CARD_MANAGED_TAGS, changes.extraTags),
   );
   return publishCard(ctx, tags, nextCreatedAt(card.createdAt));
 }
@@ -249,13 +263,14 @@ export async function updatePrivateCard(
     assignees: changes.assignees ?? card.assignees,
     labels: changes.labels ?? card.labels,
     links: changes.links ?? card.links,
+    extraTags: changes.extraTags,
   };
   const rank = changes.rank ?? card.rank;
 
   const inner = mergeTags(
     card.rawTags,
     buildPrivateCardTags(draft, card.id, card.boardCoordinate, rank),
-    PRIVATE_CARD_MANAGED_TAGS,
+    managedFor(PRIVATE_CARD_MANAGED_TAGS, changes.extraTags),
   );
 
   return publishPrivateCard(

@@ -16,6 +16,7 @@ import {
   fetchCards,
   fetchPrivateCards,
   moveCard,
+  movePrivateCard,
   updateCard,
   updatePrivateCard,
 } from "./cards";
@@ -218,6 +219,53 @@ describe("createPrivateCard", () => {
     await expect(createPrivateCard(stranger, { ...board }, { title: "Injected" })).rejects.toThrow(
       /is not a maintainer/,
     );
+  });
+});
+
+describe("host-owned extraTags passthrough", () => {
+  const contentTags = (card: { rawTags: string[][] }) =>
+    card.rawTags.filter((t) => t[0] === "content");
+
+  it("writes them verbatim inside the encrypted payload and reads them back off rawTags", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, {
+      title: "Ship it",
+      status: "col-1",
+      extraTags: [["content", "# Ship it\n\nfull note body"]],
+    });
+
+    expect(contentTags(card)).toEqual([["content", "# Ship it\n\nfull note body"]]);
+    const event = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.privateCard)!;
+    expect(event.tags.map((t) => t[0]).sort()).toEqual(["b", "d"]); // never in the clear
+    expect(event.content).not.toContain("full note body");
+  });
+
+  it("preserves them across a move that does not mention them", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    await createPrivateCard(ctx, board, {
+      title: "Ship it",
+      status: "col-1",
+      extraTags: [["content", "# body"]],
+    });
+    const cards = await fetchPrivateCards(ctx, board);
+    const moved = await movePrivateCard(ctx, board, cards, cards[0].id, "col-2", 0);
+
+    expect(moved.status).toBe("col-2");
+    expect(contentTags(moved)).toEqual([["content", "# body"]]);
+  });
+
+  it("overlays in place on edit instead of duplicating", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, {
+      title: "Ship it",
+      status: "col-1",
+      extraTags: [["content", "# before"]],
+    });
+    const edited = await updatePrivateCard(ctx, board, card, {
+      extraTags: [["content", "# after"]],
+    });
+
+    expect(contentTags(edited)).toEqual([["content", "# after"]]);
   });
 });
 

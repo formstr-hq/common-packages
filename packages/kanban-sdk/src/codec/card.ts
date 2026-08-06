@@ -75,6 +75,9 @@ export function buildPublicCardTags(
 
   for (const link of draft.links ?? []) tags.push(buildCardLinkTag(link));
 
+  // Host-owned passthrough tags, written verbatim. See CardDraft.extraTags.
+  for (const tag of draft.extraTags ?? []) tags.push(tag);
+
   return tags;
 }
 
@@ -175,6 +178,9 @@ export function buildPrivateCardTags(
   // kanbanstr cannot read a private card at all.
   for (const assignee of draft.assignees ?? []) tags.push(["p", assignee]);
   for (const link of draft.links ?? []) tags.push(buildCardLinkTag(link));
+
+  // Host-owned passthrough tags, written verbatim inside the encrypted payload.
+  for (const tag of draft.extraTags ?? []) tags.push(tag);
 
   return tags;
 }

@@ -1,0 +1,71 @@
+{
+  "name": "@formstr/core",
+  "version": "0.1.0",
+  "description": "Nostr primitives for Formstr: signers, relay/runtime plumbing, crypto, Blossom, cross-module linking",
+  "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/formstr-hq/common-packages.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/formstr-hq/common-packages/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./signer": {
+      "types": "./dist/signer/index.d.ts",
+      "import": "./dist/signer/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    },
+    "./relay": {
+      "types": "./dist/relay/index.d.ts",
+      "import": "./dist/relay/index.js"
+    },
+    "./blossom": {
+      "types": "./dist/blossom/index.d.ts",
+      "import": "./dist/blossom/index.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto/index.d.ts",
+      "import": "./dist/crypto/index.js"
+    },
+    "./linking": {
+      "types": "./dist/linking.d.ts",
+      "import": "./dist/linking.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.0.1",
+    "nostr-tools": "^2.16.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4"
+  }
+}

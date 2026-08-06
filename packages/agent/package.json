@@ -1,0 +1,98 @@
+{
+  "name": "@formstr/agent",
+  "version": "0.1.0",
+  "description": "Formstr service layer + 53-tool registry (DOM-free; runs in browser and Node)",
+  "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/formstr-hq/common-packages.git",
+    "directory": "packages/agent"
+  },
+  "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/agent#readme",
+  "bugs": {
+    "url": "https://github.com/formstr-hq/common-packages/issues"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "import": "./dist/services/index.js",
+      "require": "./dist/services/index.cjs"
+    },
+    "./services/forms": {
+      "types": "./dist/services/forms/index.d.ts",
+      "import": "./dist/services/forms/index.js",
+      "require": "./dist/services/forms/index.cjs"
+    },
+    "./services/calendar": {
+      "types": "./dist/services/calendar/index.d.ts",
+      "import": "./dist/services/calendar/index.js",
+      "require": "./dist/services/calendar/index.cjs"
+    },
+    "./services/pages": {
+      "types": "./dist/services/pages/index.d.ts",
+      "import": "./dist/services/pages/index.js",
+      "require": "./dist/services/pages/index.cjs"
+    },
+    "./services/drive": {
+      "types": "./dist/services/drive/index.d.ts",
+      "import": "./dist/services/drive/index.js",
+      "require": "./dist/services/drive/index.cjs"
+    },
+    "./services/polls": {
+      "types": "./dist/services/polls/index.d.ts",
+      "import": "./dist/services/polls/index.js",
+      "require": "./dist/services/polls/index.cjs"
+    },
+    "./services/profile": {
+      "types": "./dist/services/profile/index.d.ts",
+      "import": "./dist/services/profile/index.js",
+      "require": "./dist/services/profile/index.cjs"
+    },
+    "./services/*": {
+      "types": "./dist/services/*.d.ts",
+      "import": "./dist/services/*.js",
+      "require": "./dist/services/*.cjs"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js",
+      "require": "./dist/tools/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@formstr/core": "workspace:*",
+    "@noble/hashes": "^1.8.0",
+    "nostr-tools": "^2.23.3",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "tsup": "^8.5.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4"
+  }
+}

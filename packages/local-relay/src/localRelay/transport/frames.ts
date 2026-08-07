@@ -41,6 +41,8 @@ export interface Diagnostics {
   relays: RelayHealth[];
   /** The user's NIP-17 DM inbox relays (kind 10050) the kind-1059 stream targets. */
   dmRelays: string[];
+  /** Dedicated NIP-50 relays used for non-empty search interests. */
+  searchRelays: string[];
   /** The discovered relays currently in the gossip pool (most-recent last). */
   gossipRelays: string[];
   /** Counts of currently-connected relays by source. `outbox` is derived
@@ -93,6 +95,8 @@ export type ToWorker =
   // --- config / observation / lifecycle (not network commands) ---
   | { kind: "setAccount"; pubkey: string | null }
   | { kind: "setUserRelays"; relays: string[] }
+  /** Dedicated NIP-50 relays. Empty means search falls back to normal reads. */
+  | { kind: "setSearchRelays"; relays: string[] }
   /** The user's NIP-17 DM inbox relays (kind 10050) — where the kind-1059 stream
    *  reads. Routing-policy input, kept separate from general read relays. */
   | { kind: "setDmRelays"; relays: string[] }

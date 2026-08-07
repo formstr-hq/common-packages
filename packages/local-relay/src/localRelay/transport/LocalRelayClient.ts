@@ -183,6 +183,11 @@ export class LocalRelayClient {
     this.send({ kind: "setUserRelays", relays });
   }
 
+  /** Dedicated NIP-50 relays — a routing-policy input, not a command. */
+  setSearchRelays(relays: string[]): void {
+    this.send({ kind: "setSearchRelays", relays });
+  }
+
   /**
    * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
    * are delivered. The worker reads the kind-1059 stream from these specifically;

@@ -136,6 +136,15 @@ describe("DataLayer", () => {
     expect(f.count("wss://dm1")).toBe(1);
   });
 
+  it("setSearchRelays routes NIP-50 interests away from user relays", async () => {
+    const { f, dataLayer } = await wire();
+    dataLayer.setSearchRelays(["wss://search"]);
+    dataLayer.observe([{ kinds: [0], search: "alice" }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://search")).toBe(1);
+    expect(f.count("wss://u1")).toBe(0);
+  });
+
   it("seenOn reports the relays a cached event arrived on", async () => {
     const { f, dataLayer } = await wire();
     dataLayer.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });

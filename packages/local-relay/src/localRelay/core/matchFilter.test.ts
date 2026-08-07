@@ -46,6 +46,19 @@ describe("matchFilter", () => {
     expect(matchFilter(e, { limit: 0 })).toBe(true);
   });
 
+  it("matches NIP-50 search terms case-insensitively with AND semantics", () => {
+    const e = makeEvent({ content: '{"name":"Alice Cooper","about":"Nostr Dev"}' });
+    expect(matchFilter(e, { search: "alice DEV" })).toBe(true);
+    expect(matchFilter(e, { search: "alice missing" })).toBe(false);
+    expect(matchFilter(e, { search: "   " })).toBe(true);
+  });
+
+  it("combines search with ordinary filter fields", () => {
+    const e = makeEvent({ kind: 0, content: '{"name":"Alice"}' });
+    expect(matchFilter(e, { kinds: [0], search: "alice" })).toBe(true);
+    expect(matchFilter(e, { kinds: [1], search: "alice" })).toBe(false);
+  });
+
   it("matchFilter handles a tagless event against a non-tag filter", () => {
     const tagless = { id: "a".repeat(64), pubkey: "p".repeat(64), kind: 1, created_at: 0, content: "" } as any;
     expect(matchFilter(tagless, { kinds: [1] })).toBe(true);

@@ -119,12 +119,18 @@ export class LocalRelayClient {
    * Publish an already-signed event; resolves with each relay's outcome (for
    * publish diagnostics). Retry is just another publish — the worker, not the
    * app, decides how to reach dead relays.
+   *
+   * `opts.relays` are explicit target hints folded into the worker's routing —
+   * the one way to reach relays it can't derive itself. The motivating case is a
+   * NIP-17 gift wrap (kind 1059): its recipient reads from their kind-10050 DM
+   * inbox, which the worker can't discover for an arbitrary pubkey, so the sender
+   * (which resolved it to compose the message) passes it here.
    */
-  publish(event: Event): Promise<RelayPublishOutcome[]> {
+  publish(event: Event, opts?: { relays?: string[] }): Promise<RelayPublishOutcome[]> {
     const pubId = `p${this.counter++}`;
     return new Promise((resolve) => {
       this.pendingPublishes.set(pubId, resolve);
-      this.send({ kind: "publish", pubId, event });
+      this.send({ kind: "publish", pubId, event, relays: opts?.relays });
     });
   }
 

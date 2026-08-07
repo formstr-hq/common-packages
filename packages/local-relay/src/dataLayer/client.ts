@@ -122,9 +122,16 @@ export class DataLayer {
     return { event, result: toPublishResult(outcomes) };
   }
 
-  /** Publish an already-signed event (used by nip17/lists + diagnostics retry). */
-  async publishEvent(event: Event): Promise<PublishResult> {
-    return toPublishResult(await this.deps.client.publish(event));
+  /**
+   * Publish an already-signed event (used by nip17/lists + diagnostics retry).
+   *
+   * `opts.relays` are explicit target hints for relays the worker can't derive —
+   * notably a NIP-17 gift wrap's recipient inbox (kind 10050), which the sender
+   * resolves and passes here so the wrap reaches the recipient rather than only
+   * the sender's own relays.
+   */
+  async publishEvent(event: Event, opts?: { relays?: string[] }): Promise<PublishResult> {
+    return toPublishResult(await this.deps.client.publish(event, opts));
   }
 
   /** Add an event to the local store (optimistic / received out-of-band). No network. */

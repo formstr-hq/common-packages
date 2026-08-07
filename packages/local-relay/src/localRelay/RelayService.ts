@@ -47,6 +47,13 @@ const DEFAULT_MAX_GOSSIP_RELAYS = 64;
 const DM_KINDS = new Set<number>([1059]);
 
 /**
+ * NIP-17 DM inbox relay list (kind 10050). A recipient receives gift wraps here,
+ * deliberately separate from their kind-10002 read relays — so a DM publish must
+ * target this list, never the outbox read relays.
+ */
+const DM_INBOX_KIND = 10050;
+
+/**
  * "Online" debounce: we count as online if a user relay is connected now or was
  * within this window, so a brief socket blip doesn't flap the flag (or trigger
  * redundant outbox sweeps). See `isOnline`.
@@ -162,7 +169,8 @@ export class RelayService {
       onObserve: (subId, filters, sync, relays) =>
         this.observe(subId, filters, sync, relays),
       onUnobserve: (subId) => this.unobserve(subId),
-      onPublish: (pubId, event) => this.publishUpstream(pubId, event),
+      onPublish: (pubId, event, relays) =>
+        this.publishUpstream(pubId, event, relays),
       onRelayHealth: (reqId) =>
         this.host.postRelayHealth(reqId, this.relayHealth()),
       onSeenOn: (reqId, eventId) =>
@@ -493,15 +501,22 @@ export class RelayService {
 
   /**
    * Publish a client event upstream with per-relay tracking. Targets are the
-   * author's write relays (outbox) ∪ the user's relays, plus the inbox relays of
-   * any p-tagged pubkey (gossip). The worker owns routing; retry is just another
-   * publish. Always reports a result so the diagnostics UI never hangs.
+   * author's write relays (outbox) ∪ the user's relays, plus the read relays of
+   * any p-tagged pubkey (gossip) — except for DMs, which route to recipient inbox
+   * relays instead (see `publishTargets`). `hintRelays` are explicit targets the
+   * caller supplies for relays the worker can't derive. The worker owns routing;
+   * retry is just another publish. Always reports a result so the diagnostics UI
+   * never hangs.
    *
    * Targets that don't accept (timeout / unreachable — NOT outright rejection)
    * become durable outbox debt, re-delivered on reconnect until they land.
    */
-  private publishUpstream(pubId: string, event: Event): void {
-    const targets = this.publishTargets(event);
+  private publishUpstream(
+    pubId: string,
+    event: Event,
+    hintRelays?: string[],
+  ): void {
+    const targets = this.publishTargets(event, hintRelays);
     this.pool.publish(targets, event, {
       now: this.now,
       timeoutMs: this.publishTimeoutMs,
@@ -523,10 +538,19 @@ export class RelayService {
     });
   }
 
-  private publishTargets(event: Event): string[] {
+  private publishTargets(event: Event, hintRelays: string[] = []): string[] {
+    // NIP-17 gift wraps don't follow the NIP-65 outbox model. Each is signed by a
+    // throwaway per-message key, so `getWriteRelays(event.pubkey)` is empty; and a
+    // recipient receives them on their kind-10050 DM inbox, which is deliberately
+    // separate from the kind-10002 read relays the generic path below would use.
+    // Routing a wrap to a recipient's read relays is both wrong (it may never
+    // reach their inbox) and leaky, so DMs get their own routing.
+    if (DM_KINDS.has(event.kind)) return this.dmPublishTargets(event, hintRelays);
+
     const targets = new Set<string>([
       ...this.getWriteRelays(event.pubkey),
       ...this.userRelays,
+      ...hintRelays,
     ]);
     for (const tag of event.tags) {
       if (tag[0] === "p" && tag[1]) {
@@ -534,6 +558,64 @@ export class RelayService {
       }
     }
     return Array.from(targets);
+  }
+
+  /**
+   * Delivery targets for a NIP-17 gift wrap, degrading through progressively
+   * weaker sources so a wrap still ships when a recipient hasn't published the
+   * ideal relay list:
+   *
+   *  1. The recipient's DM inbox (kind 10050) — the correct NIP-17 target. Two
+   *     sources, unioned: `hintRelays` (the caller resolved the 10050 to compose
+   *     the message — the worker can't discover an arbitrary pubkey's inbox on
+   *     its own) and any kind-10050 already in the store.
+   *  2. NIP-65 fallback — the recipient's kind-10002 read relays, used only when
+   *     no inbox was found for anyone. Not spec-ideal for a DM, but where a
+   *     reader without a 10050 is most likely to see it.
+   *  3. Default fallback — `userRelays`, the last resort so a wrap goes somewhere
+   *     rather than nowhere.
+   *
+   * Never the gossip pool. The read-relay tier is a fallback only — when an inbox
+   * is known it is never mixed in, so a DM isn't broadened onto read relays.
+   */
+  private dmPublishTargets(event: Event, hintRelays: string[]): string[] {
+    const targets = new Set<string>(hintRelays);
+    let haveInbox = hintRelays.length > 0;
+    for (const tag of event.tags) {
+      if (tag[0] !== "p" || !tag[1]) continue;
+      const inbox = this.dmInboxRelays(tag[1]);
+      if (inbox.length) {
+        for (const relay of inbox) targets.add(relay);
+        haveInbox = true;
+      }
+    }
+
+    // (2) NIP-65 read relays, only when no recipient inbox was found at all.
+    if (!haveInbox) {
+      for (const tag of event.tags) {
+        if (tag[0] !== "p" || !tag[1]) continue;
+        for (const relay of this.getReadRelays(tag[1])) targets.add(relay);
+      }
+    }
+
+    // (3) The default relay set, only when nothing else resolved.
+    if (targets.size === 0) for (const relay of this.userRelays) targets.add(relay);
+    return Array.from(targets);
+  }
+
+  /** Parse a pubkey's latest kind-10050 (NIP-17 DM inbox) from the store. */
+  private dmInboxRelays(pubkey: string): string[] {
+    const [event] = this.db.query({
+      kinds: [DM_INBOX_KIND],
+      authors: [pubkey],
+      limit: 1,
+    });
+    if (!event) return [];
+    const out: string[] = [];
+    for (const tag of event.tags) {
+      if (tag[0] === "relay" && tag[1]) out.push(tag[1]);
+    }
+    return out;
   }
 
   // --- lifecycle ------------------------------------------------------------

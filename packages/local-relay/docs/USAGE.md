@@ -212,7 +212,7 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `fetchById(id)` | Resolve one event by id from cache. | **Never** |
 | `fetchReplaceable(kind, pubkey)` | Current value of a replaceable event (profile, relay list) from cache. | **Never** |
 | `publish(template)` | Sign + store locally + send upstream. Returns `{ event, result }`. | Yes |
-| `publishEvent(event)` | Publish an already-signed event (lists, diagnostics retry). | Yes |
+| `publishEvent(event, opts?)` | Publish an already-signed event (lists, diagnostics retry). `opts.relays` are explicit target hints (e.g. a recipient's DM inbox). | Yes |
 | `addEvent(event)` / `addEvents(events)` | Add events to the local store (optimistic / out-of-band). | No |
 | `relayHealth()` | Live connection health of the user's relays. | Read-only observation |
 | `seenOn(eventId)` | Relays a cached event was opportunistically observed on (usually one — the source; good for relay hints, not a "who has it" count). Returns `string[]`. | Read-only observation |
@@ -358,6 +358,18 @@ dead relays; you don't manage sockets.
 
 Already have a signed event (e.g. NIP-17 gift wraps, list edits)? Use
 `publishEvent(event)`.
+
+**Explicit relay hints.** `publishEvent(event, { relays })` folds extra target
+relays into routing — the one way to reach relays the worker can't derive itself.
+The motivating case is a NIP-17 gift wrap: its recipient reads from their
+**kind-10050** DM inbox, which the worker can't discover for an arbitrary pubkey,
+so the sender (which resolved it to compose the message) passes it here:
+
+```ts
+await dataLayer.publishEvent(giftWrap, { relays: recipientInboxRelays });
+```
+
+See §11.6 for how gift-wrap (`kind:1059`) routing works with and without hints.
 
 ---
 
@@ -628,6 +640,21 @@ Like `setUserRelays`, this is a routing-policy input: call it once early and aga
 whenever the user's `kind:10050` changes (e.g. after store hydration). A real
 change reopens the kind-1059 stream on the new inbox relays; an unchanged set is a
 no-op. `diagnostics().dmRelays` reflects the current set.
+
+**Publishing** a gift wrap (`kind:1059`) is routed to the *recipient's* DM inbox,
+never the NIP-65 outbox path — a wrap is signed by a throwaway per-message key (so
+the author has no write relays) and a recipient's inbox is deliberately separate
+from their kind-10002 read relays. Targets, unioned:
+
+- the explicit `relays` you pass to `publishEvent(wrap, { relays })` — the
+  authoritative source, since the worker can't discover an arbitrary recipient's
+  kind-10050; the sender resolves it while composing;
+- any p-tagged recipient's `kind:10050` that already happens to be in the store.
+
+Falls back to the user's relays only when neither yields anything (best-effort, so
+a wrap still goes somewhere). It never targets the recipient's read relays or the
+gossip pool. Delivery is durable: relays that don't accept become outbox debt and
+are re-tried on reconnect.
 
 ### 11.7 Where was an event seen? (`seenOn`)
 

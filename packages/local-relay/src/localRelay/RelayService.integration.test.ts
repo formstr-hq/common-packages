@@ -139,6 +139,74 @@ describe("RelayService — interests drive the network (app cannot)", () => {
     expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === "p".repeat(64))).toBe(true);
   });
 
+  it("publishes a gift wrap to the recipient's kind-10050 DM inbox, NOT their read relays", async () => {
+    const { f, service, client } = await wire();
+    // Bob has both a general read relay (kind 10002) and a DM inbox (kind 10050).
+    service.db.add(
+      makeEvent({ kind: 10002, pubkey: "bob", tags: [["r", "wss://bob-read"]] })
+    );
+    service.db.add(
+      makeEvent({ kind: 10050, pubkey: "bob", tags: [["relay", "wss://bob-inbox"]] })
+    );
+
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "bob"]] });
+    client.publish(wrap);
+    await settle();
+
+    // Delivered to the DM inbox…
+    expect(f.count("wss://bob-inbox")).toBe(1);
+    const inbox = f.last("wss://bob-inbox");
+    inbox.open();
+    expect(inbox.sent.some((m) => m[0] === "EVENT" && m[1].id === wrap.id)).toBe(true);
+    // …and NOT to bob's general read relay, nor spammed to the user's own relays.
+    expect(f.count("wss://bob-read")).toBe(0);
+    expect(f.count("wss://u1")).toBe(0);
+  });
+
+  it("routes a gift wrap to explicit relay hints (the sender-resolved recipient inbox)", async () => {
+    const { f, client } = await wire();
+    // No kind-10050 in the store: the sender supplies the recipient's inbox, as
+    // an app that resolved it to compose the message would.
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "carol"]] });
+    client.publish(wrap, { relays: ["wss://carol-inbox"] });
+    await settle();
+
+    expect(f.count("wss://carol-inbox")).toBe(1);
+    const inbox = f.last("wss://carol-inbox");
+    inbox.open();
+    expect(inbox.sent.some((m) => m[0] === "EVENT" && m[1].id === wrap.id)).toBe(true);
+  });
+
+  it("falls back to a gift-wrap recipient's kind-10002 read relays when they have no DM inbox", async () => {
+    const { f, service, client } = await wire();
+    // Erin published NIP-65 read relays but no kind-10050 DM inbox list.
+    service.db.add(
+      makeEvent({ kind: 10002, pubkey: "erin", tags: [["r", "wss://erin-read"]] })
+    );
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "erin"]] });
+    client.publish(wrap);
+    await settle();
+
+    expect(f.count("wss://erin-read")).toBe(1);
+    const sock = f.last("wss://erin-read");
+    sock.open();
+    expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === wrap.id)).toBe(true);
+    // The NIP-65 fallback stands in for the default — don't also spam user relays.
+    expect(f.count("wss://u1")).toBe(0);
+  });
+
+  it("falls back to user relays for a gift wrap when no inbox is known or hinted", async () => {
+    const { f, client } = await wire();
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "dave"]] });
+    client.publish(wrap);
+    await settle();
+
+    expect(f.count("wss://u1")).toBe(1); // best-effort: still goes somewhere
+    const sock = f.last("wss://u1");
+    sock.open();
+    expect(sock.sent.some((m) => m[0] === "EVENT" && m[1].id === wrap.id)).toBe(true);
+  });
+
   it("an author-less interest reads from the user's relays and ingests their events", async () => {
     const { f, service, client } = await wire();
     const got: string[] = [];

@@ -86,8 +86,11 @@ export type ToWorker =
   | { kind: "unobserve"; subId: string }
   // --- writes ---
   /** Publish a signed event; worker routes + tracks per-relay outcome. Retry =
-   *  publish again (the worker, not the app, handles dead relays). */
-  | { kind: "publish"; pubId: string; event: Event }
+   *  publish again (the worker, not the app, handles dead relays). `relays` are
+   *  explicit target hints folded into routing — the only way to reach relays the
+   *  worker can't derive itself, notably a NIP-17 recipient's kind-10050 DM inbox
+   *  (an arbitrary pubkey's inbox is not otherwise discoverable). */
+  | { kind: "publish"; pubId: string; event: Event; relays?: string[] }
   /** Add events to the local store without publishing upstream (optimistic). */
   | { kind: "ingest"; events: Event[] }
   /** Manually re-attempt delivery of failed outbox records (one by id, or all). */

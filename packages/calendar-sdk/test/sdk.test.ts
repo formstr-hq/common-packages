@@ -279,6 +279,23 @@ describe("invitations", () => {
     expect(await bobSdk.fetchInvitations()).toHaveLength(0);
   });
 
+  it("dismissal also publishes the dismisser's own tombstone", async () => {
+    // The wrap-signed deletion is the one a compliant relay honours; this one
+    // is what survives a relay that ignores NIP-09.
+    const bobSdk = new CalendarSDK({ signer: bob.signer, runtime, relays: ["wss://test.relay"] });
+    await sdk.publishPrivateEvent({ ...draft, participants: [bob.pubkey] }, {});
+
+    const [invitation] = await bobSdk.fetchInvitations();
+    await bobSdk.dismissInvitation(invitation);
+
+    const deletions = runtime.publishedOfKind(CALENDAR_KINDS.deletion);
+    const own = deletions.filter((event) => event.pubkey === bob.pubkey);
+    expect(own).toHaveLength(1);
+    expect(own[0].tags).toContainEqual(["e", invitation.giftWrapId]);
+    expect(own[0].tags).toContainEqual(["a", invitation.coordinate]);
+    expect(own[0].tags).toContainEqual(["k", "1059"]);
+  });
+
   it("a dismissed invitation stays dismissed when re-sent under a new wrap", async () => {
     // Matching on wrap id alone would resurrect it — the sender's second
     // invitation is a different event.

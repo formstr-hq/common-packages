@@ -235,18 +235,17 @@ export async function fetchInvitations(
 }
 
 /**
- * Dismisses an invitation.
+ * Dismisses an invitation, with two deletions that do different jobs.
  *
- * Preferred path: delete the wrap itself, signed by the wrap's own ephemeral
- * key from `signing_nsec`. NIP-09 honours a deletion only from the target's
- * author, and that author is a throwaway key the recipient only gets through
- * the encrypted rumor.
+ * The wrap-signed one is what a compliant relay actually honours: NIP-09 acts
+ * only on a deletion from the target's own author, and a wrap's author is the
+ * throwaway key whose nsec rides inside the encrypted rumor.
  *
- * Wraps sent before that tag existed have no `signing_nsec`. For those we
- * publish a signer-authored deletion naming both the wrap and the event
- * coordinate. A strict relay will not honour it against a wrap it did not
- * author, but it is a durable local tombstone that `fetchInvitations` reads
- * back — which is what keeps a dismissed invitation dismissed across devices.
+ * The signer-authored one is published regardless, because NIP-09 enforcement
+ * is optional and uneven. A non-conformant relay keeps serving the wrap, and
+ * this kind-5 — naming both the wrap and the event coordinate — is the durable
+ * tombstone `fetchInvitations` reads back, which is what keeps the invitation
+ * dismissed on every device.
  */
 export async function dismissInvitation(
   ctx: CalendarCtx,
@@ -257,7 +256,6 @@ export async function dismissInvitation(
       ctx,
       buildSelfSignedDeletion(invitation.signingNsec, [invitation.giftWrapId]),
     );
-    return;
   }
 
   await signAndPublish(ctx, {

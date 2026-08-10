@@ -14,6 +14,9 @@ export function matchFilter(event: Event, filter: Filter): boolean {
   if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
   if (filter.since !== undefined && event.created_at < filter.since) return false;
   if (filter.until !== undefined && event.created_at > filter.until) return false;
+  if (filter.search !== undefined && !matchesSearch(event, filter.search)) {
+    return false;
+  }
 
   // Tag filters: #e, #p, #t, … — each distinct key must be satisfied (AND),
   // any one of its values matching is enough (OR).
@@ -28,6 +31,13 @@ export function matchFilter(event: Event, filter: Filter): boolean {
   }
 
   return true;
+}
+
+/** Approximate NIP-50 matching used to gate cache replay and relay responses. */
+export function matchesSearch(event: Event, search: string): boolean {
+  const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+  const content = event.content.toLowerCase();
+  return terms.every((term) => content.includes(term));
 }
 
 /** True if the event matches ANY of the filters (the NIP-01 REQ semantics). */

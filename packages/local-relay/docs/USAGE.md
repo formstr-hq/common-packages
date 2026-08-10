@@ -221,13 +221,14 @@ dataLayer.observe(/* … */); // resolves the bootstrapped singleton lazily
 | `diagnostics()` | Read-only snapshot of worker state (paused, interests, upstream routing, cache, enrichment). | Read-only observation |
 | `setActiveAccount(pubkey \| null)` | Retarget scope on account switch. | No |
 | `setUserRelays(relays)` | The user's read relays — a routing-policy input. | No |
+| `setSearchRelays(relays)` | Dedicated NIP-50 read relays; an empty set restores ordinary-read fallback. | No |
 | `setDmRelays(relays)` | The user's NIP-17 DM inbox relays (kind 10050) — where the kind-1059 stream reads. | No |
 | `addGossipRelay(url)` / `removeGossipRelay(url)` | Add/remove a discovered relay to the gossip pool (fetch referenced/missing events). | Discovery only |
 | `pause()` / `resume()` | Lifecycle hints (backgrounded / foregrounded). | Worker decides |
 
-> Note: `setUserRelays` exists on both `LocalRelayClient` and `DataLayer`. Call it
-> once early (and again whenever the user's relay list changes). In the quick start
-> it's called on the `client`; calling it on the `dataLayer` is equivalent.
+> Note: `setUserRelays` and `setSearchRelays` exist on both `LocalRelayClient` and
+> `DataLayer`. Call them once early (and again whenever their configured sets
+> change); calling either surface is equivalent.
 
 ---
 
@@ -303,6 +304,20 @@ const profilesHandle = dataLayer.observe(
 This is the pattern in the tester app: the feed observe (networked) drives
 enrichment, and the profile observe (cache-only) just reads the avatars that
 appear — proving enrichment + cache reads work end to end.
+
+### 7.5 Local `search` matching
+
+For cache replay and as a defensive gate on relay responses, a filter's NIP-50
+`search` value is matched approximately: whitespace-separated terms are
+lowercased and every term must occur as a substring of `event.content`. Search is
+combined with the ordinary id/author/kind/time/tag fields. `limit` remains a
+result-set concern.
+
+This is intentionally not a full NIP-50 implementation: it does not parse query
+operators, rank results, tokenize language, or search tags/decoded JSON fields
+independently. JSON profile properties can match only because their serialized
+text is in `content`. Relays may implement richer semantics, but events that fail
+this local content check are not replayed or delivered to the app.
 
 ---
 
@@ -478,6 +493,19 @@ store) and routes accordingly:
 You don't configure any of this — it's automatic, provided the relevant
 `kind:10002` events are in the store (the worker enriches them as it syncs).
 
+#### Dedicated NIP-50 search routing
+
+```ts
+client.setSearchRelays(["wss://relay.noswhere.com", "wss://nostr.wine"]);
+// or dataLayer.setSearchRelays([...])
+```
+
+Any non-blank `search` filter routes to this dedicated set before author/outbox,
+DM, user-relay, or gossip routing, even when the filter also has `authors`. Per-
+interest relay hints are still added. Passing `[]` restores fallback to the
+ordinary read set (user relays ∪ gossip). A changed set reopens standing search
+subscriptions; an unchanged set is a no-op/reconcile.
+
 ### 11.3 Health
 
 ```ts
@@ -503,6 +531,7 @@ const d = await dataLayer.diagnostics();
 //   upstream:  [{ filterHash, filters, relays }], // what the worker is subscribed to, and where
 //   relays,                                   // RelayHealth[] (same as relayHealth()), each tagged { gossip }
 //   dmRelays: string[],                       // NIP-17 DM inbox relays the kind-1059 stream reads
+//   searchRelays: string[],                   // configured dedicated NIP-50 relays; [] means fallback
 //   gossipRelays: string[],                   // discovered relays currently in the pool
 //   connections: { user, outbox, gossip, total }, // counts of CONNECTED relays by source
 //   cache:     { totalEvents, eventsByKind, totalAuthors },
@@ -513,9 +542,14 @@ const d = await dataLayer.diagnostics();
 
 `interests` vs `upstream` is the useful pair: you own the filters, so you can map
 **feature → filters → relays** to see which relay is serving which part of your
-UI. The `upstream[].relays` are *candidate* relays (author outbox ∪ user relays) —
-a superset of the sockets actually opened, since outbox routing caps per-relay
-author lists.
+UI. The `upstream[].relays` are *candidate* relays selected by the applicable
+search, DM, author/outbox, or ordinary-read policy — potentially a superset of
+the sockets actually opened, since outbox routing caps per-relay author lists.
+
+For search debugging, compare `searchRelays` with the `search` filters in
+`interests` and their entries in `upstream`: a configured set should appear as
+the candidates; `searchRelays: []` means those entries intentionally show the
+ordinary-read fallback instead.
 
 This is the tool for telling a wedged **client** apart from a wedged **worker**
 after suspend/resume. Two tells:

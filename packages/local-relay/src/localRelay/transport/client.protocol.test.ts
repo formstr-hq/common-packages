@@ -79,7 +79,7 @@ describe("LocalRelayClient ↔ WorkerHost protocol", () => {
     expect(seen).toEqual([]); // ingest never publishes upstream
   });
 
-  it("routes setAccount / setUserRelays / pause / resume to the host hooks", async () => {
+  it("routes account and relay policies plus pause / resume to host hooks", async () => {
     const calls: string[] = [];
     let account: string | null = "unset";
     const hooks: WorkerHostHooks = {
@@ -88,17 +88,19 @@ describe("LocalRelayClient ↔ WorkerHost protocol", () => {
         calls.push("account");
       },
       onSetUserRelays: () => calls.push("relays"),
+      onSetSearchRelays: () => calls.push("search"),
       onPause: () => calls.push("pause"),
       onResume: () => calls.push("resume"),
     };
     const { client } = wire(undefined, hooks);
     client.setActiveAccount("alice");
     client.setUserRelays(["wss://r"]);
+    client.setSearchRelays(["wss://search"]);
     client.pause();
     client.resume();
     await tick();
     expect(account).toBe("alice");
-    expect(calls).toEqual(["account", "relays", "pause", "resume"]);
+    expect(calls).toEqual(["account", "relays", "search", "pause", "resume"]);
   });
 });
 

@@ -191,6 +191,11 @@ export class DataLayer {
     this.deps.client.setUserRelays(relays);
   }
 
+  /** Dedicated NIP-50 relays. Empty restores the normal-read fallback. */
+  setSearchRelays(relays: string[]): void {
+    this.deps.client.setSearchRelays(relays);
+  }
+
   /**
    * The user's NIP-17 DM inbox relays (kind 10050) — where their gift-wrapped DMs
    * are delivered. The worker reads the kind-1059 stream from these specifically;

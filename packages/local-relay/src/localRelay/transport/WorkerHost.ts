@@ -18,6 +18,8 @@ export interface WorkerHostHooks {
   onSetAccount?: (pubkey: string | null) => void;
   /** The user's relay set changed (policy input for the worker's routing). */
   onSetUserRelays?: (relays: string[]) => void;
+  /** Dedicated NIP-50 relay set changed. */
+  onSetSearchRelays?: (relays: string[]) => void;
   /** The user's NIP-17 DM inbox relay set changed (kind-1059 stream routing). */
   onSetDmRelays?: (relays: string[]) => void;
   /** A discovered relay was added to / removed from the gossip pool. */
@@ -141,6 +143,9 @@ export class WorkerHost {
         break;
       case "setUserRelays":
         this.hooks.onSetUserRelays?.(m.relays);
+        break;
+      case "setSearchRelays":
+        this.hooks.onSetSearchRelays?.(m.relays);
         break;
       case "setDmRelays":
         this.hooks.onSetDmRelays?.(m.relays);

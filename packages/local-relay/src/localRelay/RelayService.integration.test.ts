@@ -350,6 +350,80 @@ describe("RelayService — interests drive the network (app cannot)", () => {
   });
 });
 
+describe("RelayService — NIP-50 search routing", () => {
+  it("uses dedicated search relays before author/outbox routing and filters leaks", async () => {
+    const { f, service, client } = await wire();
+    service.db.add(
+      makeEvent({
+        id: "r".repeat(64),
+        kind: 10002,
+        pubkey: "alice",
+        tags: [["r", "wss://alice-relay"]],
+      }),
+    );
+    client.setSearchRelays(["wss://search"]);
+    const got: string[] = [];
+    client.observe(
+      [{ kinds: [0], authors: ["alice"], search: "alice" }],
+      { onEvent: (event) => got.push(event.id) },
+    );
+    await settle();
+
+    expect(f.count("wss://search")).toBe(1);
+    expect(f.count("wss://alice-relay")).toBe(0);
+    expect(f.count("wss://u1")).toBe(0);
+
+    const sock = f.last("wss://search");
+    sock.open();
+    const subId = reqOn(sock)[0][1];
+    const unrelated = makeEvent({
+      id: "x".repeat(64),
+      kind: 0,
+      pubkey: "alice",
+      content: '{"name":"Bob"}',
+    });
+    const matching = makeEvent({
+      id: "m".repeat(64),
+      kind: 0,
+      pubkey: "alice",
+      created_at: 1001,
+      content: '{"name":"Alice"}',
+    });
+    sock.emit(["EVENT", subId, unrelated]);
+    await settle();
+    expect(service.db.getById(unrelated.id)).toBeUndefined();
+    sock.emit(["EVENT", subId, matching]);
+    await settle();
+
+    expect(got).toEqual([matching.id]);
+    expect(service.db.getById(matching.id)).toBeDefined();
+    expect(await client.seenOn(matching.id)).toEqual(["wss://search"]);
+    expect((await client.diagnostics()).searchRelays).toEqual(["wss://search"]);
+  });
+
+  it("falls back to ordinary read relays when no search relays are configured", async () => {
+    const { f, client } = await wire();
+    client.observe([{ kinds: [0], search: "alice" }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+  });
+
+  it("reopens a standing search interest when the dedicated set changes", async () => {
+    const { f, client } = await wire();
+    client.setSearchRelays(["wss://search-1"]);
+    client.observe([{ kinds: [0], search: "alice" }], { onEvent: () => {} });
+    await settle();
+    expect(f.count("wss://search-1")).toBe(1);
+    const first = f.last("wss://search-1");
+    first.open();
+
+    client.setSearchRelays(["wss://search-2"]);
+    await settle();
+    expect(closeOn(first)).toHaveLength(1);
+    expect(f.count("wss://search-2")).toBe(1);
+  });
+});
+
 describe("RelayService — construction & teardown", () => {
   it("runs without a storage adapter (persistence is a no-op)", async () => {
     const { client: clientCh, worker: workerCh } = createChannelPair();

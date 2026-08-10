@@ -36,6 +36,7 @@ import { DataLayer, LocalRelayClient, workerChannel } from "@formstr/local-relay
 const worker = new Worker(new URL("@formstr/local-relay/worker", import.meta.url));
 const client = new LocalRelayClient(workerChannel(worker));
 client.setUserRelays(["wss://relay.damus.io"]);
+client.setSearchRelays(["wss://relay.noswhere.com", "wss://nostr.wine"]);
 
 const dataLayer = new DataLayer({ client, sign: async (t) => mySigner.signEvent(t) });
 
@@ -46,6 +47,12 @@ const handle = dataLayer.observe([{ kinds: [1], authors: [pubkey] }], {
 });
 // later: handle.unobserve();
 ```
+
+Non-empty NIP-50 `{ search }` interests are routed to the dedicated search
+relays. If none are configured they fall back to normal read relays. Cache
+replay and upstream results are additionally gated by a case-insensitive,
+all-terms substring match against event content, so relays that ignore
+`search` cannot leak unrelated events into a subscription.
 
 A host can wrap `observe` in whatever reactivity it likes (React hooks, signals,
 stores) over this framework-agnostic contract.

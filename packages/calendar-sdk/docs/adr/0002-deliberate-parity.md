@@ -21,10 +21,9 @@ self-wrap would put a pending invitation to your own event in your own inbox.
 The comment directly above that code says the opposite ("including the creator"),
 and at least one generated protocol summary repeats the comment. Source wins.
 
-**2. Removed participants get no revocation.** There is no un-invite. Kind 84
-exists only to read tombstones written by much older builds. Anyone who received
-the view key keeps it — which is a property of handing out a symmetric key, not
-something a protocol row can undo.
+**2. Removed participants get no revocation.** There is no un-invite. Anyone who
+received the view key keeps it — which is a property of handing out a symmetric
+key, not something a protocol row can undo.
 
 **3. Public events never carry recurrence, categories or tzid rows** even though
 upstream's *reader* accepts all three. Its writer emits none of them. This is

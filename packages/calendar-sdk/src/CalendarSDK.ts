@@ -1,6 +1,7 @@
 import type { Event } from "nostr-tools";
 
 import {
+  RelaysRequiredError,
   SignerRequiredError,
   type CalendarCtx,
   type CalendarSigner,
@@ -20,7 +21,7 @@ import type {
   RSVPPayload,
   RSVPResponse,
 } from "./types";
-import { DEFAULT_CALENDAR_RELAYS, normalizeRelayList } from "./discovery/relays";
+import { normalizeRelayList } from "./discovery/relays";
 import { SimplePoolRuntime } from "./runtime/pool";
 import { invitationInboxFilters } from "./codec/invitation";
 import * as busy from "./services/busy";
@@ -36,29 +37,25 @@ export interface CalendarSDKOptions {
    * `SignerRequiredError`.
    */
   signer?: CalendarSigner;
-  /** Defaults to the relay set calendar.formstr.app uses. */
-  relays?: string[];
+  /**
+   * Relays to read and write. Required — the SDK has no default set, because
+   * which relays a user talks to is the host's decision, not this package's.
+   */
+  relays: string[];
   /** Defaults to a built-in `SimplePool`. Inject the host's own to share it. */
   runtime?: NostrRuntime;
-  /** Base URL for the share links embedded in invitations. */
+  /**
+   * Base URL for the share link embedded in invitation messages. Omit it and
+   * invitations carry the message without a link.
+   */
   appBaseUrl?: string;
-  /** Gift-wrap wire kind. Defaults to 1059. */
-  wrapKind?: number;
-  /** `k` discriminator on those wraps, and the legacy wire kind. Defaults to 1052. */
-  wrapType?: number;
-  /** Seal/wrap timestamps. `"real"` (default) matches calendar.formstr.app. */
-  wrapTimestamps?: "jittered" | "real";
-  /** Read pre-NIP-17 wraps alongside current ones. Defaults to true. */
-  readLegacyWraps?: boolean;
 }
-
-const DEFAULT_APP_BASE_URL = "https://calendar.formstr.app";
 
 /**
  * The calendar protocol as one object.
  *
  * ```ts
- * const sdk = new CalendarSDK({ signer });
+ * const sdk = new CalendarSDK({ signer, relays });
  * const calendar = await sdk.createCalendar({ title: "Work" });
  * await sdk.publishPrivateEvent(draft, { calendarId: calendar.id });
  * ```
@@ -70,9 +67,14 @@ export class CalendarSDK {
   private readonly ctx: CalendarCtx;
   private readonly ownsRuntime: boolean;
 
-  constructor(options: CalendarSDKOptions = {}) {
+  constructor(options: CalendarSDKOptions) {
     const runtime = options.runtime ?? new SimplePoolRuntime();
     this.ownsRuntime = !options.runtime;
+
+    const relays = normalizeRelayList(options.relays ?? []);
+    if (relays.length === 0) {
+      throw new RelaysRequiredError();
+    }
 
     this.ctx = {
       getSigner: async () => {
@@ -80,14 +82,8 @@ export class CalendarSDK {
         return options.signer;
       },
       runtime,
-      relays: normalizeRelayList(
-        options.relays && options.relays.length > 0 ? options.relays : [...DEFAULT_CALENDAR_RELAYS],
-      ),
-      wrapKind: options.wrapKind ?? CALENDAR_KINDS.giftWrap,
-      wrapType: options.wrapType ?? CALENDAR_KINDS.invitationWrapType,
-      wrapTimestamps: options.wrapTimestamps ?? "real",
-      appBaseUrl: options.appBaseUrl ?? DEFAULT_APP_BASE_URL,
-      readLegacyWraps: options.readLegacyWraps ?? true,
+      relays,
+      appBaseUrl: options.appBaseUrl,
     };
   }
 
@@ -105,7 +101,7 @@ export class CalendarSDK {
 
   // ── Calendars ─────────────────────────────────────────
 
-  createCalendar(input?: Parameters<typeof calendars.createCalendar>[1]): Promise<CalendarList> {
+  createCalendar(input: Parameters<typeof calendars.createCalendar>[1]): Promise<CalendarList> {
     return calendars.createCalendar(this.ctx, input);
   }
 
@@ -248,12 +244,7 @@ export class CalendarSDK {
   ): SubscriptionHandle {
     return this.ctx.runtime.subscribe(
       this.ctx.relays,
-      invitationInboxFilters({
-        pubkeys: [pubkey],
-        wrapKind: this.ctx.wrapKind,
-        wrapType: this.ctx.wrapType,
-        includeLegacy: this.ctx.readLegacyWraps,
-      }),
+      invitationInboxFilters({ pubkeys: [pubkey] }),
       { onEvent: onInvitation },
     );
   }

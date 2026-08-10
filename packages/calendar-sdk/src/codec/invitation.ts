@@ -35,12 +35,15 @@ export function senderDisplayName(profileContent: string | undefined, pubkey: st
   return fallbackSenderName(pubkey);
 }
 
+/** The link is omitted when the host configured no `appBaseUrl`. */
 export function buildInvitationMessage(
   senderName: string,
   title: string,
-  eventUrl: string,
+  eventUrl?: string,
 ): string {
-  return `${senderName} has invited you to an event: ${title}. View more details and add it to your calendar here: ${eventUrl}`;
+  const invite = `${senderName} has invited you to an event: ${title}.`;
+  if (!eventUrl) return invite;
+  return `${invite} View more details and add it to your calendar here: ${eventUrl}`;
 }
 
 /**
@@ -55,12 +58,13 @@ export function buildPrivateEventUrl(params: {
   dTag: string;
   viewKeyNsec: string;
   relayHint?: string;
-  defaultRelays?: readonly string[];
+  /** Relays written into the naddr when there is no single relay hint. */
+  fallbackRelays?: readonly string[];
 }): string {
   const relays = params.relayHint
     ? [params.relayHint]
-    : params.defaultRelays && params.defaultRelays.length > 0
-      ? [...params.defaultRelays]
+    : params.fallbackRelays && params.fallbackRelays.length > 0
+      ? [...params.fallbackRelays]
       : undefined;
   const naddr = nip19.naddrEncode({
     kind: params.kind,
@@ -130,40 +134,23 @@ export function parseInvitationRumor(rumor: Rumor, giftWrapId: string): Invitati
 /**
  * Filters for the invitation inbox — docs/protocol.md §6.1.
  *
- * Two filters, and they cannot be merged: legacy wraps predate the `k` tag, so
- * a single filter either misses them or drops the discriminator and returns
- * every 1059 on the relay.
+ * Kind 1059 is shared by every NIP-59 app, so the `k` discriminator is what
+ * keeps the query narrow enough to be worth issuing.
  */
 export function invitationInboxFilters(params: {
   pubkeys: string[];
-  wrapKind: number;
-  wrapType: number;
-  includeLegacy: boolean;
   since?: number;
   until?: number;
   limit?: number;
 }): Filter[] {
-  const window = {
-    ...(params.since !== undefined && { since: params.since }),
-    ...(params.until !== undefined && { until: params.until }),
-    ...(params.limit !== undefined && { limit: params.limit }),
-  };
-
-  const filters: Filter[] = [
+  return [
     {
-      kinds: [params.wrapKind],
+      kinds: [CALENDAR_KINDS.giftWrap],
       "#p": params.pubkeys,
-      "#k": [String(params.wrapType)],
-      ...window,
+      "#k": [String(CALENDAR_KINDS.invitationWrapType)],
+      ...(params.since !== undefined && { since: params.since }),
+      ...(params.until !== undefined && { until: params.until }),
+      ...(params.limit !== undefined && { limit: params.limit }),
     },
   ];
-  if (params.includeLegacy) {
-    filters.push({ kinds: [params.wrapType], "#p": params.pubkeys, ...window });
-  }
-  return filters;
 }
-
-export const INVITATION_RUMOR_KINDS: readonly number[] = [
-  CALENDAR_KINDS.rumor,
-  CALENDAR_KINDS.legacyInvitationRumor,
-];

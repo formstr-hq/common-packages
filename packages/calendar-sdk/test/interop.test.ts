@@ -364,9 +364,9 @@ describe("invitations", () => {
     });
   });
 
-  it("still receives a legacy 1052 wrap with no k tag", async () => {
-    // Dropping the second inbox filter would strand every invitation an older
-    // build already sent.
+  it("ignores a legacy 1052 wrap: the inbox is 1059-only now", async () => {
+    // Pre-NIP-17 wraps are deliberately out of scope — the SDK reads exactly
+    // what it writes.
     const bobSdk = new CalendarSDK({ signer: bob.signer, runtime, relays: ["wss://test.relay"] });
     const wrap = await upstream.wrapEvent(
       {
@@ -387,9 +387,7 @@ describe("invitations", () => {
     );
     await runtime.publish([], wrap);
 
-    const invitations = await bobSdk.fetchInvitations();
-    expect(invitations.map((i) => i.eventId)).toEqual(["legacy-d"]);
-    expect(invitations[0].signingNsec).toBeUndefined();
+    expect(await bobSdk.fetchInvitations()).toEqual([]);
   });
 
   it("rejects a forged wrap that upstream would accept", async () => {

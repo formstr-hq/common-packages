@@ -4,8 +4,6 @@ import { CALENDAR_KINDS } from "../kinds";
 import { CalendarNotFoundError, type CalendarCtx } from "../contracts";
 import type { CalendarList, EventRef } from "../types";
 import {
-  DEFAULT_CALENDAR_COLOR,
-  DEFAULT_CALENDAR_TITLE,
   decodeCalendarList,
   encodeCalendarListPayload,
   lookupViewKey,
@@ -47,21 +45,22 @@ export async function publishCalendarList(
   return { ...list, eventId: event.id, createdAt: event.created_at };
 }
 
+/** Title is the caller's; so is the colour, which is written blank when unset. */
 export async function createCalendar(
   ctx: CalendarCtx,
   input: {
-    title?: string;
+    title: string;
     description?: string;
     color?: string;
     notificationPreference?: CalendarList["notificationPreference"];
-  } = {},
+  },
 ): Promise<CalendarList> {
   const draft: CalendarList = {
     id: makeDTag(`${JSON.stringify(input)}-${Date.now()}`),
     eventId: "",
-    title: input.title ?? DEFAULT_CALENDAR_TITLE,
+    title: input.title,
     description: input.description ?? "",
-    color: input.color ?? DEFAULT_CALENDAR_COLOR,
+    color: input.color ?? "",
     notificationPreference: input.notificationPreference,
     eventRefs: [],
     createdAt: 0,

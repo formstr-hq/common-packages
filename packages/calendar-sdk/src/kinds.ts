@@ -24,10 +24,9 @@ export const CALENDAR_KINDS = {
    */
   giftWrap: 1059,
   /**
-   * Value of the `["k", …]` discriminator carried on those wraps, and the
-   * pre-NIP-17 wire kind, still read so invitations sent by older builds keep
-   * arriving. `k` is single-letter, so the inbox query stays narrow despite
-   * every app sharing kind 1059.
+   * Value of the `["k", …]` discriminator carried on those wraps. `k` is
+   * single-letter, so the inbox query stays narrow despite every app sharing
+   * kind 1059.
    */
   invitationWrapType: 1052,
   /**
@@ -35,10 +34,6 @@ export const CALENDAR_KINDS = {
    * invite renders as a real DM in any NIP-17 client.
    */
   rumor: 14,
-  /** @deprecated pre-NIP-17 invitation rumor kind. Read-only, never written. */
-  legacyInvitationRumor: 52,
-  /** Legacy participant-removal tombstone. Read-only, never written. */
-  participantRemoval: 84,
 
   // ── Borrowed from other NIPs ────────────────────────────
   deletion: 5,

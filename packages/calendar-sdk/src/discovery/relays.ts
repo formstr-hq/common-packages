@@ -6,18 +6,10 @@ import type { NostrRuntime } from "../contracts";
 /**
  * Relay discovery and routing — docs/protocol.md §11.
  *
- * The default set is nostr-calendar's `defaultRelays` (`src/common/relayConfig.ts`).
- * Sharing it matters: a relay hint embedded in an invitation is only useful if
- * both clients actually reach that relay.
+ * The SDK ships no relay set of its own: the host owns that choice, and a relay
+ * the host never picked is a relay the user cannot audit. Everything here works
+ * off the list passed to the constructor.
  */
-export const DEFAULT_CALENDAR_RELAYS: readonly string[] = [
-  "wss://relay.primal.net",
-  "wss://nos.lol",
-  "wss://relay.nostr.wirednet.jp",
-  "wss://nostr-01.yakihonne.com",
-  "wss://relay.snort.social",
-  "wss://nostr21.com",
-];
 
 /**
  * Lowercases the host and strips the trailing slash so `wss://nos.lol/` and

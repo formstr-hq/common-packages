@@ -15,15 +15,11 @@ export type Rumor = Omit<Event, "sig">;
  *   2. Seal — kind 13, NIP-44 encrypted to the recipient, signed by the sender.
  *   3. Wrap — kind 1059, encrypted under a fresh ephemeral key that also signs it.
  *
- * Timestamps default to real, matching what calendar.formstr.app publishes.
- * `"jittered"` applies NIP-59's anti-correlation recommendation as a random
- * shift of up to two days INTO THE PAST — never the future, because relays
- * reject far-future events (strfry defaults to a 15-minute ceiling) and publish
- * is best-effort, so the drop would be silent.
+ * Every layer carries a real `created_at`, matching what calendar.formstr.app
+ * publishes byte for byte.
  */
 
 export interface WrapOptions {
-  timestamps?: "jittered" | "real";
   /**
    * Extra outer tags on the wrap, alongside the mandatory `p`. Everything here
    * is PLAINTEXT on the relay — use it only for what a wrap must be filterable
@@ -41,17 +37,6 @@ export interface WrapOptions {
 }
 
 const now = () => Math.floor(Date.now() / 1000);
-
-/** Randomize up to two days into the PAST. Past-only; see above. */
-function randomizeTimestamp(timestamp: number): number {
-  const twoDays = 2 * 24 * 60 * 60;
-  return timestamp - Math.floor(Math.random() * twoDays);
-}
-
-function stamp(opts: WrapOptions): number {
-  const t = now();
-  return opts.timestamps === "jittered" ? randomizeTimestamp(t) : t;
-}
 
 /**
  * Builds the unsigned rumor and stamps its id. Upstream computes the id here
@@ -84,7 +69,7 @@ export async function createSeal(
   return signer.signEvent({
     kind: CALENDAR_KINDS.seal,
     content,
-    created_at: stamp(opts),
+    created_at: now(),
     tags: [],
   });
 }
@@ -92,18 +77,17 @@ export async function createSeal(
 export function createWrap(
   seal: Event,
   recipientPubkey: string,
-  wrapKind: number,
   opts: WrapOptions = {},
 ): Event {
   // A fresh key per wrap: the outer author must not identify the sender.
   const ephemeralKey = opts.ephemeralKey ?? generateSecretKey();
   const template: EventTemplate = {
-    kind: wrapKind,
+    kind: CALENDAR_KINDS.giftWrap,
     content: encrypt(
       JSON.stringify(seal),
       getConversationKey(ephemeralKey, recipientPubkey),
     ),
-    created_at: stamp(opts),
+    created_at: now(),
     tags: [["p", recipientPubkey], ...(opts.tags ?? [])],
   };
   return finalizeEvent(template, ephemeralKey);
@@ -121,14 +105,13 @@ export async function wrapEvent(
     | ((signingNsec: string) => Partial<EventTemplate> & { kind?: number }),
   signer: CalendarSigner,
   recipientPubkey: string,
-  wrapKind: number,
   opts: WrapOptions = {},
 ): Promise<Event> {
   const ephemeralKey = opts.ephemeralKey ?? generateSecretKey();
   const resolved = typeof event === "function" ? event(nip19.nsecEncode(ephemeralKey)) : event;
   const rumor = createRumor(resolved, await signer.getPublicKey());
   const seal = await createSeal(rumor, signer, recipientPubkey, opts);
-  return createWrap(seal, recipientPubkey, wrapKind, { ...opts, ephemeralKey });
+  return createWrap(seal, recipientPubkey, { ...opts, ephemeralKey });
 }
 
 /**
@@ -190,11 +173,7 @@ export async function unwrapEvent(wrap: Event, signer: CalendarSigner): Promise<
  * cannot desync the two clients), and a relay that enforces the rule would
  * otherwise reject the request and leave dismissal silently broken.
  */
-export function buildSelfSignedDeletion(
-  signingNsec: string,
-  eventIds: string[],
-  wrapKind: number,
-): Event {
+export function buildSelfSignedDeletion(signingNsec: string, eventIds: string[]): Event {
   const decoded = nip19.decode(signingNsec);
   if (decoded.type !== "nsec") {
     throw new Error(`Expected an nsec signing key, got ${decoded.type}`);
@@ -204,7 +183,7 @@ export function buildSelfSignedDeletion(
       kind: CALENDAR_KINDS.deletion,
       content: "",
       created_at: now(),
-      tags: [...eventIds.map((id) => ["e", id]), ["k", String(wrapKind)]],
+      tags: [...eventIds.map((id) => ["e", id]), ["k", String(CALENDAR_KINDS.giftWrap)]],
     },
     decoded.data,
   );

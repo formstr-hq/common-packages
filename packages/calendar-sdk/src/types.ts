@@ -112,7 +112,7 @@ export interface CalendarList {
   eventId: string;
   title: string;
   description: string;
-  /** Hex colour, e.g. `#4285f4`. */
+  /** Hex colour as the owner set it, e.g. `#4285f4`. Empty when unset. */
   color: string;
   /** Absent means enabled — `"enabled"` is never written to the wire. */
   notificationPreference?: NotificationPreference;

@@ -18,7 +18,6 @@ describe("wrapEvent / unwrapEvent", () => {
       { kind: CALENDAR_KINDS.rumor, content: "you are invited", tags: [["viewKey", "nsec1x"]] },
       senderSigner,
       getPublicKey(recipient),
-      CALENDAR_KINDS.giftWrap,
     );
 
     expect(wrap.kind).toBe(1059);
@@ -33,7 +32,7 @@ describe("wrapEvent / unwrapEvent", () => {
   });
 
   it("carries extra outer tags in plaintext for server-side filtering", async () => {
-    const wrap = await wrapEvent({ content: "hi" }, senderSigner, getPublicKey(recipient), 1059, {
+    const wrap = await wrapEvent({ content: "hi" }, senderSigner, getPublicKey(recipient), {
       tags: [["k", "1052"]],
     });
     expect(wrap.tags).toContainEqual(["k", "1052"]);
@@ -48,7 +47,6 @@ describe("wrapEvent / unwrapEvent", () => {
       },
       senderSigner,
       getPublicKey(recipient),
-      1059,
     );
 
     const decoded = nip19.decode(captured);
@@ -59,24 +57,14 @@ describe("wrapEvent / unwrapEvent", () => {
   });
 
   it("uses a different ephemeral key for every wrap", async () => {
-    const a = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient), 1059);
-    const b = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient), 1059);
+    const a = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient));
+    const b = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient));
     expect(a.pubkey).not.toBe(b.pubkey);
   });
 
-  it("keeps jittered timestamps in the past", async () => {
+  it("stamps real timestamps, matching what calendar.formstr.app publishes", async () => {
     const before = Math.floor(Date.now() / 1000);
-    for (let i = 0; i < 25; i++) {
-      const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient), 1059, {
-        timestamps: "jittered",
-      });
-      expect(wrap.created_at).toBeLessThanOrEqual(before + 1);
-    }
-  });
-
-  it("defaults to real timestamps, matching what calendar.formstr.app publishes", async () => {
-    const before = Math.floor(Date.now() / 1000);
-    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient), 1059);
+    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient));
     expect(wrap.created_at).toBeGreaterThanOrEqual(before);
   });
 });
@@ -122,7 +110,7 @@ describe("unwrapEvent verification", () => {
   });
 
   it("rejects a seal with a broken signature", async () => {
-    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient), 1059);
+    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(recipient));
     // Re-seal with a tampered signature by hand.
     const sealSigner = new LocalSigner(sender);
     const rumor = createRumor({ content: "x" }, getPublicKey(sender));
@@ -171,7 +159,7 @@ describe("unwrapEvent verification", () => {
   });
 
   it("rejects a wrap addressed to somebody else", async () => {
-    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(generateSecretKey()), 1059);
+    const wrap = await wrapEvent({ content: "x" }, senderSigner, getPublicKey(generateSecretKey()));
     await expect(unwrapEvent(wrap, recipientSigner)).rejects.toThrow(GiftWrapVerificationError);
   });
 });
@@ -186,10 +174,9 @@ describe("buildSelfSignedDeletion", () => {
       },
       senderSigner,
       getPublicKey(recipient),
-      1059,
     );
 
-    const deletion = buildSelfSignedDeletion(signingNsec, [wrap.id], 1059);
+    const deletion = buildSelfSignedDeletion(signingNsec, [wrap.id]);
     expect(deletion.kind).toBe(5);
     expect(deletion.pubkey).toBe(wrap.pubkey);
     expect(deletion.tags).toContainEqual(["e", wrap.id]);
@@ -197,7 +184,7 @@ describe("buildSelfSignedDeletion", () => {
   });
 
   it("refuses a key that is not an nsec", () => {
-    expect(() => buildSelfSignedDeletion(nip19.npubEncode(getPublicKey(sender)), ["x"], 1059)).toThrow(
+    expect(() => buildSelfSignedDeletion(nip19.npubEncode(getPublicKey(sender)), ["x"])).toThrow(
       /Expected an nsec/,
     );
   });

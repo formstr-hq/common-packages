@@ -12,9 +12,6 @@ import type { CalendarList, EventRef } from "../types";
  * — and every view key in it — stays private even on a public relay.
  */
 
-export const DEFAULT_CALENDAR_COLOR = "#4285f4";
-export const DEFAULT_CALENDAR_TITLE = "My Calendar";
-
 /**
  * The inner payload. Note the row name is `content`, not `description` — the
  * models diverge here and following the model instead of the wire silently
@@ -56,9 +53,11 @@ export function decodeCalendarList(event: Event, payload: unknown): CalendarList
     throw new Error(`Calendar list payload is not a tags array (got ${typeof payload})`);
   }
 
-  let title = DEFAULT_CALENDAR_TITLE;
+  // Missing rows decode to empty strings, never to an invented title or colour:
+  // presentation defaults belong to the caller.
+  let title = "";
   let description = "";
-  let color = DEFAULT_CALENDAR_COLOR;
+  let color = "";
   let notificationPreference: CalendarList["notificationPreference"];
   const eventRefs: EventRef[] = [];
 
@@ -67,13 +66,13 @@ export function decodeCalendarList(event: Event, payload: unknown): CalendarList
     const row = tag as string[];
     switch (row[0]) {
       case "title":
-        title = row[1] ?? DEFAULT_CALENDAR_TITLE;
+        title = row[1] ?? "";
         break;
       case "content":
         description = row[1] || "";
         break;
       case "color":
-        color = row[1] || DEFAULT_CALENDAR_COLOR;
+        color = row[1] || "";
         break;
       case "notifications":
         notificationPreference = row[1] === "disabled" ? "disabled" : "enabled";

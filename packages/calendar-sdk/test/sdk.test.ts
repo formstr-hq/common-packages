@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finalizeEvent } from "nostr-tools";
 
 import { CalendarSDK } from "../src/CalendarSDK";
 import { CALENDAR_KINDS } from "../src/kinds";
-import { SignerRequiredError, ViewKeyRequiredError } from "../src/contracts";
+import { RelaysRequiredError, SignerRequiredError, ViewKeyRequiredError } from "../src/contracts";
 import { RSVPStatus, type CalendarEventDraft } from "../src/types";
 import { FakeRuntime, makeUser, type TestUser } from "./helpers";
 
@@ -26,21 +26,32 @@ beforeEach(() => {
   sdk = new CalendarSDK({ signer: alice.signer, runtime, relays: ["wss://test.relay"] });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("construction", () => {
-  it("defaults to the shared relay set and the 1059/1052 wrap pair", () => {
-    const plain = new CalendarSDK({ runtime });
-    expect(plain.relays.length).toBeGreaterThan(1);
-    expect(plain.relays).toContain("wss://nos.lol");
+  it("refuses to run without relays instead of inventing a set", () => {
+    expect(() => new CalendarSDK({ runtime, relays: [] })).toThrow(RelaysRequiredError);
+  });
+
+  it("normalizes the relays it was given", () => {
+    const plain = new CalendarSDK({ runtime, relays: ["wss://Test.Relay/", "wss://test.relay"] });
+    expect(plain.relays).toEqual(["wss://test.relay"]);
   });
 
   it("throws a named error for anything needing a signer", async () => {
-    const readOnly = new CalendarSDK({ runtime });
+    const readOnly = new CalendarSDK({ runtime, relays: ["wss://test.relay"] });
     await expect(readOnly.fetchCalendars()).rejects.toThrow(SignerRequiredError);
   });
 
   it("closes only the runtime it created", () => {
     const injected = new FakeRuntime();
-    new CalendarSDK({ signer: alice.signer, runtime: injected }).dispose();
+    new CalendarSDK({
+      signer: alice.signer,
+      runtime: injected,
+      relays: ["wss://test.relay"],
+    }).dispose();
     expect(injected.disposed).toBe(false);
   });
 });
@@ -268,22 +279,6 @@ describe("invitations", () => {
     expect(await bobSdk.fetchInvitations()).toHaveLength(0);
   });
 
-  it("the legacy dismissal names the legacy wrap kind, not just 1059", async () => {
-    // This branch only runs for a wrap with no signing_nsec — a pre-NIP-17
-    // wrap, whose wire kind is 1052.
-    const bobSdk = new CalendarSDK({ signer: bob.signer, runtime, relays: ["wss://test.relay"] });
-    await sdk.publishPrivateEvent({ ...draft, participants: [bob.pubkey] }, {});
-
-    const [invitation] = await bobSdk.fetchInvitations();
-    await bobSdk.dismissInvitation({ ...invitation, signingNsec: undefined });
-
-    const deletion = runtime.publishedOfKind(CALENDAR_KINDS.deletion).at(-1)!;
-    expect(deletion.tags).toContainEqual(["k", "1059"]);
-    expect(deletion.tags).toContainEqual(["k", "1052"]);
-    expect(deletion.tags).toContainEqual(["e", invitation.giftWrapId]);
-    expect(deletion.tags).toContainEqual(["a", invitation.coordinate]);
-  });
-
   it("a dismissed invitation stays dismissed when re-sent under a new wrap", async () => {
     // Matching on wrap id alone would resurrect it — the sender's second
     // invitation is a different event.
@@ -327,6 +322,11 @@ describe("RSVPs", () => {
       viewKey: published.viewKey,
       payload: { status: RSVPStatus.tentative },
     });
+    // An RSVP stamps a plain `now` (parity with upstream), so two answers in
+    // the same second tie and NIP-01 breaks the tie by lowest id — which can
+    // keep the stale one. Move the clock instead of racing it.
+    const realNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(realNow + 2000);
     await sdk.rsvp({
       coordinate,
       viewKey: published.viewKey,

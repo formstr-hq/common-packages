@@ -170,23 +170,10 @@ describe("invitation codec", () => {
     expect(parseInvitationRumor(legacy, "wrap1")?.signingNsec).toBeUndefined();
   });
 
-  it("builds two unmergeable inbox filters when legacy reads are on", () => {
-    const filters = invitationInboxFilters({
-      pubkeys: [ALICE],
-      wrapKind: 1059,
-      wrapType: 1052,
-      includeLegacy: true,
-    });
-    expect(filters).toEqual([
+  it("queries kind 1059 narrowed by the k discriminator", () => {
+    expect(invitationInboxFilters({ pubkeys: [ALICE] })).toEqual([
       { kinds: [1059], "#p": [ALICE], "#k": ["1052"] },
-      { kinds: [1052], "#p": [ALICE] },
     ]);
-  });
-
-  it("drops the legacy filter when legacy reads are off", () => {
-    expect(
-      invitationInboxFilters({ pubkeys: [ALICE], wrapKind: 1059, wrapType: 1052, includeLegacy: false }),
-    ).toHaveLength(1);
   });
 
   it("prefers display_name, then name, then a truncated npub", () => {

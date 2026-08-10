@@ -51,25 +51,10 @@ export interface CalendarCtx {
   runtime: NostrRuntime;
   relays: string[];
   /**
-   * Wire kind for gift wraps, `1059` by default. Configurable so a host can
-   * follow the ecosystem if NIP-59 ever moves, without an SDK release.
+   * Base URL for the share link in invitation rumors. Absent means invitations
+   * carry no link — the SDK does not know any app's URL on its own.
    */
-  wrapKind: number;
-  /**
-   * Value of the `["k", …]` discriminator on those wraps, `1052` by default.
-   * Doubles as the legacy wire kind on read — docs/protocol.md §6.
-   */
-  wrapType: number;
-  /**
-   * Seal/wrap `created_at` mode. `"real"` by default, matching what
-   * calendar.formstr.app publishes byte for byte. `"jittered"` applies NIP-59's
-   * anti-correlation recommendation.
-   */
-  wrapTimestamps: "jittered" | "real";
-  /** Base URL used to build the share links embedded in invitation rumors. */
-  appBaseUrl: string;
-  /** Read the legacy pre-NIP-17 wrap kind alongside the current one. */
-  readLegacyWraps: boolean;
+  appBaseUrl?: string;
 }
 
 /** Thrown by operations that need a signer when the SDK was built without one. */
@@ -79,6 +64,17 @@ export class SignerRequiredError extends Error {
       `${operation} requires a signer — construct the SDK with one: new CalendarSDK({ signer })`,
     );
     this.name = "SignerRequiredError";
+  }
+}
+
+/** Thrown when the SDK is constructed without any relay to talk to. */
+export class RelaysRequiredError extends Error {
+  constructor() {
+    super(
+      "CalendarSDK requires at least one relay: new CalendarSDK({ relays: [\"wss://…\"] }). " +
+        "The SDK ships no default relay set.",
+    );
+    this.name = "RelaysRequiredError";
   }
 }
 

@@ -7,7 +7,6 @@ import { CALENDAR_KINDS } from "../kinds";
 import { dedupeById, newestByCoordinate, supersedes } from "./dedupe";
 import { buildDeletionTags, fetchDeletions, indexDeletions, isDeleted } from "./deletions";
 import {
-  DEFAULT_CALENDAR_RELAYS,
   buildRelayListTags,
   fetchRelayLists,
   normalizeRelayList,
@@ -88,12 +87,6 @@ describe("relay URLs", () => {
   it("leaves an unparseable value alone rather than dropping it", () => {
     expect(normalizeRelayUrl("not a url/")).toBe("not a url");
   });
-
-  it("ships the relay set calendar.formstr.app defaults to", () => {
-    // A relay hint in an invitation is only useful if both clients reach it.
-    expect(DEFAULT_CALENDAR_RELAYS).toContain("wss://nos.lol");
-    expect(DEFAULT_CALENDAR_RELAYS.length).toBeGreaterThan(1);
-  });
 });
 
 describe("NIP-65 relay lists", () => {
@@ -139,13 +132,6 @@ describe("deletions", () => {
     expect(isDeleted(index, { id: "id1" })).toBe(true);
     expect(isDeleted(index, { coordinate: "32678:pk:d1" })).toBe(true);
     expect(isDeleted(index, { id: "other" })).toBe(false);
-  });
-
-  it("honours legacy kind-84 participant removals", () => {
-    // Read-only support: never published, but a dismissal made by an older
-    // build has to keep holding.
-    const index = indexDeletions([signed({ kind: 84, tags: [["a", "32678:pk:d1"]] })]);
-    expect(isDeleted(index, { coordinate: "32678:pk:d1" })).toBe(true);
   });
 
   it("ignores events that are not deletions", () => {

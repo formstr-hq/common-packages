@@ -24,10 +24,8 @@ Mirrors `src/nostr/kinds.ts` (`EventKinds`).
 | `5` | Deletion | NIP-09 | shared across all flows |
 | `13` | Seal | NIP-59 | inner layer of every gift wrap |
 | `14` | Rumor | NIP-17 | invitation payload; reads as a real DM in any NIP-17 client |
-| `84` | Participant removal | legacy | **read-only**, never published |
 | `1059` | Gift wrap (outer) | NIP-59 | every wrap this protocol writes; typed by a `k` tag |
-| `1052` | Legacy invitation wrap | pre-NIP-17 | **read-only** migration; also the `k` discriminator value |
-| `52` | Legacy invitation rumor | deprecated | **read-only** |
+| `1052` | Invitation `k` discriminator | custom | tag value on the wrap, never a wire kind |
 | `10002` | Relay list | NIP-65 | outbox/inbox routing |
 | `30168` / `1069` | Form template / response | NIP-101 (Formstr) | attached forms |
 | `31923` | Public calendar event | NIP-52 kind, simplified tags | |
@@ -161,8 +159,7 @@ is **not** included, despite the comment two lines above claiming otherwise, and
 pending invitation to your own event in your own inbox.
 
 **Invitations on edit.** Only participants *not* in the previous participant list. Removed
-participants get **no revocation** — there is no un-invite mechanism (kind `84` exists solely
-to read tombstones written by much older clients).
+participants get **no revocation** — there is no un-invite mechanism.
 
 **Relay hint.** The first relay that accepts the event is captured and threaded into both the
 invitation `a` tag and the calendar-list ref, so recipients know where to fetch from.
@@ -233,7 +230,8 @@ Wrap tags:
 ["k", "1052"]               // type discriminator, always last
 ```
 
-Both the seal and the wrap use real `created_at` values upstream (`now()`), not jittered ones.
+Both the seal and the wrap use real `created_at` values (`now()`), not jittered ones, matching
+upstream byte for byte.
 
 ### Why `1059` + `k`
 
@@ -259,8 +257,9 @@ where `senderName` is the profile's `display_name` or `name`, falling back to
 {APP_BASE_URL}/event/{naddr}?viewKey={uriEncoded nsec}
 ```
 
-with the `naddr` encoding `{kind, pubkey, identifier: dTag}` plus the relay hint (or the
-default relay set when there is none).
+with the `naddr` encoding `{kind, pubkey, identifier: dTag}` plus the relay hint (or the host's
+configured relays when there is none). A host that configured no `appBaseUrl` gets the sentence
+without the link.
 
 Rumor tags:
 
@@ -277,11 +276,10 @@ readers must treat it as optional.
 
 ### 6.1 Inbox query
 
-Two filters, which **cannot be merged** — legacy wraps have no `k` tag:
+One filter — the SDK reads exactly the wrap kind it writes:
 
 ```jsonc
-{ "kinds": [1059], "#p": [me], "#k": ["1052"] }   // current
-{ "kinds": [1052], "#p": [me] }                    // legacy, read-only
+{ "kinds": [1059], "#p": [me], "#k": ["1052"] }
 ```
 
 Unwrapping failures are logged and skipped, never fatal: an inbox legitimately contains wraps
@@ -303,9 +301,11 @@ so this cannot desync the two clients, and a relay that enforces the rule would 
 reject the request and leave dismissal silently broken. Same class of read-compatible
 deviation as the busy-list timestamp in §9.
 
-**Fallback** for legacy wraps with no `signing_nsec`: a signer-authored kind 5 with
-`["e", wrapId]` and `["k", "1059"]`. It will not be honoured by a strict relay, but it serves
-as a local tombstone.
+**Alongside it, always**, a signer-authored kind 5 naming both `["e", wrapId]` and
+`["a", coordinate]`, with `["k", "1059"]`. A strict relay will not honour it against a wrap it
+did not author, but NIP-09 enforcement is optional and uneven: on a non-conformant relay this
+is the durable tombstone the inbox reads back, which is what keeps a dismissal holding across
+devices. Wraps with no `signing_nsec` get this one only.
 
 ### 6.3 Verification (SDK-side hardening)
 

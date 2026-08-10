@@ -13,7 +13,7 @@ import {
   senderDisplayName,
 } from "../codec/invitation";
 import { buildDeletionTags, indexDeletions, isDeleted } from "../discovery/deletions";
-import { DEFAULT_CALENDAR_RELAYS, fetchRelayLists, outboxRelaysFor } from "../discovery/relays";
+import { fetchRelayLists, outboxRelaysFor } from "../discovery/relays";
 import { publishEvent, signAndPublish } from "./publish";
 
 /**
@@ -79,15 +79,17 @@ export async function sendInvitations(
   const message = buildInvitationMessage(
     senderDisplayName(profileContent, params.authorPubkey),
     params.eventTitle,
-    buildPrivateEventUrl({
-      appBaseUrl: ctx.appBaseUrl,
-      kind: params.eventKind,
-      pubkey: params.authorPubkey,
-      dTag: params.dTag,
-      viewKeyNsec: params.viewKeyNsec,
-      relayHint: params.relayHint,
-      defaultRelays: DEFAULT_CALENDAR_RELAYS,
-    }),
+    ctx.appBaseUrl
+      ? buildPrivateEventUrl({
+          appBaseUrl: ctx.appBaseUrl,
+          kind: params.eventKind,
+          pubkey: params.authorPubkey,
+          dTag: params.dTag,
+          viewKeyNsec: params.viewKeyNsec,
+          relayHint: params.relayHint,
+          fallbackRelays: ctx.relays,
+        })
+      : undefined,
   );
 
   const wraps: Event[] = [];
@@ -108,11 +110,7 @@ export async function sendInvitations(
       }),
       await ctx.getSigner(),
       participant,
-      ctx.wrapKind,
-      {
-        timestamps: ctx.wrapTimestamps,
-        tags: [...(params.wrapTags ?? []), ["k", String(ctx.wrapType)]],
-      },
+      { tags: [...(params.wrapTags ?? []), ["k", String(CALENDAR_KINDS.invitationWrapType)]] },
     );
 
     await publishEvent(
@@ -188,9 +186,6 @@ export async function fetchInvitations(
 
   const filters = invitationInboxFilters({
     pubkeys: [pubkey],
-    wrapKind: ctx.wrapKind,
-    wrapType: ctx.wrapType,
-    includeLegacy: ctx.readLegacyWraps,
     since: options.since,
     until: options.until,
     limit: options.limit,
@@ -207,7 +202,7 @@ export async function fetchInvitations(
   const dismissals = honour
     ? indexDeletions(
         await ctx.runtime.querySync(ctx.relays, {
-          kinds: [CALENDAR_KINDS.deletion, CALENDAR_KINDS.participantRemoval],
+          kinds: [CALENDAR_KINDS.deletion],
           authors: [pubkey],
         }),
       )
@@ -247,23 +242,21 @@ export async function fetchInvitations(
  * author, and that author is a throwaway key the recipient only gets through
  * the encrypted rumor.
  *
- * Legacy wraps have no `signing_nsec`. For those we publish a signer-authored
- * deletion naming both the wrap and the event coordinate. A strict relay will
- * not honour it against a wrap it did not author, but it is a durable local
- * tombstone that `fetchInvitations` reads back — which is what keeps a
- * dismissed invitation dismissed across devices.
+ * Wraps sent before that tag existed have no `signing_nsec`. For those we
+ * publish a signer-authored deletion naming both the wrap and the event
+ * coordinate. A strict relay will not honour it against a wrap it did not
+ * author, but it is a durable local tombstone that `fetchInvitations` reads
+ * back — which is what keeps a dismissed invitation dismissed across devices.
  */
 export async function dismissInvitation(
   ctx: CalendarCtx,
   invitation: Pick<Invitation, "giftWrapId" | "coordinate" | "signingNsec">,
 ): Promise<void> {
   if (invitation.signingNsec) {
-    const deletion = buildSelfSignedDeletion(
-      invitation.signingNsec,
-      [invitation.giftWrapId],
-      ctx.wrapKind,
+    await publishEvent(
+      ctx,
+      buildSelfSignedDeletion(invitation.signingNsec, [invitation.giftWrapId]),
     );
-    await publishEvent(ctx, deletion);
     return;
   }
 
@@ -274,11 +267,7 @@ export async function dismissInvitation(
     tags: buildDeletionTags({
       eventIds: [invitation.giftWrapId],
       coordinates: [invitation.coordinate],
-      // Both kinds. This path only ever runs for a wrap with no
-      // `signing_nsec` — that is, a pre-NIP-17 wrap, whose wire kind is
-      // `wrapType` (1052), not `wrapKind`. Naming only 1059 would describe the
-      // wrong kind for exactly the events this branch handles.
-      kinds: [ctx.wrapKind, ctx.wrapType],
+      kinds: [CALENDAR_KINDS.giftWrap],
     }),
   });
 }

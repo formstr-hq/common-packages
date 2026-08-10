@@ -3,6 +3,7 @@ export { CalendarSDK, type CalendarSDKOptions } from "./CalendarSDK";
 
 // ── Host integration points ─────────────────────────────
 export {
+  RelaysRequiredError,
   SignerRequiredError,
   ViewKeyRequiredError,
   GiftWrapVerificationError,
@@ -66,15 +67,12 @@ export {
   type ParseEventOptions,
 } from "./codec/event";
 export {
-  DEFAULT_CALENDAR_COLOR,
-  DEFAULT_CALENDAR_TITLE,
   decodeCalendarList,
   encodeCalendarListPayload,
   findCalendarForCoordinate,
   lookupViewKey,
 } from "./codec/calendarList";
 export {
-  INVITATION_RUMOR_KINDS,
   buildInvitationMessage,
   buildInvitationRumorTags,
   buildPrivateEventUrl,
@@ -127,7 +125,6 @@ export {
 
 // ── Discovery ───────────────────────────────────────────
 export {
-  DEFAULT_CALENDAR_RELAYS,
   buildRelayListTags,
   fetchRelayLists,
   normalizeRelayList,

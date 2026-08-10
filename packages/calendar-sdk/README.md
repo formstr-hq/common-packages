@@ -18,7 +18,7 @@ npm install @formstr/calendar-sdk
 ```ts
 import { CalendarSDK, LocalSigner } from "@formstr/calendar-sdk";
 
-const sdk = new CalendarSDK({ signer: new LocalSigner(secretKey) });
+const sdk = new CalendarSDK({ signer: new LocalSigner(secretKey), relays });
 
 // A calendar list holds your events — and their view keys. Make one first.
 const work = await sdk.createCalendar({ title: "Work", color: "#4285f4" });
@@ -66,16 +66,15 @@ Everything else follows from it:
 
 ```ts
 new CalendarSDK({
+  relays,                       // required — the SDK ships no relay set
   signer,                       // required for anything private
-  relays,                       // defaults to the set calendar.formstr.app uses
   runtime,                      // defaults to a built-in SimplePool
-  appBaseUrl,                   // base for share links in invitations
-  wrapKind: 1059,               // gift-wrap wire kind
-  wrapType: 1052,               // its `k` discriminator, and the legacy kind
-  wrapTimestamps: "real",       // or "jittered" for NIP-59's anti-correlation
-  readLegacyWraps: true,        // also read pre-NIP-17 wraps
+  appBaseUrl,                   // optional; without it invitations carry no link
 });
 ```
+
+**Relays.** There is no default set: which relays a user talks to is the host's
+call. Constructing without any throws `RelaysRequiredError`.
 
 **Signers.** Anything with `getPublicKey`, `signEvent`, `nip44Encrypt` and
 `nip44Decrypt` — the same shape `@formstr/kanban-sdk` and `@formstr/sdk` accept,
@@ -119,11 +118,11 @@ or parse events themselves.
 | Kind | | Kind | |
 |---|---|---|---|
 | `32678` | private event | `1059` | gift wrap (`k` = `1052`) |
-| `31923` | public event | `1052` | legacy wrap, read-only |
-| `32123` | private calendar list | `14` | invitation rumor (NIP-17) |
-| `32069` | private RSVP | `5` | deletion |
-| `31925` | public RSVP | `84` | legacy removal, read-only |
-| `31926` | public busy list | `10002` | relay list (NIP-65) |
+| `31923` | public event | `14` | invitation rumor (NIP-17) |
+| `32123` | private calendar list | `5` | deletion |
+| `32069` | private RSVP | `10002` | relay list (NIP-65) |
+| `31925` | public RSVP | | |
+| `31926` | public busy list | | |
 
 Scheduling pages and booking are out of scope — see
 [ADR 0004](docs/adr/0004-scope.md).

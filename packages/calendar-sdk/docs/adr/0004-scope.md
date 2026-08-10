@@ -20,10 +20,10 @@ reached into event publishing, and the facade carried eight booking methods.
 | `32678` | private calendar event |
 | `31923` | public calendar event |
 | `32123` | private calendar list |
-| `1059` / `1052` / `14` | invitation gift wrap, legacy wrap, rumor |
+| `1059` / `14` | invitation gift wrap (`k` = `1052`), rumor |
 | `32069` / `31925` | private and public RSVP |
 | `31926` | public busy list |
-| `5` / `84` | deletion, legacy participant removal |
+| `5` | deletion |
 | `10002` | NIP-65 relay list |
 | `0` | profile, read-only for sender display names |
 | `30168` / `1069` | Formstr form attachments |

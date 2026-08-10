@@ -4,12 +4,11 @@ import { CALENDAR_KINDS } from "../kinds";
 import type { NostrRuntime } from "../contracts";
 
 /**
- * Deletion and legacy-tombstone index — docs/protocol.md §11.
+ * Deletion index — docs/protocol.md §11.
  *
  * Relays are not required to enforce NIP-09, and in practice most enforce it
- * only by `e` tag. Addressable events are deleted by `a` coordinate, and older
- * calendar builds wrote kind-84 participant removals, so a client that wants a
- * dismissed invitation to stay dismissed has to filter locally.
+ * only by `e` tag, while addressable events are deleted by `a` coordinate. So a
+ * client that wants a deleted event to stay deleted has to filter locally.
  */
 
 export interface DeletionIndex {
@@ -23,13 +22,11 @@ export function emptyDeletionIndex(): DeletionIndex {
   return { ids: new Set(), coordinates: new Set() };
 }
 
-/** Folds kind-5 and legacy kind-84 events into an index. */
+/** Folds kind-5 deletion requests into an index. */
 export function indexDeletions(events: readonly Event[]): DeletionIndex {
   const index = emptyDeletionIndex();
   for (const event of events) {
-    if (event.kind !== CALENDAR_KINDS.deletion && event.kind !== CALENDAR_KINDS.participantRemoval) {
-      continue;
-    }
+    if (event.kind !== CALENDAR_KINDS.deletion) continue;
     for (const tag of event.tags) {
       if (tag[0] === "e" && tag[1]) index.ids.add(tag[1]);
       if (tag[0] === "a" && tag[1]) index.coordinates.add(tag[1]);
@@ -39,7 +36,7 @@ export function indexDeletions(events: readonly Event[]): DeletionIndex {
 }
 
 /**
- * The caller's own deletions and removals.
+ * The caller's own deletions.
  *
  * Scope is deliberately self-authored only, matching upstream: a kind-5 from
  * anyone else is not authoritative over your view, and honouring third-party
@@ -53,10 +50,7 @@ export async function fetchDeletions(
 ): Promise<DeletionIndex> {
   const events = await runtime.querySync(
     relays,
-    {
-      kinds: [CALENDAR_KINDS.deletion, CALENDAR_KINDS.participantRemoval],
-      authors: [pubkey],
-    },
+    { kinds: [CALENDAR_KINDS.deletion], authors: [pubkey] },
     timeoutMs,
   );
   return indexDeletions(events);

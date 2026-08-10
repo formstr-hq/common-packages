@@ -15,7 +15,7 @@ not a drifted one:
 
 | | extracted version | nostr-calendar v2.1.0 |
 |---|---|---|
-| Invitation wrap | kind `1052` | `1059` + `["k","1052"]`; 1052 read-only |
+| Invitation wrap | kind `1052` | `1059` + `["k","1052"]` |
 | Invitation rumor | kind `52` | `14` (NIP-17), human-readable content |
 | Private RSVP | also `1055`/`55` wraps | `32069` only — no such wraps exist |
 | `32679` "private recurring" | in the registry | does not exist |

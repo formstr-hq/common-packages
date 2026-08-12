@@ -29,7 +29,9 @@ export function buildPublicBoardTags(draft: BoardDraft, dTag: string): string[][
   for (const column of draft.columns) {
     tags.push(["col", column.id, column.name, String(column.order)]);
   }
-  for (const maintainer of draft.maintainers ?? []) {
+  // Deduplicated: callers build the roster by appending to the parsed list, so a
+  // re-invite would otherwise leave the same pubkey tagged twice.
+  for (const maintainer of new Set(draft.maintainers ?? [])) {
     tags.push(["p", maintainer]);
   }
   if (draft.noZap) tags.push(["nozap"]);
@@ -124,10 +126,15 @@ export function buildPrivateBoardTags(draft: BoardDraft, dTag: string): string[]
   for (const column of draft.columns) {
     tags.push(["col", column.id, column.name, String(column.order)]);
   }
-  for (const maintainer of draft.maintainers ?? []) {
+  // Deduplicated, and a maintainer never also appears as a member: two rows for
+  // one pubkey are two conflicting roles, and which one a reader believes then
+  // depends on tag order.
+  const maintainers = new Set(draft.maintainers ?? []);
+  for (const maintainer of maintainers) {
     tags.push(["maintainer", maintainer]);
   }
-  for (const member of draft.members ?? []) {
+  for (const member of new Set(draft.members ?? [])) {
+    if (maintainers.has(member)) continue;
     tags.push(["member", member]);
   }
   if (draft.noZap) tags.push(["nozap"]);

@@ -39,6 +39,24 @@ Without a signer the SDK still reads public boards; writes throw `SignerRequired
 
 Public NIP-100 boards only. Private encrypted boards (NIP-100E) land in a later release — see `kanban/docs/05-private-kanban-spec.md`.
 
+## Who may write what
+
+Nostr binds every event to the key that signed it, and the SDK enforces the same
+boundaries a relay would rather than pretending a write succeeded:
+
+| Operation | Allowed for |
+| --- | --- |
+| `updateBoard` / `updatePrivateBoard`, `deleteBoard`, membership, key rotation | the board's author only — it is an addressable single-owner event, so anyone else's write would fork it to a new coordinate |
+| `leaveBoard` | anyone: it unlinks the board from your own lists and touches nothing else |
+| create / update / move / bin a card | the owner and the maintainers |
+| comment | the owner, maintainers, and members |
+| `deleteCard` / `deleteComment` | whoever **signed that version** — NIP-09 recognises no other deletion |
+
+Editing someone else's card is allowed and records `original-author` in the
+payload, so authorship does not transfer to whoever saved last. To take down a
+card you did not write, use `binCard` — a reversible edit every reader honours —
+because a tombstone you sign for someone else's event is ignored.
+
 ## Notes on compatibility
 
 - Assignees are written to **both** `p` and `zap` tags, because kanbanstr reads either and routes zaps via `zap`.

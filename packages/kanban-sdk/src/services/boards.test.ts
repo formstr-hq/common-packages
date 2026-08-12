@@ -107,6 +107,43 @@ describe("fetchBoards", () => {
     expect(boards).toHaveLength(1);
     expect(boards[0].title).toBe("V2");
   });
+
+  it("ignores a tombstone one board author aimed at another's board", async () => {
+    // A query that spans several authors also collects their deletions, so an
+    // unbound deleted-set lets anyone sharing the result delete everyone's board.
+    const runtime = new FakeRuntime();
+    const aliceCtx = makeCtx({ runtime });
+    const mallory = fakeSigner();
+    const malloryCtx = makeCtx({ signer: mallory, runtime });
+    const maintainer = "c".repeat(64);
+
+    const alice = await createBoard(aliceCtx, {
+      title: "Alice board",
+      columns: [],
+      maintainers: [maintainer],
+    });
+    await createBoard(malloryCtx, {
+      title: "Mallory board",
+      columns: [],
+      maintainers: [maintainer],
+    });
+
+    runtime.seed(
+      await mallory.signEvent({
+        kind: KANBAN_KINDS.deletion,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ["e", alice.eventId],
+          ["a", `${KANBAN_KINDS.publicBoard}:${alice.pubkey}:${alice.id}`],
+          ["k", String(KANBAN_KINDS.publicBoard)],
+        ],
+        content: "",
+      }),
+    );
+
+    const boards = await fetchBoards(aliceCtx, { maintainedBy: maintainer });
+    expect(boards.map((b) => b.title).sort()).toEqual(["Alice board", "Mallory board"]);
+  });
 });
 
 // ── Private path (Plan 2) ───────────────────────────────

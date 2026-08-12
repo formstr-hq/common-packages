@@ -426,6 +426,39 @@ describe("deleteCard", () => {
     ]);
     expect(await fetchPrivateCards(ctx, board)).toEqual([]);
   });
+
+  it("ignores a tombstone signed by a maintainer who did not write the card", async () => {
+    // Deletions are queried for every author the board trusts, so a set that is
+    // not bound to its signer lets one maintainer erase another's work.
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    ctx.runtime.seed(
+      finalizeEvent(
+        {
+          kind: KANBAN_KINDS.deletion,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ["e", card.eventId],
+            ["a", `${KANBAN_KINDS.privateCard}:${card.pubkey}:${card.id}`],
+            ["k", String(KANBAN_KINDS.privateCard)],
+          ],
+          content: "",
+        },
+        otherSecret,
+      ),
+    );
+
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.title)).toEqual(["Mine"]);
+  });
 });
 
 describe("updatePrivateCard board mismatch", () => {

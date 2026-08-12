@@ -3,7 +3,7 @@ import { buildInvitationRumorTags, parseInvitationRumor } from "../codec/invitat
 import { InvitationVerificationError, type KanbanCtx } from "../contracts";
 import { buildSelfSignedDeletion, unwrapEvent, wrapEvent } from "../crypto/nip59";
 import { nextCreatedAt } from "../discovery/dedupe";
-import { collectDeleted } from "../discovery/deletions";
+import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { fetchRelayListsForPubkeys, getInvitationInboxRelays } from "../discovery/relays";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardInvitation, BoardRole, KanbanBoard, KanbanBoardList } from "../types";
@@ -104,7 +104,9 @@ export async function fetchInvitations(ctx: KanbanCtx): Promise<BoardInvitation[
             authors: [...new Set(deduped.map((wrap) => wrap.pubkey))],
           });
           const deleted = collectDeleted(deletions);
-          return deduped.filter((wrap) => !deleted.ids.has(wrap.id));
+          // No `coordinateOf`: a gift wrap is a regular event with no `d` tag,
+          // so an `e` tag is the only way to name it.
+          return deduped.filter((wrap) => !isDeleted(wrap, deleted));
         })();
 
   // When we declined, and for which board. A later re-invitation must still

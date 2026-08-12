@@ -8,6 +8,7 @@ import { encryptWithViewKey, generateViewKey, viewKeyFromNsec } from "../crypto/
 import { KANBAN_KINDS } from "../kinds";
 import { createBoard, createPrivateBoard } from "./boards";
 import {
+  binCard,
   boardPointer,
   canEditCards,
   createCard,
@@ -475,6 +476,58 @@ describe("deleteCard", () => {
     );
 
     expect((await fetchPrivateCards(ctx, board)).map((c) => c.title)).toEqual(["Mine"]);
+  });
+});
+
+describe("binCard", () => {
+  it("bins someone else's card and restores it", async () => {
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
+    const card = await createPrivateCard(otherCtx, board, { title: "Theirs", status: "col-1" });
+
+    const binned = await binCard(ctx, board, card);
+    expect(binned.binned).toBe(true);
+    expect(binned.authorPubkey).toBe(getPublicKey(otherSecret));
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.binned)).toEqual([true]);
+
+    const restored = await binCard(ctx, board, binned, false);
+    expect(restored.binned).toBe(false);
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.binned)).toEqual([false]);
+  });
+
+  it("keeps a card binned across a later edit", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, { title: "Noise", status: "col-1" });
+    const binned = await binCard(ctx, board, card);
+
+    const edited = await updatePrivateCard(ctx, board, binned, { title: "Still noise" });
+    expect(edited.binned).toBe(true);
+  });
+
+  it("keeps a public card binned across a later edit", async () => {
+    const ctx = makeCtx();
+    const board = await createBoard(ctx, { title: "B", columns: [] });
+    const card = await createCard(ctx, board, { title: "Noise", status: "To Do" });
+
+    const binned = await binCard(ctx, board, card);
+    expect(binned.binned).toBe(true);
+    expect((await updateCard(ctx, board, binned, { title: "Still noise" })).binned).toBe(true);
+  });
+
+  it("refuses a writer who is not a maintainer", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const strangerCtx = makeCtx({ signer: fakeSigner(), runtime: ctx.runtime });
+    await expect(binCard(strangerCtx, board, card)).rejects.toThrow(/not a maintainer/i);
   });
 });
 

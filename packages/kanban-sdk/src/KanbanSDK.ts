@@ -146,6 +146,14 @@ export class KanbanSDK {
       : cards.fetchCards(this.ctx, board);
   }
 
+  /**
+   * Hide a card without a tombstone, or restore one. The way to take down a card
+   * somebody else wrote: only its own author can `deleteCard` it.
+   */
+  binCard(board: KanbanBoard, card: KanbanCard, binned = true): Promise<KanbanCard> {
+    return cards.binCard(this.ctx, board, card, binned);
+  }
+
   deleteCard(card: KanbanCard): Promise<void> {
     return cards.deleteCard(this.ctx, card);
   }

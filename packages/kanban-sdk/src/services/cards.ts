@@ -390,6 +390,46 @@ export function resolveWithRotation(
 }
 
 /**
+ * Take a card off the board without a tombstone, or put it back.
+ *
+ * NIP-09 lets only a card's own author delete it, so this is how anyone else
+ * with write access removes one. `binned` is an ordinary edit every reader
+ * honours, it is reversible, and it survives later edits because neither
+ * managed-tag list owns it.
+ */
+export async function binCard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  card: KanbanCard,
+  binned = true,
+): Promise<KanbanCard> {
+  const editor = await assertMaintainer(ctx, board);
+
+  // Same trap as updatePrivateCard: republishing against the wrong board would
+  // carry this board's pointer and the card's own coordinate, losing it from both.
+  if (card.boardCoordinate !== boardCoordinate(board)) {
+    throw new Error(
+      `Card ${card.id} belongs to ${card.boardCoordinate}, not ${boardCoordinate(board)}`,
+    );
+  }
+
+  let tags = card.rawTags.filter((t) => t[0] !== "binned");
+  if (binned) tags = [...tags, ["binned"]];
+  if (editor !== card.authorPubkey) tags = withOriginalAuthor(tags, card.authorPubkey);
+
+  if (!card.isPrivate) return publishCard(ctx, tags, nextCreatedAt(card.createdAt));
+
+  const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+  return publishPrivateCard(
+    ctx,
+    tags,
+    boardPointer(board, viewKeyNsec),
+    viewKeyNsec,
+    nextCreatedAt(card.createdAt),
+  );
+}
+
+/**
  * Retract a card by tombstoning it.
  *
  * The check is against `card.pubkey` — who signed this version — not

@@ -7,7 +7,9 @@ import type { CardDraft, CardLink, KanbanCard, TrackedRef } from "../types";
  *
  * Deliberately excludes `k`, `e`, `refs/board`, `refs/card`, so a tracker card
  * keeps tracking across an edit. Rewriting those away is kanbanstr's silent
- * data-loss bug (kanban/docs/03-kanbanstr-review.md §6.2).
+ * data-loss bug (kanban/docs/03-kanbanstr-review.md §6.2). Also excludes
+ * `binned`, for the reason the private list gives: a soft-deleted card that
+ * un-bins itself on the next edit is worse than one that stays binned.
  */
 export const CARD_MANAGED_TAGS = [
   "d",
@@ -22,7 +24,6 @@ export const CARD_MANAGED_TAGS = [
   "p",
   "zap",
   "i",
-  "binned",
 ] as const;
 
 export function buildCardLinkTag(link: CardLink): string[] {

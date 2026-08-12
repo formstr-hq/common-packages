@@ -10,7 +10,7 @@ import {
   parsePublicCard,
 } from "../codec/card";
 import { computeRank } from "../codec/rank";
-import { NotAMaintainerError, type KanbanCtx } from "../contracts";
+import { NotAMaintainerError, NotEventAuthorError, type KanbanCtx } from "../contracts";
 import { blindedPointer } from "../crypto/blindedPointer";
 import { decryptWithViewKey, encryptWithViewKey, viewKeyFromNsec } from "../crypto/viewKey";
 import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
@@ -387,9 +387,21 @@ export function resolveWithRotation(
   return resolved;
 }
 
+/**
+ * Retract a card by tombstoning it.
+ *
+ * The check is against `card.pubkey` — who signed this version — not
+ * `authorPubkey`, because that is what NIP-09 binds a deletion to. After a key
+ * rotation republished someone else's card, the rotator signs it and so only the
+ * rotator can retract it; the original author bins it instead (`binCard`).
+ */
 export async function deleteCard(ctx: KanbanCtx, card: KanbanCard): Promise<void> {
   const signer = await ctx.getSigner();
+  const pubkey = await signer.getPublicKey();
   const kind = card.isPrivate ? KANBAN_KINDS.privateCard : KANBAN_KINDS.publicCard;
+  if (card.pubkey !== pubkey) {
+    throw new NotEventAuthorError(pubkey, `${kind}:${card.pubkey}:${card.id}`);
+  }
 
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.deletion,

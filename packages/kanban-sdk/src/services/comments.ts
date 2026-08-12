@@ -2,7 +2,7 @@ import type { Event } from "nostr-tools";
 
 import { boardCoordinate, mergeTags } from "../codec/board";
 import { COMMENT_MANAGED_TAGS, buildCommentTags, parseComment } from "../codec/comment";
-import type { KanbanCtx } from "../contracts";
+import { NotEventAuthorError, type KanbanCtx } from "../contracts";
 import { decryptWithViewKey, encryptWithViewKey } from "../crypto/viewKey";
 import { nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
@@ -162,8 +162,17 @@ export async function fetchComments(
   return comments.sort((a, b) => a.createdAt - b.createdAt);
 }
 
+/** Same NIP-09 rule as `deleteCard`: only the signer of this version can retract it. */
 export async function deleteComment(ctx: KanbanCtx, comment: KanbanComment): Promise<void> {
   const signer = await ctx.getSigner();
+  const pubkey = await signer.getPublicKey();
+  if (comment.pubkey !== pubkey) {
+    throw new NotEventAuthorError(
+      pubkey,
+      `${KANBAN_KINDS.privateComment}:${comment.pubkey}:${comment.id}`,
+    );
+  }
+
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.deletion,
     created_at: nextCreatedAt(),

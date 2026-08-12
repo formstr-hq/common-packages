@@ -173,4 +173,12 @@ describe("deleteComment", () => {
 
     expect(await fetchComments(alice, board, card.id)).toEqual([]);
   });
+
+  it("refuses to tombstone a comment the signer did not write", async () => {
+    const { alice, member, board, card } = await fixture();
+    const comment = await createComment(member, board, card.id, { content: "mine" });
+
+    await expect(deleteComment(alice, comment)).rejects.toThrow(/did not sign/i);
+    expect((await fetchComments(alice, board, card.id)).map((c) => c.content)).toEqual(["mine"]);
+  });
 });

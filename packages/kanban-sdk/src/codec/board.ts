@@ -185,3 +185,20 @@ export function mergeTags(
   const preserved = existing.filter((tag) => !managedSet.has(tag[0]));
   return [...next, ...preserved];
 }
+
+/**
+ * Stamp the first author onto a card or comment payload somebody else is about
+ * to re-sign.
+ *
+ * Both are author-signed at `kind:pubkey:d`, so a second maintainer's edit is a
+ * new coordinate sharing the `d`, not a new version of the same event. Without
+ * this the edit silently transfers authorship to whoever saved last — and with
+ * it, the right to delete.
+ *
+ * An author already recorded is preserved: only the FIRST writer is the author,
+ * and a third editor must not overwrite them with the second.
+ */
+export function withOriginalAuthor(tags: string[][], originalAuthor: string): string[][] {
+  if (tags.some((t) => t[0] === "original-author")) return tags;
+  return [...tags, ["original-author", originalAuthor]];
+}

@@ -1,6 +1,6 @@
 import type { Event } from "nostr-tools";
 
-import { boardCoordinate, mergeTags } from "../codec/board";
+import { boardCoordinate, mergeTags, withOriginalAuthor } from "../codec/board";
 import {
   CARD_MANAGED_TAGS,
   PRIVATE_CARD_MANAGED_TAGS,
@@ -84,7 +84,7 @@ export async function updateCard(
   card: KanbanCard,
   changes: Partial<CardDraft>,
 ): Promise<KanbanCard> {
-  await assertMaintainer(ctx, board);
+  const editor = await assertMaintainer(ctx, board);
 
   const draft: CardDraft = {
     title: changes.title ?? card.title,
@@ -99,11 +99,12 @@ export async function updateCard(
 
   // Merge, never rebuild. This is what stops an edit from stripping a tracker
   // card's k/refs tags — kanbanstr's data-loss bug §6.2.
-  const tags = mergeTags(
+  let tags = mergeTags(
     card.rawTags,
     buildPublicCardTags(draft, card.id, card.boardCoordinate, rank),
     CARD_MANAGED_TAGS,
   );
+  if (editor !== card.authorPubkey) tags = withOriginalAuthor(tags, card.authorPubkey);
   return publishCard(ctx, tags, nextCreatedAt(card.createdAt));
 }
 
@@ -224,7 +225,7 @@ export async function updatePrivateCard(
   card: KanbanCard,
   changes: Partial<CardDraft>,
 ): Promise<KanbanCard> {
-  await assertMaintainer(ctx, board);
+  const editor = await assertMaintainer(ctx, board);
 
   // Editing a card against the wrong board loses it entirely: the republish would
   // carry THIS board's blinded pointer but the card's own `a` coordinate, so the
@@ -252,11 +253,12 @@ export async function updatePrivateCard(
   };
   const rank = changes.rank ?? card.rank;
 
-  const inner = mergeTags(
+  let inner = mergeTags(
     card.rawTags,
     buildPrivateCardTags(draft, card.id, card.boardCoordinate, rank),
     PRIVATE_CARD_MANAGED_TAGS,
   );
+  if (editor !== card.authorPubkey) inner = withOriginalAuthor(inner, card.authorPubkey);
 
   return publishPrivateCard(
     ctx,

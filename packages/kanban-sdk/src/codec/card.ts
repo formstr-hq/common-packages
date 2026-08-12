@@ -102,11 +102,15 @@ export function parsePublicCard(event: Event): KanbanCard | null {
   const rawTrackedKind = event.tags.find((t) => t[0] === "k")?.[1];
   const trackedKind = rawTrackedKind ? Number.parseInt(rawTrackedKind, 10) : undefined;
 
+  // Set once another maintainer edits the card; the writer of this version is
+  // then not its author.
+  const originalAuthor = event.tags.find((t) => t[0] === "original-author")?.[1];
+
   return {
     id,
     pubkey: event.pubkey,
     // Public cards are never rotated: there is no key to rotate.
-    authorPubkey: event.pubkey,
+    authorPubkey: originalAuthor ?? event.pubkey,
     rotated: false,
     eventId: event.id,
     boardCoordinate: event.tags.find((t) => t[0] === "a")?.[1] ?? "",
@@ -196,11 +200,13 @@ export function parsePrivateCard(event: Event, innerTags: string[][]): KanbanCar
   // A rotation republishes other people's cards under the rotator's pubkey
   // (doc 05 §8), so the payload is where the real author survives.
   const rotatedAuthor = innerTags.find((t) => t[0] === "rotated-author")?.[1];
+  // An edit by a second maintainer does the same thing without a rotation.
+  const originalAuthor = innerTags.find((t) => t[0] === "original-author")?.[1];
 
   return {
     id,
     pubkey: event.pubkey,
-    authorPubkey: rotatedAuthor ?? event.pubkey,
+    authorPubkey: originalAuthor ?? rotatedAuthor ?? event.pubkey,
     rotated: rotatedAuthor !== undefined,
     eventId: event.id,
     boardCoordinate,

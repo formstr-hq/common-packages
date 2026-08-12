@@ -478,6 +478,88 @@ describe("deleteCard", () => {
   });
 });
 
+describe("authorship across a cross-author edit", () => {
+  async function twoMaintainers() {
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
+    return { ctx, otherCtx, board, owner: board.pubkey, other: getPublicKey(otherSecret) };
+  }
+
+  it("keeps the first writer as the author when a second maintainer edits", async () => {
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const edited = await updatePrivateCard(otherCtx, board, card, { title: "Touched" });
+    expect(edited.authorPubkey).toBe(owner);
+
+    const fetched = await fetchPrivateCards(ctx, board);
+    expect(fetched).toHaveLength(1);
+    // The edit still wins: authorship is recorded, not enforced by resolution.
+    expect(fetched[0].title).toBe("Touched");
+    expect(fetched[0].authorPubkey).toBe(owner);
+  });
+
+  it("does not let the second editor claim the card by editing again", async () => {
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const once = await updatePrivateCard(otherCtx, board, card, { title: "One" });
+    const twice = await updatePrivateCard(otherCtx, board, once, { title: "Two" });
+    expect(twice.authorPubkey).toBe(owner);
+    expect(twice.rawTags.filter((t) => t[0] === "original-author")).toHaveLength(1);
+  });
+
+  it("leaves the author alone when its own writer edits", async () => {
+    const { ctx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const edited = await updatePrivateCard(ctx, board, card, { title: "Still mine" });
+    expect(edited.authorPubkey).toBe(owner);
+    expect(edited.rawTags.some((t) => t[0] === "original-author")).toBe(false);
+  });
+
+  it("lets an editor retract only their own edit, leaving the original standing", async () => {
+    // Their tombstone names 32302:<editor>:<d>, which is the only coordinate they
+    // signed. The author's own version is a different coordinate and survives, so
+    // the card falls back to it rather than disappearing.
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+    const edited = await updatePrivateCard(otherCtx, board, card, { title: "Touched" });
+
+    await deleteCard(otherCtx, edited);
+
+    const fetched = await fetchPrivateCards(ctx, board);
+    expect(fetched.map((c) => c.title)).toEqual(["Mine"]);
+    expect(fetched[0].authorPubkey).toBe(owner);
+  });
+
+  it("records the author on a public card too", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const other = fakeSigner();
+    const otherCtx = makeCtx({ signer: other, runtime });
+
+    const board = await createBoard(ownerCtx, {
+      title: "B",
+      columns: [],
+      maintainers: [await other.getPublicKey()],
+    });
+    const card = await createCard(ownerCtx, board, { title: "Mine", status: "To Do" });
+    const edited = await updateCard(otherCtx, board, card, { title: "Touched" });
+
+    expect(edited.authorPubkey).toBe(board.pubkey);
+    expect((await fetchCards(ownerCtx, board)).map((c) => c.title)).toEqual(["Touched"]);
+  });
+});
+
 describe("updatePrivateCard board mismatch", () => {
   it("refuses a card that belongs to another board, instead of losing it from both", async () => {
     const secret = generateSecretKey();

@@ -147,6 +147,14 @@ export class KanbanSDK {
   }
 
   /**
+   * Drop a board from our own lists. What a member means by "remove this board":
+   * `deleteBoard` is the owner's alone.
+   */
+  leaveBoard(board: KanbanBoard): Promise<void> {
+    return boards.leaveBoard(this.ctx, board);
+  }
+
+  /**
    * Hide a card without a tombstone, or restore one. The way to take down a card
    * somebody else wrote: only its own author can `deleteCard` it.
    */

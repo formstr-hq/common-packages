@@ -12,6 +12,7 @@ import {
   fetchBoards,
   fetchPrivateBoardByCoordinate,
   fetchPrivateBoards,
+  leaveBoard,
   updateBoard,
   updatePrivateBoard,
 } from "./boards";
@@ -69,6 +70,23 @@ describe("updateBoard", () => {
     const created = await createBoard(ctx, { title: "X", columns: [] });
     const updated = await updateBoard(ctx, created, { title: "Y" });
     expect(updated.createdAt).toBeGreaterThan(created.createdAt);
+  });
+
+  it("refuses a maintainer, whose edit would fork the board to their own coordinate", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const maintainer = fakeSigner();
+    const board = await createBoard(ownerCtx, {
+      title: "Roadmap",
+      columns: [],
+      maintainers: [await maintainer.getPublicKey()],
+    });
+
+    const maintainerCtx = makeCtx({ signer: maintainer, runtime });
+    await expect(updateBoard(maintainerCtx, board, { title: "Hijacked" })).rejects.toThrow(
+      /not the author/i,
+    );
+    expect(runtime.published.some((e) => e.pubkey !== board.pubkey)).toBe(false);
   });
 });
 
@@ -359,5 +377,40 @@ describe("deleteBoard", () => {
     const deletion = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.deletion)!;
     expect(deletion.tags).toContainEqual(["k", String(KANBAN_KINDS.publicBoard)]);
     expect(await fetchBoards(ctx)).toEqual([]);
+  });
+
+  it("refuses a non-author, whose tombstone would be inert but whose unlink is not", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const { board } = await createPrivateBoard(ownerCtx, {
+      title: "Q3",
+      columns: [],
+      private: true,
+    });
+
+    const memberCtx = makeCtx({ runtime });
+    await expect(deleteBoard(memberCtx, board)).rejects.toThrow(/not the author/i);
+    expect(runtime.published.some((e) => e.kind === KANBAN_KINDS.deletion)).toBe(false);
+    expect((await fetchBoardLists(ownerCtx))[0].boards).toHaveLength(1);
+  });
+});
+
+describe("leaveBoard", () => {
+  it("unlinks the board from our lists without deleting it", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const { board } = await createPrivateBoard(ownerCtx, {
+      title: "Q3",
+      columns: [],
+      private: true,
+    });
+
+    await leaveBoard(ownerCtx, board);
+
+    expect((await fetchBoardLists(ownerCtx))[0].boards).toEqual([]);
+    expect(runtime.published.some((e) => e.kind === KANBAN_KINDS.deletion)).toBe(false);
+    // The board event itself is untouched and still opens with its key.
+    const coordinate = `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`;
+    expect(await fetchPrivateBoardByCoordinate(ownerCtx, coordinate, board.viewKey!)).not.toBeNull();
   });
 });

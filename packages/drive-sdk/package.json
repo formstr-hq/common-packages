@@ -1,12 +1,12 @@
 {
-  "name": "@formstr/file-sdk",
+  "name": "@formstr/drive-sdk",
   "version": "0.1.0",
   "description": "Protocol-only NIP-FS helpers for encrypted files on Nostr and Blossom",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/formstr-hq/common-packages.git",
-    "directory": "packages/file-sdk"
+    "directory": "packages/drive-sdk"
   },
   "publishConfig": {
     "access": "public"
@@ -35,7 +35,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@formstr/local-relay": "workspace:*",
+    "@sinclair/typebox": "^0.34.41",
     "nostr-tools": "^2.23.5"
   },
   "devDependencies": {

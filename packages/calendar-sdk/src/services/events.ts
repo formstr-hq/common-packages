@@ -57,6 +57,9 @@ export interface UpdatePrivateEventOptions extends PublishPrivateEventOptions {
   previousParticipants: string[];
 }
 
+/** Internal: publish accepts the edit-only field that `updatePrivateEvent` forwards. */
+type PublishOptions = PublishPrivateEventOptions & { previousParticipants?: string[] };
+
 export interface PublishedEvent {
   event: CalendarEvent;
   signedEvent: Event;
@@ -76,9 +79,7 @@ export interface PublishedEvent {
 export async function publishPrivateEvent(
   ctx: CalendarCtx,
   draft: CalendarEventDraft,
-  // `previousParticipants` is only meaningful on an edit, so it is not on the
-  // public options — `updatePrivateEvent` forwards it through here.
-  options: PublishPrivateEventOptions & { previousParticipants?: string[] } = {},
+  options: PublishOptions = {},
 ): Promise<PublishedEvent> {
   const signer = await ctx.getSigner();
   const authorPubkey = await signer.getPublicKey();

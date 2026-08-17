@@ -150,8 +150,8 @@ export class CalendarSDK {
   /**
    * Edits a private event, reusing its existing view key.
    *
-   * `options.previousParticipants` is required: everyone not on it is wrapped a
-   * fresh invitation, so resending has to be asked for, not fallen into.
+   * `options.previousParticipants` is required: everyone missing from it gets a
+   * fresh invitation wrap, so a resend has to be asked for, not fallen into.
    */
   updatePrivateEvent(
     draft: CalendarEventDraft & { id: string },

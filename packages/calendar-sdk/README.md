@@ -61,6 +61,9 @@ Everything else follows from it:
   leaves the event unreadable to everyone already invited.
 - An invitation carries that key, which makes it a capability, not a
   notification. That is why wraps are verified before they are trusted.
+- Editing therefore also asks *who already holds one*:
+  `updatePrivateEvent` requires `previousParticipants`, and wraps a fresh
+  invitation for everyone missing from it. `[]` resends to all — deliberately.
 
 ## Configuration
 
@@ -82,14 +85,25 @@ so one signer object serves all three. Use `toCalendarSigner()` to adapt a
 class-based signer; it binds the methods, which bare references do not.
 
 **Runtimes.** All network I/O goes through `NostrRuntime`. The default opens its
-own `SimplePool`. To share the host's connections instead:
+own `SimplePool`. To share the host's connections instead, wire a
+`@formstr/local-relay` data layer and hand it over:
 
 ```ts
-import { dataLayer } from "@formstr/local-relay";
+import { DataLayer, LocalRelayClient, workerChannel } from "@formstr/local-relay";
 import { LocalRelayRuntime } from "@formstr/calendar-sdk/local-relay";
+
+const worker = new Worker(new URL("@formstr/local-relay/worker", import.meta.url));
+const client = new LocalRelayClient(workerChannel(worker));
+client.setUserRelays(relays);
+
+const dataLayer = new DataLayer({ client, sign: (t) => signer.signEvent(t) });
 
 new CalendarSDK({ signer, runtime: new LocalRelayRuntime(dataLayer) });
 ```
+
+An app that already installed local-relay's ambient singleton (`setDataLayer`)
+can import `dataLayer` from `@formstr/local-relay` and pass that instead — it
+resolves the singleton per call, and throws if none was installed.
 
 An injected runtime is never disposed by the SDK — its lifetime is the host's.
 

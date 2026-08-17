@@ -48,7 +48,7 @@
     "rrule": "^2.8.1"
   },
   "peerDependencies": {
-    "@formstr/local-relay": "^0.4.0 || ^0.5.0"
+    "@formstr/local-relay": ">=0.4.0 <1.0.0"
   },
   "peerDependenciesMeta": {
     "@formstr/local-relay": {

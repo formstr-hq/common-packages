@@ -1,0 +1,47 @@
+{
+  "name": "@formstr/drive-sdk",
+  "version": "0.1.0",
+  "description": "Protocol-only NIP-FS helpers for encrypted files on Nostr and Blossom",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/formstr-hq/common-packages.git",
+    "directory": "packages/drive-sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41",
+    "nostr-tools": "^2.23.5"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

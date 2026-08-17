@@ -105,6 +105,27 @@ importers:
         specifier: ^5.4.0
         version: 5.4.21(@types/node@20.19.42)
 
+  packages/drive-sdk:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: ^0.34.41
+        version: 0.34.52
+      nostr-tools:
+        specifier: ^2.23.5
+        version: 2.23.5(typescript@5.9.3)
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^2.0.0
+        version: 2.1.9(vitest@2.1.9(@types/node@20.19.42)(happy-dom@15.11.7))
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
   packages/calendar-sdk:
     dependencies:
       '@noble/hashes':
@@ -846,6 +867,9 @@ packages:
 
   '@scure/bip39@2.0.1':
     resolution: {integrity: sha512-PsxdFj/d2AcJcZDX1FXN3dDgitDDTmwf78rKZq1a6c1P1Nan1X/Sxc7667zU3U+AN60g7SxxP0YCVw2H/hBycg==}
+
+  '@sinclair/typebox@0.34.52':
+    resolution: {integrity: sha512-XiMQh7qqVlxZzcVD+kkGMNGMzcTrDMLWI7S4x7z1MkCkbDPrekpZXEUK0eZqZFMuHQg2a2DZOcDIh9o5v3Gonw==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -2485,6 +2509,8 @@ snapshots:
     dependencies:
       '@noble/hashes': 2.0.1
       '@scure/base': 2.0.0
+
+  '@sinclair/typebox@0.34.52': {}
 
   '@types/babel__core@7.20.5':
     dependencies:

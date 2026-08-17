@@ -39,14 +39,22 @@ export interface PublishPrivateEventOptions {
   dTag?: string;
   /** `created_at` of the version being replaced, so the new one supersedes it. */
   previousCreatedAt?: number;
-  /** Participants who already hold an invitation and must not get another. */
-  previousParticipants?: string[];
   /** Extra plaintext tags on the invitation wraps. */
   invitationWrapTags?: string[][];
   /** Skip sending invitations entirely. */
   skipInvitations?: boolean;
   /** Pre-fetched calendar lists, to avoid a second round trip. */
   calendars?: readonly CalendarList[];
+}
+
+export interface UpdatePrivateEventOptions extends PublishPrivateEventOptions {
+  /**
+   * Participants who already hold an invitation and must not get another.
+   *
+   * Required, not optional: an omitted list re-wraps everyone on the event, so
+   * a forced resend has to be a decision (`[]`), never a forgotten argument.
+   */
+  previousParticipants: string[];
 }
 
 export interface PublishedEvent {
@@ -68,7 +76,9 @@ export interface PublishedEvent {
 export async function publishPrivateEvent(
   ctx: CalendarCtx,
   draft: CalendarEventDraft,
-  options: PublishPrivateEventOptions = {},
+  // `previousParticipants` is only meaningful on an edit, so it is not on the
+  // public options — `updatePrivateEvent` forwards it through here.
+  options: PublishPrivateEventOptions & { previousParticipants?: string[] } = {},
 ): Promise<PublishedEvent> {
   const signer = await ctx.getSigner();
   const authorPubkey = await signer.getPublicKey();
@@ -100,7 +110,8 @@ export async function publishPrivateEvent(
   });
 
   // Only participants who are new to this version get a wrap. Re-inviting
-  // everyone on every edit spams the inbox of people who already accepted.
+  // everyone on every edit spams the inbox of people who already accepted —
+  // which is why the edit path requires the list rather than defaulting it.
   const alreadyInvited = new Set(options.previousParticipants ?? []);
   const newParticipants = (draft.participants ?? []).filter((p) => !alreadyInvited.has(p));
 
@@ -153,7 +164,7 @@ export async function publishPrivateEvent(
 export async function updatePrivateEvent(
   ctx: CalendarCtx,
   draft: CalendarEventDraft & { id: string },
-  options: PublishPrivateEventOptions = {},
+  options: UpdatePrivateEventOptions,
 ): Promise<PublishedEvent> {
   const signer = await ctx.getSigner();
   const authorPubkey = await signer.getPublicKey();

@@ -156,7 +156,11 @@ describe("private events", () => {
     // The caller no longer holds the key — only the list ref does.
     const updated = await sdk.updatePrivateEvent(
       { ...draft, id: published.event.id, title: "Retro (moved)" },
-      { skipInvitations: true, previousCreatedAt: published.event.createdAt },
+      {
+        skipInvitations: true,
+        previousCreatedAt: published.event.createdAt,
+        previousParticipants: [],
+      },
     );
 
     expect(updated.viewKey).toBe(published.viewKey);
@@ -170,7 +174,10 @@ describe("private events", () => {
     // A rotated key leaves the event unreadable to everyone already invited,
     // while the ref still points at the old one.
     await expect(
-      sdk.updatePrivateEvent({ ...draft, id: "orphan" }, { calendars: [] }),
+      sdk.updatePrivateEvent(
+        { ...draft, id: "orphan" },
+        { calendars: [], previousParticipants: [] },
+      ),
     ).rejects.toThrow(ViewKeyRequiredError);
   });
 
@@ -183,7 +190,12 @@ describe("private events", () => {
     });
     const second = await sdk.updatePrivateEvent(
       { ...draft, id: first.event.id, title: "Renamed" },
-      { viewKey: first.viewKey, previousCreatedAt: first.event.createdAt, skipInvitations: true },
+      {
+        viewKey: first.viewKey,
+        previousCreatedAt: first.event.createdAt,
+        skipInvitations: true,
+        previousParticipants: [],
+      },
     );
 
     expect(second.event.createdAt).toBeGreaterThan(first.event.createdAt);
@@ -236,6 +248,24 @@ describe("invitations", () => {
 
     expect(second.invitations).toHaveLength(1);
     expect(second.invitations[0].tags).toContainEqual(["p", carol.pubkey]);
+  });
+
+  it("resends to everyone when the caller asks for it with an empty list", async () => {
+    // `previousParticipants: []` is the deliberate resend — the reason the field
+    // is required rather than defaulted.
+    const calendar = await sdk.createCalendar({ title: "Work" });
+    const first = await sdk.publishPrivateEvent(
+      { ...draft, participants: [bob.pubkey] },
+      { calendarId: calendar.id, calendars: [calendar] },
+    );
+
+    const second = await sdk.updatePrivateEvent(
+      { ...draft, id: first.event.id, participants: [bob.pubkey] },
+      { viewKey: first.viewKey, previousParticipants: [], calendars: [calendar] },
+    );
+
+    expect(second.invitations).toHaveLength(1);
+    expect(second.invitations[0].tags).toContainEqual(["p", bob.pubkey]);
   });
 
   it("delivers to the recipient's own relays, not just ours", async () => {

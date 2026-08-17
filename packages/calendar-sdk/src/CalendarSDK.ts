@@ -147,10 +147,15 @@ export class CalendarSDK {
     return events.publishPrivateEvent(this.ctx, draft, options);
   }
 
-  /** Edits a private event, reusing its existing view key. */
+  /**
+   * Edits a private event, reusing its existing view key.
+   *
+   * `options.previousParticipants` is required: everyone not on it is wrapped a
+   * fresh invitation, so resending has to be asked for, not fallen into.
+   */
   updatePrivateEvent(
     draft: CalendarEventDraft & { id: string },
-    options?: events.PublishPrivateEventOptions,
+    options: events.UpdatePrivateEventOptions,
   ): Promise<events.PublishedEvent> {
     return events.updatePrivateEvent(this.ctx, draft, options);
   }

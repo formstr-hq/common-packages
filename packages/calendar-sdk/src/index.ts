@@ -1,5 +1,10 @@
 // ── The SDK ─────────────────────────────────────────────
 export { CalendarSDK, type CalendarSDKOptions } from "./CalendarSDK";
+export type {
+  PublishPrivateEventOptions,
+  PublishedEvent,
+  UpdatePrivateEventOptions,
+} from "./services/events";
 
 // ── Host integration points ─────────────────────────────
 export {

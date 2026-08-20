@@ -8,6 +8,7 @@ import { encryptWithViewKey, generateViewKey, viewKeyFromNsec } from "../crypto/
 import { KANBAN_KINDS } from "../kinds";
 import { createBoard, createPrivateBoard } from "./boards";
 import {
+  binCard,
   boardPointer,
   canEditCards,
   createCard,
@@ -425,6 +426,190 @@ describe("deleteCard", () => {
       `${KANBAN_KINDS.privateCard}:${card.pubkey}:${card.id}`,
     ]);
     expect(await fetchPrivateCards(ctx, board)).toEqual([]);
+  });
+
+  it("refuses to tombstone a card the signer did not write", async () => {
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
+    await expect(deleteCard(otherCtx, card)).rejects.toThrow(/did not sign/i);
+    expect(ctx.runtime.published.some((e) => e.kind === KANBAN_KINDS.deletion)).toBe(false);
+  });
+
+  it("ignores a tombstone signed by a maintainer who did not write the card", async () => {
+    // Deletions are queried for every author the board trusts, so a set that is
+    // not bound to its signer lets one maintainer erase another's work.
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    ctx.runtime.seed(
+      finalizeEvent(
+        {
+          kind: KANBAN_KINDS.deletion,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ["e", card.eventId],
+            ["a", `${KANBAN_KINDS.privateCard}:${card.pubkey}:${card.id}`],
+            ["k", String(KANBAN_KINDS.privateCard)],
+          ],
+          content: "",
+        },
+        otherSecret,
+      ),
+    );
+
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.title)).toEqual(["Mine"]);
+  });
+});
+
+describe("binCard", () => {
+  it("bins someone else's card and restores it", async () => {
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
+    const card = await createPrivateCard(otherCtx, board, { title: "Theirs", status: "col-1" });
+
+    const binned = await binCard(ctx, board, card);
+    expect(binned.binned).toBe(true);
+    expect(binned.authorPubkey).toBe(getPublicKey(otherSecret));
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.binned)).toEqual([true]);
+
+    const restored = await binCard(ctx, board, binned, false);
+    expect(restored.binned).toBe(false);
+    expect((await fetchPrivateCards(ctx, board)).map((c) => c.binned)).toEqual([false]);
+  });
+
+  it("keeps a card binned across a later edit", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, { title: "Noise", status: "col-1" });
+    const binned = await binCard(ctx, board, card);
+
+    const edited = await updatePrivateCard(ctx, board, binned, { title: "Still noise" });
+    expect(edited.binned).toBe(true);
+  });
+
+  it("keeps a public card binned across a later edit", async () => {
+    const ctx = makeCtx();
+    const board = await createBoard(ctx, { title: "B", columns: [] });
+    const card = await createCard(ctx, board, { title: "Noise", status: "To Do" });
+
+    const binned = await binCard(ctx, board, card);
+    expect(binned.binned).toBe(true);
+    expect((await updateCard(ctx, board, binned, { title: "Still noise" })).binned).toBe(true);
+  });
+
+  it("refuses a writer who is not a maintainer", async () => {
+    const { ctx, board } = await privateBoardFixture();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const strangerCtx = makeCtx({ signer: fakeSigner(), runtime: ctx.runtime });
+    await expect(binCard(strangerCtx, board, card)).rejects.toThrow(/not a maintainer/i);
+  });
+});
+
+describe("authorship across a cross-author edit", () => {
+  async function twoMaintainers() {
+    const ownerSecret = generateSecretKey();
+    const otherSecret = generateSecretKey();
+    const ctx = makeCtx({ signer: fakeSigner(ownerSecret) });
+    const { board } = await createPrivateBoard(ctx, {
+      title: "Q3",
+      columns: [{ id: "col-1", name: "To Do", order: 0 }],
+      maintainers: [getPublicKey(otherSecret)],
+      private: true,
+    });
+    const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
+    return { ctx, otherCtx, board, owner: board.pubkey, other: getPublicKey(otherSecret) };
+  }
+
+  it("keeps the first writer as the author when a second maintainer edits", async () => {
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const edited = await updatePrivateCard(otherCtx, board, card, { title: "Touched" });
+    expect(edited.authorPubkey).toBe(owner);
+
+    const fetched = await fetchPrivateCards(ctx, board);
+    expect(fetched).toHaveLength(1);
+    // The edit still wins: authorship is recorded, not enforced by resolution.
+    expect(fetched[0].title).toBe("Touched");
+    expect(fetched[0].authorPubkey).toBe(owner);
+  });
+
+  it("does not let the second editor claim the card by editing again", async () => {
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const once = await updatePrivateCard(otherCtx, board, card, { title: "One" });
+    const twice = await updatePrivateCard(otherCtx, board, once, { title: "Two" });
+    expect(twice.authorPubkey).toBe(owner);
+    expect(twice.rawTags.filter((t) => t[0] === "original-author")).toHaveLength(1);
+  });
+
+  it("leaves the author alone when its own writer edits", async () => {
+    const { ctx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+
+    const edited = await updatePrivateCard(ctx, board, card, { title: "Still mine" });
+    expect(edited.authorPubkey).toBe(owner);
+    expect(edited.rawTags.some((t) => t[0] === "original-author")).toBe(false);
+  });
+
+  it("lets an editor retract only their own edit, leaving the original standing", async () => {
+    // Their tombstone names 32302:<editor>:<d>, which is the only coordinate they
+    // signed. The author's own version is a different coordinate and survives, so
+    // the card falls back to it rather than disappearing.
+    const { ctx, otherCtx, board, owner } = await twoMaintainers();
+    const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
+    const edited = await updatePrivateCard(otherCtx, board, card, { title: "Touched" });
+
+    await deleteCard(otherCtx, edited);
+
+    const fetched = await fetchPrivateCards(ctx, board);
+    expect(fetched.map((c) => c.title)).toEqual(["Mine"]);
+    expect(fetched[0].authorPubkey).toBe(owner);
+  });
+
+  it("records the author on a public card too", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const other = fakeSigner();
+    const otherCtx = makeCtx({ signer: other, runtime });
+
+    const board = await createBoard(ownerCtx, {
+      title: "B",
+      columns: [],
+      maintainers: [await other.getPublicKey()],
+    });
+    const card = await createCard(ownerCtx, board, { title: "Mine", status: "To Do" });
+    const edited = await updateCard(otherCtx, board, card, { title: "Touched" });
+
+    expect(edited.authorPubkey).toBe(board.pubkey);
+    expect((await fetchCards(ownerCtx, board)).map((c) => c.title)).toEqual(["Touched"]);
   });
 });
 

@@ -50,6 +50,12 @@ describe("buildPublicBoardTags", () => {
     expect(tags).toContainEqual(["p", "b".repeat(64)]);
   });
 
+  it("emits one p tag per maintainer, however often they were added", () => {
+    const bob = "b".repeat(64);
+    const tags = buildPublicBoardTags({ title: "X", columns: [], maintainers: [bob, bob] }, "d1");
+    expect(tags.filter((t) => t[0] === "p")).toEqual([["p", bob]]);
+  });
+
   it("emits nozap only when requested", () => {
     const without = buildPublicBoardTags({ title: "X", columns: [] }, "d1");
     expect(without.some((t) => t[0] === "nozap")).toBe(false);
@@ -203,6 +209,21 @@ describe("buildPrivateBoardTags", () => {
       ["member", "b".repeat(64)],
       ["nozap"],
     ]);
+  });
+
+  it("emits one row per pubkey, and never two conflicting roles for one", () => {
+    const alice = "a".repeat(64);
+    const bob = "b".repeat(64);
+    const tags = buildPrivateBoardTags(
+      { title: "X", columns: [], maintainers: [alice, alice, bob], members: [bob, bob] },
+      "d1",
+    );
+
+    expect(tags.filter((t) => t[0] === "maintainer")).toEqual([
+      ["maintainer", alice],
+      ["maintainer", bob],
+    ]);
+    expect(tags.filter((t) => t[0] === "member")).toEqual([]);
   });
 
   it("never emits an alt tag — NIP-31 would restate the title in plaintext", () => {

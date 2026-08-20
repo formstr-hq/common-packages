@@ -6,6 +6,7 @@ export {
   NotAMaintainerError,
   InvitationVerificationError,
   NotBoardOwnerError,
+  NotEventAuthorError,
   SignerRequiredError,
   ViewKeyRequiredError,
   type KanbanCtx,

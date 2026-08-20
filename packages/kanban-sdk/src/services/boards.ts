@@ -66,6 +66,13 @@ export async function updateBoard(
   board: KanbanBoard,
   changes: Partial<BoardDraft>,
 ): Promise<KanbanBoard> {
+  const signer = await ctx.getSigner();
+  const author = await signer.getPublicKey();
+  // Same rule the private path enforces: a board is addressable and single-owner,
+  // so a maintainer's "edit" would publish 30301:<their-pubkey>:<d> — a fork at a
+  // new coordinate that no reader of the original ever sees.
+  if (author !== board.pubkey) throw new NotBoardOwnerError(author, boardCoordinate(board));
+
   const draft: BoardDraft = {
     title: changes.title ?? board.title,
     description: changes.description ?? board.description,
@@ -298,10 +305,21 @@ export async function fetchPrivateBoards(ctx: KanbanCtx): Promise<KanbanBoard[]>
   return boards;
 }
 
+/**
+ * Delete a board and unlink it from every list it appears in.
+ *
+ * Author-only. A non-owner's tombstone is inert — no reader honours it — but the
+ * unlink is not, so calling it would have destroyed the caller's own copy of the
+ * view key while leaving the board standing. `leaveBoard` is the operation a
+ * member actually wants.
+ */
 export async function deleteBoard(ctx: KanbanCtx, board: KanbanBoard): Promise<void> {
   const signer = await ctx.getSigner();
   const coordinate = boardCoordinate(board);
   const kind = board.isPrivate ? KANBAN_KINDS.privateBoard : KANBAN_KINDS.publicBoard;
+
+  const author = await signer.getPublicKey();
+  if (author !== board.pubkey) throw new NotBoardOwnerError(author, coordinate);
 
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.deletion,
@@ -321,6 +339,23 @@ export async function deleteBoard(ctx: KanbanCtx, board: KanbanBoard): Promise<v
 
   // Doc 05 §9: a deleted board must leave its lists too, or every later fetch
   // retries a coordinate that will never resolve.
+  for (const list of await fetchBoardLists(ctx)) {
+    if (list.boards.some((ref) => ref.coordinate === coordinate)) {
+      await removeBoardFromList(ctx, list, coordinate);
+    }
+  }
+}
+
+/**
+ * Drop a board from our own lists without touching the board itself.
+ *
+ * What a member means by "remove this board": deleting it is the owner's alone,
+ * and unlinking is the only part of it that was ever ours to do. It also discards
+ * our copy of the view key, so leaving a private board is one-way — rejoining
+ * needs a fresh invitation.
+ */
+export async function leaveBoard(ctx: KanbanCtx, board: KanbanBoard): Promise<void> {
+  const coordinate = boardCoordinate(board);
   for (const list of await fetchBoardLists(ctx)) {
     if (list.boards.some((ref) => ref.coordinate === coordinate)) {
       await removeBoardFromList(ctx, list, coordinate);

@@ -1,6 +1,6 @@
 {
   "name": "@formstr/kanban-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless TypeScript SDK for Nostr Kanban boards (NIP-100) — interoperable with kanbanstr.com",
   "license": "MIT",
   "type": "module",

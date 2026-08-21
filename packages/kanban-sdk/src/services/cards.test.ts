@@ -10,6 +10,7 @@ import { createBoard, createPrivateBoard } from "./boards";
 import {
   binCard,
   boardPointer,
+  canAdminister,
   canEditCards,
   createCard,
   createPrivateCard,
@@ -21,21 +22,48 @@ import {
   updatePrivateCard,
 } from "./cards";
 
-function boardStub(pubkey: string, maintainers: string[]): KanbanBoard {
-  return { pubkey, maintainers } as KanbanBoard;
+function boardStub(pubkey: string, participants: string[], admins: string[] = []): KanbanBoard {
+  return { pubkey, participants, admins } as KanbanBoard;
 }
 
+const CREATOR = "a".repeat(64);
+const WORKER = "b".repeat(64);
+const STRANGER = "c".repeat(64);
+const BOSS = "d".repeat(64);
+
 describe("canEditCards", () => {
-  it("allows the board owner", () => {
-    expect(canEditCards(boardStub("a".repeat(64), []), "a".repeat(64))).toBe(true);
+  it("allows the board creator", () => {
+    expect(canEditCards(boardStub(CREATOR, []), CREATOR)).toBe(true);
   });
 
-  it("allows a listed maintainer", () => {
-    expect(canEditCards(boardStub("a".repeat(64), ["b".repeat(64)]), "b".repeat(64))).toBe(true);
+  it("allows a participant", () => {
+    expect(canEditCards(boardStub(CREATOR, [WORKER]), WORKER)).toBe(true);
+  });
+
+  it("allows an admin, who outranks a participant", () => {
+    expect(canEditCards(boardStub(CREATOR, [], [BOSS]), BOSS)).toBe(true);
   });
 
   it("rejects a stranger", () => {
-    expect(canEditCards(boardStub("a".repeat(64), []), "c".repeat(64))).toBe(false);
+    expect(canEditCards(boardStub(CREATOR, []), STRANGER)).toBe(false);
+  });
+});
+
+describe("canAdminister", () => {
+  it("allows the board creator", () => {
+    expect(canAdminister(boardStub(CREATOR, []), CREATOR)).toBe(true);
+  });
+
+  it("allows a promoted admin", () => {
+    expect(canAdminister(boardStub(CREATOR, [], [BOSS]), BOSS)).toBe(true);
+  });
+
+  it("refuses a participant, who may write cards but not re-column the board", () => {
+    expect(canAdminister(boardStub(CREATOR, [WORKER]), WORKER)).toBe(false);
+  });
+
+  it("refuses a stranger", () => {
+    expect(canAdminister(boardStub(CREATOR, []), STRANGER)).toBe(false);
   });
 });
 
@@ -329,7 +357,7 @@ describe("fetchPrivateCards", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(otherSecret)],
+      participants: [getPublicKey(otherSecret)],
       private: true,
     });
 
@@ -435,7 +463,7 @@ describe("deleteCard", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(otherSecret)],
+      participants: [getPublicKey(otherSecret)],
       private: true,
     });
     const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
@@ -454,7 +482,7 @@ describe("deleteCard", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(otherSecret)],
+      participants: [getPublicKey(otherSecret)],
       private: true,
     });
     const card = await createPrivateCard(ctx, board, { title: "Mine", status: "col-1" });
@@ -487,7 +515,7 @@ describe("binCard", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(otherSecret)],
+      participants: [getPublicKey(otherSecret)],
       private: true,
     });
     const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
@@ -539,7 +567,7 @@ describe("authorship across a cross-author edit", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(otherSecret)],
+      participants: [getPublicKey(otherSecret)],
       private: true,
     });
     const otherCtx = makeCtx({ signer: fakeSigner(otherSecret), runtime: ctx.runtime });
@@ -603,7 +631,7 @@ describe("authorship across a cross-author edit", () => {
     const board = await createBoard(ownerCtx, {
       title: "B",
       columns: [],
-      maintainers: [await other.getPublicKey()],
+      participants: [await other.getPublicKey()],
     });
     const card = await createCard(ownerCtx, board, { title: "Mine", status: "To Do" });
     const edited = await updateCard(otherCtx, board, card, { title: "Touched" });
@@ -648,7 +676,7 @@ describe("rotation resolution (doc 05 §7 step 4 exception)", () => {
     const { board } = await createPrivateBoard(ctx, {
       title: "Q3",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: [getPublicKey(bobSecret)],
+      participants: [getPublicKey(bobSecret)],
       private: true,
     });
 

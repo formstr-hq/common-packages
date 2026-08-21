@@ -4,6 +4,7 @@ export * from "./types";
 export {
   BoardNotFoundError,
   NotAMaintainerError,
+  NotAnAdminError,
   InvitationVerificationError,
   NotBoardOwnerError,
   NotEventAuthorError,
@@ -19,12 +20,14 @@ export { SimplePoolRuntime } from "./runtime/pool";
 // Pure building blocks, for hosts and tests working below the facade.
 export {
   BOARD_MANAGED_TAGS,
+  baseState,
   boardCoordinate,
   buildPublicBoardTags,
   isLegacyBoard,
   mergeTags,
   parsePublicBoard,
 } from "./codec/board";
+export { normalizeBoardRole } from "./codec/role";
 export {
   CARD_MANAGED_TAGS,
   buildCardLinkTag,
@@ -36,7 +39,27 @@ export { RANK_STEP, computeRank, needsRebalance, rebalance } from "./codec/rank"
 export { newestByDTag, nextCreatedAt, supersedes } from "./discovery/dedupe";
 export { collectDeleted, isDeleted, type DeletedSet } from "./discovery/deletions";
 export { normalizeRelayList, normalizeRelayUrl, parseRelayList } from "./discovery/relays";
-export { canEditCards } from "./services/cards";
+export { canAdminister, canEditCards } from "./services/cards";
+
+// Multi-admin: an admin's delta against a board they do not own, and the fold
+// that turns base + patches into the board everyone sees.
+export {
+  PATCH_MANAGED_TAGS,
+  buildPatchTags,
+  parsePatch,
+  type BoardPatch,
+  type BoardPatchDraft,
+} from "./codec/boardPatch";
+export {
+  fetchPatches,
+  foldPatches,
+  mergePatch,
+  privateBoardRef,
+  publicBoardRef,
+  publishPatch,
+  type PatchTarget,
+} from "./services/boardPatches";
+export { saveBoard } from "./services/boards";
 
 // Private-path building blocks (Plan 2).
 export { LocalSigner } from "./crypto/localSigner";
@@ -83,4 +106,4 @@ export { COMMENT_MANAGED_TAGS, buildCommentTags, parseComment } from "./codec/co
 export { canComment } from "./services/comments";
 export { resolveWithRotation } from "./services/cards";
 export { fetchRemovalNotices } from "./services/members";
-export type { BoardMember, RemovalNotice, RotationResult } from "./services/members";
+export type { BoardMember, RemovalNotice, RemovalResult, RotationResult } from "./services/members";

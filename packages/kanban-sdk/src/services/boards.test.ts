@@ -72,19 +72,19 @@ describe("updateBoard", () => {
     expect(updated.createdAt).toBeGreaterThan(created.createdAt);
   });
 
-  it("refuses a maintainer, whose edit would fork the board to their own coordinate", async () => {
+  it("refuses a participant, who has card access but not board access", async () => {
     const runtime = new FakeRuntime();
     const ownerCtx = makeCtx({ runtime });
-    const maintainer = fakeSigner();
+    const participant = fakeSigner();
     const board = await createBoard(ownerCtx, {
       title: "Roadmap",
       columns: [],
-      maintainers: [await maintainer.getPublicKey()],
+      participants: [await participant.getPublicKey()],
     });
 
-    const maintainerCtx = makeCtx({ signer: maintainer, runtime });
-    await expect(updateBoard(maintainerCtx, board, { title: "Hijacked" })).rejects.toThrow(
-      /not the author/i,
+    const participantCtx = makeCtx({ signer: participant, runtime });
+    await expect(updateBoard(participantCtx, board, { title: "Hijacked" })).rejects.toThrow(
+      /not an admin/i,
     );
     expect(runtime.published.some((e) => e.pubkey !== board.pubkey)).toBe(false);
   });
@@ -109,7 +109,7 @@ describe("fetchBoards", () => {
     const ctx = makeCtx({ runtime });
     const maintainer = "c".repeat(64);
 
-    await createBoard(ctx, { title: "Shared", columns: [], maintainers: [maintainer] });
+    await createBoard(ctx, { title: "Shared", columns: [], participants: [maintainer] });
     await createBoard(ctx, { title: "Solo", columns: [] });
 
     const boards = await fetchBoards(ctx, { maintainedBy: maintainer });
@@ -138,12 +138,12 @@ describe("fetchBoards", () => {
     const alice = await createBoard(aliceCtx, {
       title: "Alice board",
       columns: [],
-      maintainers: [maintainer],
+      participants: [maintainer],
     });
     await createBoard(malloryCtx, {
       title: "Mallory board",
       columns: [],
-      maintainers: [maintainer],
+      participants: [maintainer],
     });
 
     runtime.seed(
@@ -250,7 +250,7 @@ describe("fetchPrivateBoards", () => {
       title: "Q3 Roadmap",
       description: "desc",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: ["a".repeat(64)],
+      participants: ["a".repeat(64)],
       private: true,
     });
 
@@ -258,7 +258,7 @@ describe("fetchPrivateBoards", () => {
     expect(boards).toHaveLength(1);
     expect(boards[0].title).toBe("Q3 Roadmap");
     expect(boards[0].columns.map((c) => c.name)).toEqual(["To Do"]);
-    expect(boards[0].maintainers).toEqual(["a".repeat(64)]);
+    expect(boards[0].participants).toEqual(["a".repeat(64)]);
     expect(boards[0].viewKey).toBeDefined();
   });
 
@@ -323,13 +323,13 @@ describe("updatePrivateBoard", () => {
     expect(updated.rawTags).toContainEqual(["future-tag", "keep me"]);
   });
 
-  it("refuses an editor who is not the board author", async () => {
+  it("refuses somebody the board does not list as an admin", async () => {
     const ctx = makeCtx();
     const { board } = await createPrivateBoard(ctx, { title: "Q3", columns: [], private: true });
 
     const intruder = makeCtx({ runtime: ctx.runtime });
     await expect(updatePrivateBoard(intruder, board, { title: "Hijacked" })).rejects.toThrow(
-      /is not the author/,
+      /is not an admin/,
     );
   });
 

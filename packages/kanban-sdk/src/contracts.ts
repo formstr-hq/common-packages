@@ -92,6 +92,16 @@ export class NotBoardOwnerError extends Error {
   }
 }
 
+export class NotAnAdminError extends Error {
+  constructor(pubkey: string, boardRef: string) {
+    super(
+      `${pubkey} is not an admin of ${boardRef}. Only the board's creator and the keys they have ` +
+        `promoted may change its columns, its title, or its roster.`,
+    );
+    this.name = "NotAnAdminError";
+  }
+}
+
 export class NotEventAuthorError extends Error {
   constructor(pubkey: string, coordinate: string) {
     super(

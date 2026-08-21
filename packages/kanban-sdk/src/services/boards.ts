@@ -3,6 +3,7 @@ import type { Event, Filter } from "nostr-tools";
 import {
   BOARD_MANAGED_TAGS,
   PRIVATE_BOARD_MANAGED_TAGS,
+  baseState,
   boardCoordinate,
   buildPrivateBoardTags,
   buildPublicBoardTags,
@@ -12,6 +13,7 @@ import {
 } from "../codec/board";
 import {
   BoardNotFoundError,
+  NotAnAdminError,
   NotBoardOwnerError,
   ViewKeyRequiredError,
   type KanbanCtx,
@@ -26,6 +28,7 @@ import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardDraft, KanbanBoard, KanbanBoardList } from "../types";
+import { canAdminister } from "./access";
 import {
   addBoardToList,
   ensureBoardList,
@@ -33,6 +36,14 @@ import {
   lookupBoardViewKey,
   removeBoardFromList,
 } from "./boardLists";
+import {
+  fetchPatches,
+  foldPatches,
+  privateBoardRef,
+  publicBoardRef,
+  publishPatch,
+  type PatchTarget,
+} from "./boardPatches";
 
 const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
@@ -68,22 +79,95 @@ export async function updateBoard(
 ): Promise<KanbanBoard> {
   const signer = await ctx.getSigner();
   const author = await signer.getPublicKey();
-  // Same rule the private path enforces: a board is addressable and single-owner,
-  // so a maintainer's "edit" would publish 30301:<their-pubkey>:<d> — a fork at a
-  // new coordinate that no reader of the original ever sees.
-  if (author !== board.pubkey) throw new NotBoardOwnerError(author, boardCoordinate(board));
+  const ref = publicBoardRef(board);
+
+  // A board is addressable and single-owner: anyone else re-signing it would
+  // publish 30301:<their-pubkey>:<d>, a fork at a new coordinate that no reader
+  // of the original ever sees. An admin writes a patch instead.
+  if (author !== board.pubkey) {
+    if (!canAdminister(board, author)) throw new NotAnAdminError(author, ref);
+    await publishPatch(ctx, board, ref, patchFrom(board, changes));
+    return applyPatches(ctx, board);
+  }
+
+  // The creator's save also bakes: whatever the admins have changed becomes part
+  // of the board event, and the watermark retires their patches in one tag.
+  //
+  // Folded against the roster this save is establishing, not the one it replaces.
+  // Demoting somebody in the same breath as baking would otherwise commit the
+  // pending changes of the person being removed, which is usually the reason
+  // they are being removed.
+  const base = { ...board, ...baseState(board.rawTags, false) };
+  const nextAdmins = changes.admins ?? base.admins;
+  const patches = (await fetchPatches(ctx, [targetFor(board)])).get(ref) ?? [];
+  const live = foldPatches({ ...base, admins: nextAdmins }, patches, ref);
+  const createdAt = nextCreatedAt(board.createdAt);
 
   const draft: BoardDraft = {
-    title: changes.title ?? board.title,
-    description: changes.description ?? board.description,
-    columns: changes.columns ?? board.columns,
-    maintainers: changes.maintainers ?? board.maintainers,
-    noZap: changes.noZap ?? board.noZap,
+    title: changes.title ?? live.title,
+    description: changes.description ?? live.description,
+    columns: changes.columns ?? live.columns,
+    admins: nextAdmins,
+    participants: changes.participants ?? live.participants,
+    noZap: changes.noZap ?? live.noZap,
+    baked: createdAt,
   };
 
   // Merge, never rebuild: unknown tags written by other clients must survive.
   const tags = mergeTags(board.rawTags, buildPublicBoardTags(draft, board.id), BOARD_MANAGED_TAGS);
-  return publishBoard(ctx, tags, nextCreatedAt(board.createdAt));
+  return publishBoard(ctx, tags, createdAt);
+}
+
+/** What an admin's patch has to say to express `changes` against `board`. */
+function patchFrom(board: KanbanBoard, changes: Partial<BoardDraft>) {
+  const columns = changes.columns;
+  const participants = changes.participants;
+  return {
+    title: changes.title,
+    description: changes.description,
+    columns,
+    columnsRemoved: columns
+      ? board.columns.filter((c) => !columns.some((n) => n.id === c.id)).map((c) => c.id)
+      : undefined,
+    participantsAdded: participants?.filter((p) => !board.participants.includes(p)),
+    participantsRemoved: participants
+      ? board.participants.filter((p) => !participants.includes(p))
+      : undefined,
+  };
+}
+
+function targetFor(board: KanbanBoard, viewKey = board.viewKey): PatchTarget {
+  // A private board loaded without its key cannot address its own patches. Empty
+  // admins makes `fetchPatches` skip it rather than issue a guaranteed miss.
+  const ref = board.isPrivate
+    ? viewKey
+      ? privateBoardRef(board, viewKey)
+      : ""
+    : publicBoardRef(board);
+  return { ref, admins: ref ? board.admins : [], isPrivate: board.isPrivate, viewKey };
+}
+
+/** One board, with its admins' patches folded in. */
+async function applyPatches(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  viewKey = board.viewKey,
+): Promise<KanbanBoard> {
+  const target = targetFor(board, viewKey);
+  if (!target.ref || target.admins.length === 0) return board;
+  const patches = await fetchPatches(ctx, [target]);
+  return foldPatches(board, patches.get(target.ref) ?? [], target.ref);
+}
+
+/** Several boards at once, so a board list costs one patch query rather than N. */
+async function applyPatchesToAll(ctx: KanbanCtx, boards: KanbanBoard[]): Promise<KanbanBoard[]> {
+  const targets = boards.map((board) => targetFor(board));
+  const patches = await fetchPatches(ctx, targets);
+  if (patches.size === 0) return boards;
+  return boards.map((board, i) => {
+    const { ref } = targets[i];
+    return ref ? foldPatches(board, patches.get(ref) ?? [], ref) : board;
+  });
 }
 
 async function resolveBoards(ctx: KanbanCtx, filter: Filter): Promise<KanbanBoard[]> {
@@ -112,7 +196,9 @@ async function resolveBoards(ctx: KanbanCtx, filter: Filter): Promise<KanbanBoar
       if (board) boards.push(board);
     }
   }
-  return boards;
+  // The creator's event is only half the board: whatever its admins have changed
+  // lives in their patches, and every reader folds them in the same way.
+  return applyPatchesToAll(ctx, boards);
 }
 
 export async function fetchBoards(
@@ -215,19 +301,36 @@ export async function updatePrivateBoard(
 ): Promise<KanbanBoard> {
   const signer = await ctx.getSigner();
   const author = await signer.getPublicKey();
-  // A board is an addressable event owned by one pubkey: a maintainer's "edit"
-  // would publish a second coordinate, not a new version (doc 05 §7).
-  if (author !== board.pubkey) throw new NotBoardOwnerError(author, boardCoordinate(board));
-
   const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+  const ref = privateBoardRef(board, viewKeyNsec);
+
+  // A board is an addressable event owned by one pubkey: anyone else's "edit"
+  // would publish a second coordinate, not a new version (doc 05 §7). An admin
+  // writes a patch instead.
+  if (author !== board.pubkey) {
+    if (!canAdminister(board, author)) throw new NotAnAdminError(author, ref);
+    await publishPatch(ctx, board, ref, patchFrom(board, changes), viewKeyNsec);
+    const patched = await applyPatches(ctx, board, viewKeyNsec);
+    patched.relayHint = board.relayHint;
+    return patched;
+  }
+
+  // Same rule as the public path: fold against the roster this save establishes.
+  const base = { ...board, ...baseState(board.rawTags, true) };
+  const nextAdmins = changes.admins ?? base.admins;
+  const patches = (await fetchPatches(ctx, [targetFor(board, viewKeyNsec)])).get(ref) ?? [];
+  const live = foldPatches({ ...base, admins: nextAdmins }, patches, ref);
+  const createdAt = nextCreatedAt(board.createdAt);
 
   const draft: BoardDraft = {
-    title: changes.title ?? board.title,
-    description: changes.description ?? board.description,
-    columns: changes.columns ?? board.columns,
-    maintainers: changes.maintainers ?? board.maintainers,
-    members: changes.members ?? board.members,
-    noZap: changes.noZap ?? board.noZap,
+    title: changes.title ?? live.title,
+    description: changes.description ?? live.description,
+    columns: changes.columns ?? live.columns,
+    admins: nextAdmins,
+    participants: changes.participants ?? live.participants,
+    legacyViewers: changes.legacyViewers ?? live.legacyViewers,
+    noZap: changes.noZap ?? live.noZap,
+    baked: createdAt,
   };
 
   // Merge into the DECRYPTED tags of the fetched event, never rebuild.
@@ -237,13 +340,7 @@ export async function updatePrivateBoard(
     PRIVATE_BOARD_MANAGED_TAGS,
   );
 
-  const updated = await publishPrivateBoard(
-    ctx,
-    inner,
-    board.id,
-    viewKeyNsec,
-    nextCreatedAt(board.createdAt),
-  );
+  const updated = await publishPrivateBoard(ctx, inner, board.id, viewKeyNsec, createdAt);
   updated.relayHint = board.relayHint;
   return updated;
 }
@@ -278,7 +375,9 @@ export async function fetchPrivateBoardByCoordinate(
     const board = parsePrivateBoard(current, payload as string[][]);
     if (!board) return null;
     board.viewKey = viewKeyNsec;
-    return board;
+    const folded = await applyPatches(ctx, board, viewKeyNsec);
+    folded.viewKey = viewKeyNsec;
+    return folded;
   } catch {
     // Wrong key, or not a board payload at all. A caller holding the wrong key is
     // an ordinary state, not an exception.
@@ -361,6 +460,24 @@ export async function leaveBoard(ctx: KanbanCtx, board: KanbanBoard): Promise<vo
       await removeBoardFromList(ctx, list, coordinate);
     }
   }
+}
+
+/**
+ * `updateBoard` or `updatePrivateBoard`, chosen by the board itself.
+ *
+ * The two paths differ in kind and encryption, never in permission, so anything
+ * that just wants to save a board should not be branching on `isPrivate` at
+ * every call site — one of them will eventually get it wrong and publish a
+ * public 30301 for a private board.
+ */
+export function saveBoard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  changes: Partial<BoardDraft>,
+): Promise<KanbanBoard> {
+  return board.isPrivate
+    ? updatePrivateBoard(ctx, board, changes)
+    : updateBoard(ctx, board, changes);
 }
 
 export { boardCoordinate };

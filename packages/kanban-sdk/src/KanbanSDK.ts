@@ -85,10 +85,12 @@ export class KanbanSDK {
     return boards.createPrivateBoard(this.ctx, { ...draft, private: true });
   }
 
+  /**
+   * The creator writes the board event and bakes any admin patches into it. An
+   * admin writes a patch of their own. Anybody else gets `NotAnAdminError`.
+   */
   updateBoard(board: KanbanBoard, changes: Partial<BoardDraft>): Promise<KanbanBoard> {
-    return board.isPrivate
-      ? boards.updatePrivateBoard(this.ctx, board, changes)
-      : boards.updateBoard(this.ctx, board, changes);
+    return boards.saveBoard(this.ctx, board, changes);
   }
 
   fetchBoards(params: { authors?: string[]; maintainedBy?: string } = {}): Promise<KanbanBoard[]> {
@@ -188,24 +190,39 @@ export class KanbanSDK {
 
   // ── Sharing (Plan 3) ──────────────────────────────────
 
+  /** Only the creator may invite somebody as an admin. */
   invite(
     board: KanbanBoard,
-    invitees: { pubkey: string; role: "maintainer" | "member" }[],
+    invitees: { pubkey: string; role: "admin" | "participant" }[],
     message?: string,
   ): Promise<KanbanBoard> {
     return members.inviteMembers(this.ctx, board, invitees, message);
+  }
+
+  /** Creator-only. Lets `pubkey` re-column the board and manage its roster. */
+  promoteToAdmin(board: KanbanBoard, pubkey: string): Promise<KanbanBoard> {
+    return members.promoteToAdmin(this.ctx, board, pubkey);
+  }
+
+  /** Creator-only. Retires every patch they wrote and leaves them a participant. */
+  demoteAdmin(board: KanbanBoard, pubkey: string): Promise<KanbanBoard> {
+    return members.demoteAdmin(this.ctx, board, pubkey);
   }
 
   fetchMembers(board: KanbanBoard): Promise<members.BoardMember[]> {
     return members.fetchMembers(this.ctx, board);
   }
 
-  /** Rotates the board key by default, because an un-rotated removal revokes nothing. */
+  /**
+   * Rotates the board key by default, because an un-rotated removal revokes
+   * nothing. Check `rotated` on the result: an admin cannot rotate, so their
+   * removal takes the person off the roster and leaves their key working.
+   */
   removeMember(
     board: KanbanBoard,
     pubkey: string,
     opts: { rotate?: boolean } = {},
-  ): Promise<KanbanBoard> {
+  ): Promise<members.RemovalResult> {
     return members.removeMember(this.ctx, board, pubkey, opts);
   }
 

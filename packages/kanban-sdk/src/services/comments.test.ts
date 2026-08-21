@@ -15,7 +15,7 @@ async function fixture() {
   const { board } = await createPrivateBoard(alice, {
     title: "Q3",
     columns: [{ id: "col-1", name: "To Do", order: 0 }],
-    members: [getPublicKey(memberSecret)],
+    legacyViewers: [getPublicKey(memberSecret)],
     private: true,
   });
   const card = await createPrivateCard(alice, board, { title: "Ship it", status: "col-1" });
@@ -24,7 +24,7 @@ async function fixture() {
 }
 
 describe("canComment", () => {
-  it("admits the owner, maintainers, and members", async () => {
+  it("admits the creator, its writers, and viewers carried over from 0.1.x", async () => {
     const { board, memberSecret } = await fixture();
     expect(canComment(board, board.pubkey)).toBe(true);
     expect(canComment(board, getPublicKey(memberSecret))).toBe(true);

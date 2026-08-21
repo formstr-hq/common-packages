@@ -1,7 +1,9 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 
-import type { BoardListRef, BoardRole, KanbanBoardList } from "../types";
+import type { BoardListRef, KanbanBoardList } from "../types";
+
+import { normalizeBoardRole } from "./role";
 
 /**
  * Board-list (kind 32303) content codec — doc 05 §5.
@@ -18,8 +20,6 @@ import type { BoardListRef, BoardRole, KanbanBoardList } from "../types";
 
 export const DEFAULT_BOARD_LIST_TITLE = "My Boards";
 
-const ROLES: readonly BoardRole[] = ["owner", "maintainer", "member"];
-
 /**
  * `d` derivation, kept identical to NIP-52E for cross-app familiarity. It is
  * deterministic and therefore guessable, which is fine ONLY because a list title
@@ -35,14 +35,14 @@ export function buildBoardRef(ref: BoardListRef): string[] {
 
 export function parseBoardRef(tag: string[]): BoardListRef | null {
   if (tag[0] !== "a" || !tag[1]) return null;
-  const role = tag[4] as BoardRole | undefined;
+  const role = tag[4];
   return {
     coordinate: tag[1],
     relayHint: tag[2] ?? "",
     viewKey: tag[3] ?? "",
     // Least privilege on anything unrecognised: a forged "owner" must not become
-    // one just by claiming it. The board's own maintainer set decides.
-    role: role && ROLES.includes(role) ? role : "member",
+    // one just by claiming it. The board's own tags decide.
+    role: normalizeBoardRole(role),
   };
 }
 

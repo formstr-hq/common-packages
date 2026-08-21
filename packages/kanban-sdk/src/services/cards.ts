@@ -17,17 +17,13 @@ import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { KANBAN_KINDS } from "../kinds";
 import type { CardDraft, KanbanBoard, KanbanCard } from "../types";
+import { canEditCards } from "./access";
 import { resolveBoardViewKey } from "./boards";
 
 const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
 
-/** NIP-100: the board author plus every `p`-tagged maintainer may write cards. */
-export function canEditCards(board: KanbanBoard, pubkey: string): boolean {
-  if (!pubkey) return false;
-  if (board.pubkey === pubkey) return true;
-  return board.maintainers.includes(pubkey);
-}
+export { canAdminister, canEditCards } from "./access";
 
 async function assertMaintainer(ctx: KanbanCtx, board: KanbanBoard): Promise<string> {
   const signer = await ctx.getSigner();
@@ -138,7 +134,7 @@ export async function fetchCards(ctx: KanbanCtx, board: KanbanBoard): Promise<Ka
   });
   if (events.length === 0) return [];
 
-  const allowed = new Set([board.pubkey, ...board.maintainers]);
+  const allowed = new Set([board.pubkey, ...board.admins, ...board.participants]);
   const authored = events.filter((event) => allowed.has(event.pubkey));
 
   const deletions = await ctx.runtime.querySync(ctx.relays, {
@@ -314,7 +310,7 @@ export async function fetchPrivateCards(
   });
   if (events.length === 0) return [];
 
-  const allowed = new Set([board.pubkey, ...board.maintainers]);
+  const allowed = new Set([board.pubkey, ...board.admins, ...board.participants]);
   const authored = events.filter((event) => allowed.has(event.pubkey));
   if (authored.length === 0) return [];
 

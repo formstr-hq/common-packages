@@ -33,7 +33,7 @@ async function sharedFixture() {
 describe("sendInvitations", () => {
   it("publishes one wrap per recipient, p-tagged and opaque", async () => {
     const { runtime, alice, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const wraps = runtime.published.filter((e) => e.kind === KANBAN_KINDS.inviteGiftWrap);
     expect(wraps).toHaveLength(1);
@@ -71,7 +71,7 @@ describe("sendInvitations", () => {
     };
 
     await sendInvitations({ ...alice, runtime: spy }, board, [
-      { pubkey: getPublicKey(bobSecret), role: "member" },
+      { pubkey: getPublicKey(bobSecret), role: "participant" },
     ]);
 
     expect(targets[0]).toContain("wss://bob.example/");
@@ -81,18 +81,18 @@ describe("sendInvitations", () => {
 describe("fetchInvitations", () => {
   it("returns a verified invitation to its recipient", async () => {
     const { alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     expect(invitation.coordinate).toBe(`${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`);
     expect(invitation.viewKey).toBe(board.viewKey);
-    expect(invitation.role).toBe("maintainer");
+    expect(invitation.role).toBe("participant");
     expect(invitation.inviterPubkey).toBe(board.pubkey);
   });
 
   it("returns nothing to a third party", async () => {
     const { runtime, alice, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const carol = makeCtx({ signer: fakeSigner(), runtime });
     expect(await fetchInvitations(carol)).toEqual([]);
@@ -109,7 +109,7 @@ describe("fetchInvitations", () => {
       tags: [
         ["a", `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`, ""],
         ["viewKey", board.viewKey!],
-        ["role", "maintainer"],
+        ["role", "participant"],
       ],
       content: "",
       pubkey: board.pubkey,
@@ -157,8 +157,8 @@ describe("fetchInvitations", () => {
 
   it("collapses repeat invitations to the same board into one pending entry", async () => {
     const { alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     // Both wraps were written in the same second, so they are the same age and
     // either may win — what must hold is that the user sees one item, not two.
@@ -188,16 +188,16 @@ describe("fetchInvitations", () => {
         { tags: [["k", String(KANBAN_KINDS.inviteWrapType)]] },
       ),
     );
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     expect(invitation.viewKey).toBe(board.viewKey);
-    expect(invitation.role).toBe("maintainer");
+    expect(invitation.role).toBe("participant");
   });
 
   it("hides an invitation the user already accepted", async () => {
     const { alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
@@ -207,7 +207,7 @@ describe("fetchInvitations", () => {
 
   it("hides an invitation the user dismissed", async () => {
     const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     await dismissInvitation(bob, invitation);
@@ -221,7 +221,7 @@ describe("fetchInvitations", () => {
 
   it("dismisses as the wrap's own author, naming neither the user nor the board", async () => {
     const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     await dismissInvitation(bob, invitation);
@@ -241,7 +241,7 @@ describe("fetchInvitations", () => {
 
   it("falls back to the kind-84 opt-out when the invitation carries no signing key", async () => {
     const { runtime, alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "member" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     // Invitations sent before `signing_nsec` existed look exactly like this.
@@ -259,7 +259,7 @@ describe("fetchInvitations", () => {
 describe("acceptInvitation", () => {
   it("stores the board ref, with its key and role, in the recipient's own list", async () => {
     const { alice, bob, bobSecret, board } = await sharedFixture();
-    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "maintainer" }]);
+    await sendInvitations(alice, board, [{ pubkey: getPublicKey(bobSecret), role: "participant" }]);
 
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
@@ -270,7 +270,7 @@ describe("acceptInvitation", () => {
         coordinate: invitation.coordinate,
         relayHint: invitation.relayHint,
         viewKey: board.viewKey,
-        role: "maintainer",
+        role: "participant",
       },
     ]);
   });

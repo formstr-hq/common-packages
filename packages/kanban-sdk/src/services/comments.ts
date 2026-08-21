@@ -15,13 +15,18 @@ const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
 
 /**
- * Doc 05 §5b: any board member may comment, not only maintainers. This is the one
- * place the read-only `member` role can write something honest clients display.
+ * Doc 05 §5b: anyone with the board's key may comment, not only its writers.
+ * That includes viewers carried over from the removed Viewer role — commenting
+ * was the one thing they could do, and this release does not take it away.
  */
 export function canComment(board: KanbanBoard, pubkey: string): boolean {
   if (!pubkey) return false;
   if (board.pubkey === pubkey) return true;
-  return board.maintainers.includes(pubkey) || board.members.includes(pubkey);
+  return (
+    board.admins.includes(pubkey) ||
+    board.participants.includes(pubkey) ||
+    board.legacyViewers.includes(pubkey)
+  );
 }
 
 async function assertCommenter(ctx: KanbanCtx, board: KanbanBoard): Promise<string> {
@@ -123,7 +128,12 @@ export async function fetchComments(
   });
   if (events.length === 0) return [];
 
-  const allowed = new Set([board.pubkey, ...board.maintainers, ...board.members]);
+  const allowed = new Set([
+    board.pubkey,
+    ...board.admins,
+    ...board.participants,
+    ...board.legacyViewers,
+  ]);
   const authored = events.filter((event) => allowed.has(event.pubkey));
   if (authored.length === 0) return [];
 

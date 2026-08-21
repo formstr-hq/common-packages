@@ -32,7 +32,7 @@ describe("sharing a private board end to end", () => {
     const aliceCard = await alice.createCard(board, { title: "Ship the SDK", status: "col-1" });
 
     // 1. Invite Bob as a maintainer.
-    const shared = await alice.invite(board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const shared = await alice.invite(board, [{ pubkey: bobPubkey, role: "participant" }]);
     expect(await alice.fetchMembers(shared)).toHaveLength(2);
 
     // 2. Bob sees exactly one pending invitation and accepts it.
@@ -83,7 +83,7 @@ describe("sharing a private board end to end", () => {
   it("a declined invitation stays declined", async () => {
     const { alice, bob, bobPubkey } = twoUsers();
     const board = await alice.createBoard({ title: "Q3", columns: [], private: true });
-    await alice.invite(board, [{ pubkey: bobPubkey, role: "member" }]);
+    await alice.invite(board, [{ pubkey: bobPubkey, role: "participant" }]);
 
     const [invitation] = await bob.fetchInvitations();
     await bob.dismissInvitation(invitation);
@@ -99,7 +99,7 @@ describe("sharing a private board end to end", () => {
       columns: [{ id: "col-1", name: "Legal", order: 0 }],
       private: true,
     });
-    const shared = await alice.invite(board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const shared = await alice.invite(board, [{ pubkey: bobPubkey, role: "participant" }]);
     const card = await alice.createCard(shared, { title: "Term sheet", status: "col-1" });
     await alice.createComment(shared, card.id, { content: "signed" });
 

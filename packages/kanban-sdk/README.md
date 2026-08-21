@@ -22,7 +22,7 @@ const board = await sdk.createBoard({
     { id: "doing", name: "In Progress", order: 1 },
     { id: "done", name: "Done", order: 2 },
   ],
-  maintainers: [colleagueHexPubkey],
+  participants: [colleagueHexPubkey],
 });
 
 await sdk.createCard(board, { title: "Ship the SDK", status: "To Do" });
@@ -44,13 +44,56 @@ Public NIP-100 boards only. Private encrypted boards (NIP-100E) land in a later 
 Nostr binds every event to the key that signed it, and the SDK enforces the same
 boundaries a relay would rather than pretending a write succeeded:
 
+There are three roles. The **creator** is the key that signed the board event.
+**Admins** are the keys the creator has promoted. **Participants** are everyone
+else with write access.
+
 | Operation | Allowed for |
 | --- | --- |
-| `updateBoard` / `updatePrivateBoard`, `deleteBoard`, membership, key rotation | the board's author only — it is an addressable single-owner event, so anyone else's write would fork it to a new coordinate |
+| `deleteBoard`, key rotation, `promoteToAdmin` / `demoteAdmin` | the creator only — the board is an addressable single-owner event, and the admin list it carries is the one thing every other guard rests on |
+| `updateBoard` — columns, title, description, roster | the creator and its admins. The creator writes the board event; an admin writes a patch, because re-signing the board would fork it to their own coordinate |
 | `leaveBoard` | anyone: it unlinks the board from your own lists and touches nothing else |
-| create / update / move / bin a card | the owner and the maintainers |
-| comment | the owner, maintainers, and members |
+| create / update / move / bin a card | the creator, admins and participants |
+| comment | all of those, plus viewers carried over from 0.1.x |
 | `deleteCard` / `deleteComment` | whoever **signed that version** — NIP-09 recognises no other deletion |
+
+### How an admin edits a board they do not own
+
+The board event is addressable at `kind:pubkey:d`, so only its creator can
+publish a new version. An admin publishes a **patch** instead — kind 30303
+public, 32305 private — at their own coordinate, carrying just their delta.
+Every reader folds base plus patches into the board it shows.
+
+Three rules make that safe, and all three are checked on read rather than
+trusted to the writer:
+
+- A patch's `admin` rows are ignored, so an admin cannot promote a peer or
+  escalate past the creator. The codec does not even parse one.
+- A patch cannot remove the creator or another admin.
+- The fold reads the base board's *current* admin list, so demoting somebody
+  retires every patch they ever wrote — no tombstone, no cooperation from them.
+
+When the creator saves the board, the SDK folds the live state into the board
+event and stamps `["baked", <unix>]` on it. That retires every existing patch in
+one tag (a patch applies only if `created_at > baked`) and leaves the board event
+a complete, ordinary NIP-100 board again — which is what keeps kanbanstr.com in
+sync. Until a creator saves, kanbanstr sees the creator's version alone.
+
+### What an admin's removal does not do
+
+`removeMember` returns `{ board, rotated }`. Rotation republishes the board
+event, so an admin cannot do it: their removal takes the person off the roster
+and leaves them holding a working view key. Check `rotated` before telling
+anyone access was revoked.
+
+### Upgrading from 0.1.x
+
+`KanbanBoard.maintainers` and `.members` are gone, replaced by `.admins`,
+`.participants` and `.legacyViewers`. The wire format is compatible in both
+directions: admins are `p`-tagged as well as `admin`-tagged, so older clients
+grant them card writes, and `["member", …]` tags written by 0.1.x are still read
+into `legacyViewers`. Nothing writes a `member` tag any more — the Viewer role
+was enforced by no code path, in this SDK or any other.
 
 Editing someone else's card is allowed and records `original-author` in the
 payload, so authorship does not transfer to whoever saved last. To take down a

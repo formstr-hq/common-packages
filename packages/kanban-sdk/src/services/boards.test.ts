@@ -12,6 +12,7 @@ import {
   fetchBoards,
   fetchPrivateBoardByCoordinate,
   fetchPrivateBoards,
+  leaveBoard,
   updateBoard,
   updatePrivateBoard,
 } from "./boards";
@@ -70,6 +71,23 @@ describe("updateBoard", () => {
     const updated = await updateBoard(ctx, created, { title: "Y" });
     expect(updated.createdAt).toBeGreaterThan(created.createdAt);
   });
+
+  it("refuses a participant, who has card access but not board access", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const participant = fakeSigner();
+    const board = await createBoard(ownerCtx, {
+      title: "Roadmap",
+      columns: [],
+      participants: [await participant.getPublicKey()],
+    });
+
+    const participantCtx = makeCtx({ signer: participant, runtime });
+    await expect(updateBoard(participantCtx, board, { title: "Hijacked" })).rejects.toThrow(
+      /not an admin/i,
+    );
+    expect(runtime.published.some((e) => e.pubkey !== board.pubkey)).toBe(false);
+  });
 });
 
 describe("fetchBoards", () => {
@@ -91,7 +109,7 @@ describe("fetchBoards", () => {
     const ctx = makeCtx({ runtime });
     const maintainer = "c".repeat(64);
 
-    await createBoard(ctx, { title: "Shared", columns: [], maintainers: [maintainer] });
+    await createBoard(ctx, { title: "Shared", columns: [], participants: [maintainer] });
     await createBoard(ctx, { title: "Solo", columns: [] });
 
     const boards = await fetchBoards(ctx, { maintainedBy: maintainer });
@@ -106,6 +124,43 @@ describe("fetchBoards", () => {
     const boards = await fetchBoards(ctx, { authors: [created.pubkey] });
     expect(boards).toHaveLength(1);
     expect(boards[0].title).toBe("V2");
+  });
+
+  it("ignores a tombstone one board author aimed at another's board", async () => {
+    // A query that spans several authors also collects their deletions, so an
+    // unbound deleted-set lets anyone sharing the result delete everyone's board.
+    const runtime = new FakeRuntime();
+    const aliceCtx = makeCtx({ runtime });
+    const mallory = fakeSigner();
+    const malloryCtx = makeCtx({ signer: mallory, runtime });
+    const maintainer = "c".repeat(64);
+
+    const alice = await createBoard(aliceCtx, {
+      title: "Alice board",
+      columns: [],
+      participants: [maintainer],
+    });
+    await createBoard(malloryCtx, {
+      title: "Mallory board",
+      columns: [],
+      participants: [maintainer],
+    });
+
+    runtime.seed(
+      await mallory.signEvent({
+        kind: KANBAN_KINDS.deletion,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ["e", alice.eventId],
+          ["a", `${KANBAN_KINDS.publicBoard}:${alice.pubkey}:${alice.id}`],
+          ["k", String(KANBAN_KINDS.publicBoard)],
+        ],
+        content: "",
+      }),
+    );
+
+    const boards = await fetchBoards(aliceCtx, { maintainedBy: maintainer });
+    expect(boards.map((b) => b.title).sort()).toEqual(["Alice board", "Mallory board"]);
   });
 });
 
@@ -195,7 +250,7 @@ describe("fetchPrivateBoards", () => {
       title: "Q3 Roadmap",
       description: "desc",
       columns: [{ id: "col-1", name: "To Do", order: 0 }],
-      maintainers: ["a".repeat(64)],
+      participants: ["a".repeat(64)],
       private: true,
     });
 
@@ -203,7 +258,7 @@ describe("fetchPrivateBoards", () => {
     expect(boards).toHaveLength(1);
     expect(boards[0].title).toBe("Q3 Roadmap");
     expect(boards[0].columns.map((c) => c.name)).toEqual(["To Do"]);
-    expect(boards[0].maintainers).toEqual(["a".repeat(64)]);
+    expect(boards[0].participants).toEqual(["a".repeat(64)]);
     expect(boards[0].viewKey).toBeDefined();
   });
 
@@ -268,13 +323,13 @@ describe("updatePrivateBoard", () => {
     expect(updated.rawTags).toContainEqual(["future-tag", "keep me"]);
   });
 
-  it("refuses an editor who is not the board author", async () => {
+  it("refuses somebody the board does not list as an admin", async () => {
     const ctx = makeCtx();
     const { board } = await createPrivateBoard(ctx, { title: "Q3", columns: [], private: true });
 
     const intruder = makeCtx({ runtime: ctx.runtime });
     await expect(updatePrivateBoard(intruder, board, { title: "Hijacked" })).rejects.toThrow(
-      /is not the author/,
+      /is not an admin/,
     );
   });
 
@@ -322,5 +377,40 @@ describe("deleteBoard", () => {
     const deletion = ctx.runtime.published.find((e) => e.kind === KANBAN_KINDS.deletion)!;
     expect(deletion.tags).toContainEqual(["k", String(KANBAN_KINDS.publicBoard)]);
     expect(await fetchBoards(ctx)).toEqual([]);
+  });
+
+  it("refuses a non-author, whose tombstone would be inert but whose unlink is not", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const { board } = await createPrivateBoard(ownerCtx, {
+      title: "Q3",
+      columns: [],
+      private: true,
+    });
+
+    const memberCtx = makeCtx({ runtime });
+    await expect(deleteBoard(memberCtx, board)).rejects.toThrow(/not the author/i);
+    expect(runtime.published.some((e) => e.kind === KANBAN_KINDS.deletion)).toBe(false);
+    expect((await fetchBoardLists(ownerCtx))[0].boards).toHaveLength(1);
+  });
+});
+
+describe("leaveBoard", () => {
+  it("unlinks the board from our lists without deleting it", async () => {
+    const runtime = new FakeRuntime();
+    const ownerCtx = makeCtx({ runtime });
+    const { board } = await createPrivateBoard(ownerCtx, {
+      title: "Q3",
+      columns: [],
+      private: true,
+    });
+
+    await leaveBoard(ownerCtx, board);
+
+    expect((await fetchBoardLists(ownerCtx))[0].boards).toEqual([]);
+    expect(runtime.published.some((e) => e.kind === KANBAN_KINDS.deletion)).toBe(false);
+    // The board event itself is untouched and still opens with its key.
+    const coordinate = `${KANBAN_KINDS.privateBoard}:${board.pubkey}:${board.id}`;
+    expect(await fetchPrivateBoardByCoordinate(ownerCtx, coordinate, board.viewKey!)).not.toBeNull();
   });
 });

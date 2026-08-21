@@ -9,7 +9,31 @@ import type { BoardDraft, Column, KanbanBoard } from "../types";
  * — which is how kanbanstr loses `nozap` on every board update
  * (kanban/docs/03-kanbanstr-review.md §6.3).
  */
-export const BOARD_MANAGED_TAGS = ["d", "title", "description", "alt", "col", "p", "nozap"] as const;
+export const BOARD_MANAGED_TAGS = [
+  "d",
+  "title",
+  "description",
+  "alt",
+  "col",
+  "p",
+  "admin",
+  "baked",
+  "nozap",
+] as const;
+
+/**
+ * Everyone with card-write access, admins first and nobody twice.
+ *
+ * An admin is p-tagged as well as admin-tagged: kanbanstr reads `p` as
+ * maintainer, so tagging admins only as `admin` would lock them out of card
+ * writes in every client that has not learned the role.
+ */
+function writers(draft: BoardDraft): { admins: string[]; everyone: string[] } {
+  const admins = [...new Set(draft.admins ?? [])];
+  const adminSet = new Set(admins);
+  const participants = [...new Set(draft.participants ?? [])].filter((p) => !adminSet.has(p));
+  return { admins, everyone: [...admins, ...participants] };
+}
 
 export function boardCoordinate(
   board: Pick<KanbanBoard, "pubkey" | "id"> & { isPrivate?: boolean },
@@ -29,10 +53,14 @@ export function buildPublicBoardTags(draft: BoardDraft, dTag: string): string[][
   for (const column of draft.columns) {
     tags.push(["col", column.id, column.name, String(column.order)]);
   }
-  for (const maintainer of draft.maintainers ?? []) {
-    tags.push(["p", maintainer]);
-  }
+  // Deduplicated: callers build the roster by appending to the parsed list, so a
+  // re-invite would otherwise leave the same pubkey tagged twice.
+  const { admins, everyone } = writers(draft);
+  for (const admin of admins) tags.push(["admin", admin]);
+  for (const writer of everyone) tags.push(["p", writer]);
+
   if (draft.noZap) tags.push(["nozap"]);
+  if (draft.baked) tags.push(["baked", String(draft.baked)]);
 
   return tags;
 }
@@ -51,6 +79,69 @@ export function isLegacyBoard(event: Event): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Admins, participants and legacy viewers as three disjoint lists.
+ *
+ * An admin is tagged twice on the wire (`admin` plus `p`/`maintainer`), so the
+ * writer list has to have the admins subtracted from it or every roster shows
+ * them once per role.
+ */
+function splitRoles(
+  adminTags: string[],
+  writerTags: string[],
+  memberTags: string[],
+): Pick<KanbanBoard, "admins" | "participants" | "legacyViewers"> {
+  const admins = [...new Set(adminTags)];
+  const adminSet = new Set(admins);
+  const participants = [...new Set(writerTags)].filter((p) => !adminSet.has(p));
+  const claimed = new Set([...admins, ...participants]);
+  return {
+    admins,
+    participants,
+    legacyViewers: [...new Set(memberTags)].filter((p) => !claimed.has(p)),
+  };
+}
+
+/** Zero for a board that has never been baked, or whose watermark is unreadable. */
+function parseBaked(tags: string[][]): number {
+  const raw = tags.find((t) => t[0] === "baked")?.[1];
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
+ * The board exactly as its creator wrote it, with no patches folded in.
+ *
+ * `rawTags` is the creator's own tag array (the decrypted payload on a private
+ * board), so this recovers the base state from a board object that has already
+ * been folded. The creator's own edits have to start from here: folding over an
+ * already-folded board cannot un-apply a patch, so baking would silently adopt
+ * the pending changes of an admin being demoted in that same save.
+ */
+export function baseState(
+  tags: string[][],
+  isPrivate: boolean,
+): Pick<
+  KanbanBoard,
+  "title" | "description" | "columns" | "admins" | "participants" | "legacyViewers" | "baked"
+> {
+  const writerTag = isPrivate ? "maintainer" : "p";
+  return {
+    title: tags.find((t) => t[0] === "title")?.[1] ?? "Untitled Board",
+    description: tags.find((t) => t[0] === "description")?.[1] ?? "",
+    columns: tags
+      .filter((t) => t[0] === "col")
+      .map((t) => ({ id: t[1], name: t[2], order: Number.parseInt(t[3] ?? "0", 10) }))
+      .sort((a, b) => a.order - b.order),
+    ...splitRoles(
+      tags.filter((t) => t[0] === "admin").map((t) => t[1]),
+      tags.filter((t) => t[0] === writerTag).map((t) => t[1]),
+      isPrivate ? tags.filter((t) => t[0] === "member").map((t) => t[1]) : [],
+    ),
+    baked: parseBaked(tags),
+  };
 }
 
 export function parsePublicBoard(event: Event): KanbanBoard | null {
@@ -87,8 +178,12 @@ export function parsePublicBoard(event: Event): KanbanBoard | null {
     title: event.tags.find((t) => t[0] === "title")?.[1] ?? "Untitled Board",
     description,
     columns,
-    maintainers: event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
-    members: [],
+    ...splitRoles(
+      event.tags.filter((t) => t[0] === "admin").map((t) => t[1]),
+      event.tags.filter((t) => t[0] === "p").map((t) => t[1]),
+      [],
+    ),
+    baked: parseBaked(event.tags),
     noZap: event.tags.some((t) => t[0] === "nozap"),
     createdAt: event.created_at,
     isPrivate: false,
@@ -108,7 +203,9 @@ export const PRIVATE_BOARD_MANAGED_TAGS = [
   "description",
   "col",
   "maintainer",
+  "admin",
   "member",
+  "baked",
   "nozap",
 ] as const;
 
@@ -124,13 +221,23 @@ export function buildPrivateBoardTags(draft: BoardDraft, dTag: string): string[]
   for (const column of draft.columns) {
     tags.push(["col", column.id, column.name, String(column.order)]);
   }
-  for (const maintainer of draft.maintainers ?? []) {
-    tags.push(["maintainer", maintainer]);
+  // Deduplicated, and an admin never also appears as a plain maintainer row's
+  // only mention: two rows for one pubkey are two conflicting roles, and which
+  // one a reader believes would otherwise depend on tag order.
+  const { admins, everyone } = writers(draft);
+  for (const admin of admins) tags.push(["admin", admin]);
+  for (const writer of everyone) tags.push(["maintainer", writer]);
+
+  // Re-emitted, never added to. Dropping them would erase the record of who
+  // still holds a key to a board that has not been rotated.
+  const writerSet = new Set(everyone);
+  for (const viewer of new Set(draft.legacyViewers ?? [])) {
+    if (writerSet.has(viewer)) continue;
+    tags.push(["member", viewer]);
   }
-  for (const member of draft.members ?? []) {
-    tags.push(["member", member]);
-  }
+
   if (draft.noZap) tags.push(["nozap"]);
+  if (draft.baked) tags.push(["baked", String(draft.baked)]);
 
   return tags;
 }
@@ -161,8 +268,12 @@ export function parsePrivateBoard(event: Event, innerTags: string[][]): KanbanBo
     title: innerTags.find((t) => t[0] === "title")?.[1] ?? "Untitled Board",
     description: innerTags.find((t) => t[0] === "description")?.[1] ?? "",
     columns,
-    maintainers: innerTags.filter((t) => t[0] === "maintainer").map((t) => t[1]),
-    members: innerTags.filter((t) => t[0] === "member").map((t) => t[1]),
+    ...splitRoles(
+      innerTags.filter((t) => t[0] === "admin").map((t) => t[1]),
+      innerTags.filter((t) => t[0] === "maintainer").map((t) => t[1]),
+      innerTags.filter((t) => t[0] === "member").map((t) => t[1]),
+    ),
+    baked: parseBaked(innerTags),
     noZap: innerTags.some((t) => t[0] === "nozap"),
     createdAt: event.created_at,
     isPrivate: true,
@@ -184,4 +295,21 @@ export function mergeTags(
   const managedSet = new Set(managed);
   const preserved = existing.filter((tag) => !managedSet.has(tag[0]));
   return [...next, ...preserved];
+}
+
+/**
+ * Stamp the first author onto a card or comment payload somebody else is about
+ * to re-sign.
+ *
+ * Both are author-signed at `kind:pubkey:d`, so a second maintainer's edit is a
+ * new coordinate sharing the `d`, not a new version of the same event. Without
+ * this the edit silently transfers authorship to whoever saved last — and with
+ * it, the right to delete.
+ *
+ * An author already recorded is preserved: only the FIRST writer is the author,
+ * and a third editor must not overwrite them with the second.
+ */
+export function withOriginalAuthor(tags: string[][], originalAuthor: string): string[][] {
+  if (tags.some((t) => t[0] === "original-author")) return tags;
+  return [...tags, ["original-author", originalAuthor]];
 }

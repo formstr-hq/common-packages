@@ -66,7 +66,7 @@ describe("private board lifecycle", () => {
     const board = await sdk.createBoard({
       title: "Acquisition of Foo Corp",
       columns: [{ id: "col-1", name: "Legal review", order: 0 }],
-      maintainers: ["a".repeat(64)],
+      participants: ["a".repeat(64)],
       private: true,
     });
     await sdk.createCard(board, { title: "Draft the term sheet", status: "col-1" });

@@ -6,7 +6,7 @@ import { nextCreatedAt } from "../discovery/dedupe";
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardRole, KanbanBoard } from "../types";
 import { fetchBoardLists, updateBoardList } from "./boardLists";
-import { resolveBoardViewKey, updatePrivateBoard } from "./boards";
+import { resolveBoardViewKey, saveBoard, updatePrivateBoard } from "./boards";
 import { boardPointer, fetchPrivateCards } from "./cards";
 import { fetchComments } from "./comments";
 import { sendInvitations } from "./invitations";
@@ -24,8 +24,8 @@ export interface BoardMember {
 export async function fetchMembers(_ctx: KanbanCtx, board: KanbanBoard): Promise<BoardMember[]> {
   return [
     { pubkey: board.pubkey, role: "owner" as const },
-    ...board.maintainers.map((pubkey) => ({ pubkey, role: "maintainer" as const })),
-    ...board.members.map((pubkey) => ({ pubkey, role: "member" as const })),
+    ...board.admins.map((pubkey) => ({ pubkey, role: "admin" as const })),
+    ...board.participants.map((pubkey) => ({ pubkey, role: "participant" as const })),
   ];
 }
 
@@ -40,25 +40,95 @@ export async function fetchMembers(_ctx: KanbanCtx, board: KanbanBoard): Promise
 export async function inviteMembers(
   ctx: KanbanCtx,
   board: KanbanBoard,
-  invitees: { pubkey: string; role: "maintainer" | "member" }[],
+  invitees: { pubkey: string; role: "admin" | "participant" }[],
   message = "",
 ): Promise<KanbanBoard> {
   if (invitees.length === 0) return board;
 
-  const promoted = new Set(invitees.map((i) => i.pubkey));
-  // Drop each invitee from both sets first, so a role change moves them rather
-  // than leaving them listed twice with conflicting roles.
-  const maintainers = board.maintainers.filter((p) => !promoted.has(p));
-  const members = board.members.filter((p) => !promoted.has(p));
+  const signer = await ctx.getSigner();
+  const inviter = await signer.getPublicKey();
 
-  for (const invitee of invitees) {
-    if (invitee.role === "maintainer") maintainers.push(invitee.pubkey);
-    else members.push(invitee.pubkey);
+  // Promoting an admin is the creator's alone. An admin who could hand out their
+  // own rank would make the base board's admin list meaningless, which is the one
+  // thing the fold trusts.
+  if (inviter !== board.pubkey && invitees.some((i) => i.role === "admin")) {
+    throw new NotBoardOwnerError(inviter, boardCoordinate(board));
   }
 
-  const updated = await updatePrivateBoard(ctx, board, { maintainers, members });
+  const invited = new Set(invitees.map((i) => i.pubkey));
+  // Drop each invitee from both sets first, so a role change moves them rather
+  // than leaving them listed twice with conflicting roles.
+  const admins = board.admins.filter((p) => !invited.has(p));
+  const participants = board.participants.filter((p) => !invited.has(p));
+
+  for (const invitee of invitees) {
+    if (invitee.role === "admin") admins.push(invitee.pubkey);
+    else participants.push(invitee.pubkey);
+  }
+
+  const updated = await updatePrivateBoard(ctx, board, { admins, participants });
   await sendInvitations(ctx, updated, invitees, message);
   return updated;
+}
+
+/**
+ * Hand somebody the run of the board: its columns, its title, and its roster.
+ *
+ * The creator's call alone. Promotion is written into the board event rather
+ * than a patch, because the fold reads the admin list from the base board and
+ * nowhere else — an admin who could promote a peer would make that list, and so
+ * every guard resting on it, meaningless.
+ */
+export async function promoteToAdmin(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  pubkey: string,
+): Promise<KanbanBoard> {
+  const signer = await ctx.getSigner();
+  const caller = await signer.getPublicKey();
+  if (caller !== board.pubkey) throw new NotBoardOwnerError(caller, boardCoordinate(board));
+  if (board.admins.includes(pubkey)) return board;
+
+  return saveBoard(ctx, board, {
+    admins: [...board.admins, pubkey],
+    participants: board.participants.filter((p) => p !== pubkey),
+  });
+}
+
+/**
+ * Take it back. Every patch they ever wrote stops applying on the next read,
+ * with no tombstone and no cooperation from them.
+ *
+ * They stay a participant: demotion is about the board, and dropping them
+ * outright would cost them card access nobody asked to remove. Changes of
+ * theirs the creator has already baked into the board stay baked — this retires
+ * the patch, it does not rewind history.
+ */
+export async function demoteAdmin(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  pubkey: string,
+): Promise<KanbanBoard> {
+  const signer = await ctx.getSigner();
+  const caller = await signer.getPublicKey();
+  if (caller !== board.pubkey) throw new NotBoardOwnerError(caller, boardCoordinate(board));
+  if (!board.admins.includes(pubkey)) return board;
+
+  return saveBoard(ctx, board, {
+    admins: board.admins.filter((p) => p !== pubkey),
+    participants: [...board.participants, pubkey],
+  });
+}
+
+export interface RemovalResult {
+  board: KanbanBoard;
+  /**
+   * False when the view key was left alone, which means the person removed can
+   * still decrypt the board and everything written to it afterwards. An admin's
+   * removal is always false: rotation republishes the board event, so only the
+   * creator can do it. Say that in the UI rather than implying revocation.
+   */
+  rotated: boolean;
 }
 
 /**
@@ -80,20 +150,26 @@ export async function removeMember(
   board: KanbanBoard,
   pubkey: string,
   opts: { rotate?: boolean } = {},
-): Promise<KanbanBoard> {
+): Promise<RemovalResult> {
   // The pointer has to be computed under the key being retired: it is the only
   // one the removed member holds, so it is the only one they can match against.
   const retiringViewKey = await resolveBoardViewKey(ctx, board);
   const pointer = boardPointer(board, retiringViewKey);
 
-  const updated =
-    opts.rotate === false
-      ? await updatePrivateBoard(ctx, board, {
-          maintainers: board.maintainers.filter((p) => p !== pubkey),
-          members: board.members.filter((p) => p !== pubkey),
-        })
-      : // Rotation drops them from the board itself, so no separate update.
-        (await rotateBoardKey(ctx, board, { remove: [pubkey] })).board;
+  const signer = await ctx.getSigner();
+  const caller = await signer.getPublicKey();
+  // Rotation republishes the board event, so it is the creator's alone. An admin
+  // can still drop somebody from the roster; it just revokes nothing on its own.
+  const rotate = opts.rotate !== false && caller === board.pubkey;
+
+  const updated = rotate
+    ? // Rotation drops them from the board itself, so no separate update.
+      (await rotateBoardKey(ctx, board, { remove: [pubkey] })).board
+    : await updatePrivateBoard(ctx, board, {
+        admins: board.admins.filter((p) => p !== pubkey),
+        participants: board.participants.filter((p) => p !== pubkey),
+        legacyViewers: board.legacyViewers.filter((p) => p !== pubkey),
+      });
 
   // Tagged with the blinded pointer, never `a` or `p`. An `a` tag would publish
   // "someone was removed from THIS private board" in the clear, and `p` would
@@ -101,7 +177,6 @@ export async function removeMember(
   // changes in plaintext gives away the roster for free. Published after the
   // rotation, so a failed rotation does not announce a removal that did not
   // happen.
-  const signer = await ctx.getSigner();
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.membershipRemoval,
     created_at: nextCreatedAt(),
@@ -113,7 +188,7 @@ export async function removeMember(
   });
   await ctx.runtime.publish(ctx.relays, signed);
 
-  return updated;
+  return { board: updated, rotated: rotate };
 }
 
 export interface RemovalNotice {
@@ -220,8 +295,9 @@ export async function rotateBoardKey(
   const comments = await fetchComments(ctx, board);
 
   const removed = new Set(opts.remove ?? []);
-  const maintainers = board.maintainers.filter((p) => !removed.has(p));
-  const members = board.members.filter((p) => !removed.has(p));
+  const admins = board.admins.filter((p) => !removed.has(p));
+  const participants = board.participants.filter((p) => !removed.has(p));
+  const legacyViewers = board.legacyViewers.filter((p) => !removed.has(p));
 
   const next = generateViewKey();
   const coordinate = boardCoordinate(board);
@@ -233,9 +309,11 @@ export async function rotateBoardKey(
       title: board.title,
       description: board.description,
       columns: board.columns,
-      maintainers,
-      members,
+      admins,
+      participants,
+      legacyViewers,
       noZap: board.noZap,
+      baked: board.baked,
     },
     board.id,
   );
@@ -251,8 +329,9 @@ export async function rotateBoardKey(
     ...board,
     eventId: signedBoard.id,
     createdAt: signedBoard.created_at,
-    maintainers,
-    members,
+    admins,
+    participants,
+    legacyViewers,
     viewKey: next.nsec,
     rawTags: inner,
   };
@@ -310,8 +389,8 @@ export async function rotateBoardKey(
 
   // 5. Hand the new key to everyone who is left.
   const remaining = [
-    ...maintainers.map((pubkey) => ({ pubkey, role: "maintainer" as const })),
-    ...members.map((pubkey) => ({ pubkey, role: "member" as const })),
+    ...admins.map((pubkey) => ({ pubkey, role: "admin" as const })),
+    ...participants.map((pubkey) => ({ pubkey, role: "participant" as const })),
   ];
   await sendInvitations(ctx, rotated, remaining);
 

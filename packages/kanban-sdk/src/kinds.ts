@@ -13,12 +13,20 @@ export const KANBAN_KINDS = {
   // NIP-100 public
   publicBoard: 30301,
   publicCard: 30302,
+  /**
+   * One admin's delta against a board they do not own. Addressable at
+   * `30303:<admin>:<creator>:<boardD>`, so an admin has exactly one per board
+   * however often they edit it.
+   */
+  adminPatch: 30303,
 
   // NIP-100E private (Plan 2)
   privateBoard: 32301,
   privateCard: 32302,
   boardList: 32303,
   privateComment: 32304,
+  /** The private counterpart of `adminPatch`, encrypted under the board view key. */
+  privateAdminPatch: 32305,
   /**
    * Invitations go on the wire as NIP-59 gift wraps. 1059 is the registered
    * kind, and the ONLY one relays give NIP-59's protection to ("serve this

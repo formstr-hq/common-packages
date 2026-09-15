@@ -26,9 +26,20 @@ export interface KanbanBoard {
   title: string;
   description: string;
   columns: Column[];
-  maintainers: string[];
-  /** Private boards only: view-key holders who are read-only by client convention. */
-  members: string[];
+  /** Pubkeys the creator has promoted. They may re-column the board and manage its roster. */
+  admins: string[];
+  /** Everyone else with card-write access. Never overlaps `admins`. */
+  participants: string[];
+  /**
+   * Private boards only: pubkeys left over from the removed Viewer role. Read so
+   * a client can still show who holds a key, never written again.
+   */
+  legacyViewers: string[];
+  /**
+   * Patches created at or before this are inert. Set whenever the creator folds
+   * admin patches into the board itself. Zero means never baked.
+   */
+  baked: number;
   noZap: boolean;
   createdAt: number;
   isPrivate: boolean;
@@ -79,9 +90,12 @@ export interface BoardDraft {
   title: string;
   description?: string;
   columns: Column[];
-  maintainers?: string[];
-  /** Private boards only. Client-enforced read-only role — see doc 07 §B3. */
-  members?: string[];
+  admins?: string[];
+  participants?: string[];
+  /** Carried through an edit so it survives; nothing ever adds to it. */
+  legacyViewers?: string[];
+  /** Stamped by the creator when folding admin patches down. */
+  baked?: number;
   noZap?: boolean;
   /** Write a 32301 under a fresh view key instead of a public 30301. */
   private?: boolean;
@@ -102,7 +116,7 @@ export interface CardDraft {
   links?: CardLink[];
 }
 
-export type BoardRole = "owner" | "maintainer" | "member";
+export type BoardRole = "owner" | "admin" | "participant";
 
 /** One board's entry in a board list: where it is, and the key that opens it. */
 export interface BoardListRef {

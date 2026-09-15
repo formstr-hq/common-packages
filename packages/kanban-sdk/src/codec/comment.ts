@@ -51,11 +51,13 @@ export function parseComment(event: Event, innerTags: string[][]): KanbanComment
   // A rotation republishes other people's comments under the rotator's pubkey,
   // exactly as it does for cards (doc 05 §8), so attribution is read the same way.
   const rotatedAuthor = innerTags.find((t) => t[0] === "rotated-author")?.[1];
+  // And an edit by another member does the same without a rotation.
+  const originalAuthor = innerTags.find((t) => t[0] === "original-author")?.[1];
 
   return {
     id,
     pubkey: event.pubkey,
-    authorPubkey: rotatedAuthor ?? event.pubkey,
+    authorPubkey: originalAuthor ?? rotatedAuthor ?? event.pubkey,
     rotated: rotatedAuthor !== undefined,
     eventId: event.id,
     boardCoordinate,

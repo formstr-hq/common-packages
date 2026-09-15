@@ -1,6 +1,8 @@
 import { KANBAN_KINDS } from "../kinds";
 import type { BoardInvitation, BoardRole } from "../types";
 
+import { normalizeBoardRole } from "./role";
+
 /**
  * Invitation rumor (kind 53) codec — doc 05 §6.
  *
@@ -9,8 +11,6 @@ import type { BoardInvitation, BoardRole } from "../types";
  * job and MUST happen before anything here is trusted — the tags below carry a key
  * the recipient will act on.
  */
-
-const ROLES: readonly BoardRole[] = ["owner", "maintainer", "member"];
 
 export function buildInvitationRumorTags(ref: {
   coordinate: string;
@@ -54,13 +54,13 @@ export function parseInvitationRumor(
   // An invitation without a key is not an invitation — there is nothing to accept.
   if (!viewKey) return null;
 
-  const claimed = rumor.tags.find((t) => t[0] === "role")?.[1] as BoardRole | undefined;
+  const claimed = rumor.tags.find((t) => t[0] === "role")?.[1];
 
   return {
     coordinate,
     relayHint: aTag?.[2] ?? "",
     viewKey,
-    role: claimed && ROLES.includes(claimed) ? claimed : "member",
+    role: normalizeBoardRole(claimed),
     inviterPubkey: rumor.pubkey,
     message: rumor.content ?? "",
     wrapId,

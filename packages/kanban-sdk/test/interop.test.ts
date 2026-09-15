@@ -31,7 +31,7 @@ describe("boards we write are readable by kanbanstr", () => {
           { id: "c1", name: "To Do", order: 0 },
           { id: "c2", name: "Done", order: 1 },
         ],
-        maintainers: [ASSIGNEE],
+        participants: [ASSIGNEE],
         noZap: true,
       },
       "board7",
@@ -111,7 +111,7 @@ describe("boards and cards kanbanstr writes are readable by us", () => {
 
     expect(ours!.title).toBe("Roadmap");
     expect(ours!.columns).toEqual([{ id: "c1", name: "To Do", order: 0 }]);
-    expect(ours!.maintainers).toEqual([ASSIGNEE]);
+    expect(ours!.participants).toEqual([ASSIGNEE]);
     expect(ours!.noZap).toBe(true);
   });
 

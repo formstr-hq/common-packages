@@ -14,7 +14,7 @@ const EMPTY: BoardsData = { own: [], shared: [], privateBoards: [] };
 
 /**
  * Three separate reads because they are three different questions:
- * boards I authored, public boards that name me a maintainer, and private
+ * boards I authored, public boards that name me an admin, and private
  * boards recoverable through my board lists (which is where the view keys are).
  */
 export function useBoards(): AsyncData<BoardsData> {

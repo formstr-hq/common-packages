@@ -153,7 +153,7 @@ export function BoardPage({ coordinate }: { coordinate: string }) {
           </button>
           {current.isPrivate && (
             <button className="link" onClick={() => setShowMembers(true)} type="button">
-              Members ({current.maintainers.length + current.members.length + 1})
+              Members ({current.admins.length + current.participants.length + 1})
             </button>
           )}
           <button className="link" onClick={() => navigate("#/")} type="button">
@@ -166,7 +166,7 @@ export function BoardPage({ coordinate }: { coordinate: string }) {
 
       {!canWrite && (
         <p className="notice">
-          You can read and comment here, but not write cards — only the owner and maintainers can.
+          You can read and comment here, but not write cards — only the creator and admins can.
         </p>
       )}
 

@@ -27,7 +27,7 @@ export function MembersPanel({
   const toast = useToast();
   const members = useMembers(board);
   const [invitee, setInvitee] = useState("");
-  const [role, setRole] = useState<"maintainer" | "member">("member");
+  const [role, setRole] = useState<"admin" | "participant">("participant");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string[]>([]);
@@ -54,12 +54,15 @@ export function MembersPanel({
   async function remove(pubkey: string, rotate: boolean) {
     setBusy(true);
     try {
-      await sdk!.removeMember(board, pubkey, { rotate });
-      if (rotate) {
+      // Rotation republishes the board event, so only the creator can do it:
+      // an admin asking for one gets `rotated: false` back and the person they
+      // removed keeps a working view key. Branch on the result, not the request.
+      const result = await sdk!.removeMember(board, pubkey, { rotate });
+      if (result.rotated) {
         toast.notify("Removed and board re-keyed — their old key opens nothing new", "success");
       } else {
         setPendingRemoval((current) => [...new Set([...current, pubkey])]);
-        toast.notify("Staged only — they keep full access until you rotate");
+        toast.notify("Off the roster only — they keep the view key until the board is re-keyed");
       }
       onChanged();
       await members.refresh();
@@ -132,8 +135,8 @@ export function MembersPanel({
             <label>
               Role
               <select value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
-                <option value="member">member — read and comment</option>
-                <option value="maintainer">maintainer — read, comment, write cards</option>
+                <option value="participant">participant — read, comment, write cards</option>
+                <option value="admin">admin — that, plus edit the board itself</option>
               </select>
             </label>
             <label>

@@ -7,7 +7,9 @@ import type { CardDraft, CardLink, KanbanCard, TrackedRef } from "../types";
  *
  * Deliberately excludes `k`, `e`, `refs/board`, `refs/card`, so a tracker card
  * keeps tracking across an edit. Rewriting those away is kanbanstr's silent
- * data-loss bug (kanban/docs/03-kanbanstr-review.md §6.2).
+ * data-loss bug (kanban/docs/03-kanbanstr-review.md §6.2). Also excludes
+ * `binned`, for the reason the private list gives: a soft-deleted card that
+ * un-bins itself on the next edit is worse than one that stays binned.
  */
 export const CARD_MANAGED_TAGS = [
   "d",
@@ -22,7 +24,6 @@ export const CARD_MANAGED_TAGS = [
   "p",
   "zap",
   "i",
-  "binned",
 ] as const;
 
 export function buildCardLinkTag(link: CardLink): string[] {
@@ -102,11 +103,15 @@ export function parsePublicCard(event: Event): KanbanCard | null {
   const rawTrackedKind = event.tags.find((t) => t[0] === "k")?.[1];
   const trackedKind = rawTrackedKind ? Number.parseInt(rawTrackedKind, 10) : undefined;
 
+  // Set once another maintainer edits the card; the writer of this version is
+  // then not its author.
+  const originalAuthor = event.tags.find((t) => t[0] === "original-author")?.[1];
+
   return {
     id,
     pubkey: event.pubkey,
     // Public cards are never rotated: there is no key to rotate.
-    authorPubkey: event.pubkey,
+    authorPubkey: originalAuthor ?? event.pubkey,
     rotated: false,
     eventId: event.id,
     boardCoordinate: event.tags.find((t) => t[0] === "a")?.[1] ?? "",
@@ -196,11 +201,13 @@ export function parsePrivateCard(event: Event, innerTags: string[][]): KanbanCar
   // A rotation republishes other people's cards under the rotator's pubkey
   // (doc 05 §8), so the payload is where the real author survives.
   const rotatedAuthor = innerTags.find((t) => t[0] === "rotated-author")?.[1];
+  // An edit by a second maintainer does the same thing without a rotation.
+  const originalAuthor = innerTags.find((t) => t[0] === "original-author")?.[1];
 
   return {
     id,
     pubkey: event.pubkey,
-    authorPubkey: rotatedAuthor ?? event.pubkey,
+    authorPubkey: originalAuthor ?? rotatedAuthor ?? event.pubkey,
     rotated: rotatedAuthor !== undefined,
     eventId: event.id,
     boardCoordinate,

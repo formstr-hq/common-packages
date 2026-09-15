@@ -92,6 +92,26 @@ export class NotBoardOwnerError extends Error {
   }
 }
 
+export class NotAnAdminError extends Error {
+  constructor(pubkey: string, boardRef: string) {
+    super(
+      `${pubkey} is not an admin of ${boardRef}. Only the board's creator and the keys they have ` +
+        `promoted may change its columns, its title, or its roster.`,
+    );
+    this.name = "NotAnAdminError";
+  }
+}
+
+export class NotEventAuthorError extends Error {
+  constructor(pubkey: string, coordinate: string) {
+    super(
+      `${pubkey} did not sign ${coordinate}. NIP-09 lets only an event's own author delete it, ` +
+        `so a tombstone from anyone else is ignored by every reader — bin it instead.`,
+    );
+    this.name = "NotEventAuthorError";
+  }
+}
+
 export class InvitationVerificationError extends Error {
   constructor(reason: string) {
     super(`Rejected an invitation: ${reason}`);

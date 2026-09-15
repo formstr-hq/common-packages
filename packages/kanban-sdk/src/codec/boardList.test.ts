@@ -43,18 +43,18 @@ describe("buildBoardRef / parseBoardRef", () => {
     expect(parseBoardRef(tag)).toEqual(REF);
   });
 
-  it("tolerates NIP-52E's three-element form and defaults the role to member", () => {
+  it("tolerates NIP-52E's three-element form and defaults the role to participant", () => {
     expect(parseBoardRef(["a", REF.coordinate, "wss://relay.example/"])).toEqual({
       coordinate: REF.coordinate,
       relayHint: "wss://relay.example/",
       viewKey: "",
-      role: "member",
+      role: "participant",
     });
   });
 
-  it("defaults an unrecognised role to member rather than trusting it", () => {
-    const parsed = parseBoardRef(["a", REF.coordinate, "", "nsec1qqqqq", "admin"]);
-    expect(parsed!.role).toBe("member");
+  it("defaults an unrecognised role to participant rather than trusting it", () => {
+    const parsed = parseBoardRef(["a", REF.coordinate, "", "nsec1qqqqq", "superuser"]);
+    expect(parsed!.role).toBe("participant");
   });
 
   it("rejects a tag that is not an a-ref", () => {

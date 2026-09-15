@@ -12,9 +12,12 @@ import {
   fetchMembers,
   fetchRemovalNotices,
   inviteMembers,
+  demoteAdmin,
+  promoteToAdmin,
   removeMember,
   rotateBoardKey,
 } from "./members";
+import { updatePrivateBoard } from "./boards";
 
 async function fixture() {
   const runtime = new FakeRuntime();
@@ -39,58 +42,71 @@ describe("fetchMembers", () => {
 describe("inviteMembers", () => {
   it("adds the pubkey to the board and sends them the key", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const updated = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const updated = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
 
-    expect(updated.maintainers).toEqual([bobPubkey]);
+    expect(updated.participants).toEqual([bobPubkey]);
     expect(await fetchMembers(alice, updated)).toEqual([
       { pubkey: board.pubkey, role: "owner" },
-      { pubkey: bobPubkey, role: "maintainer" },
+      { pubkey: bobPubkey, role: "participant" },
     ]);
     expect((await fetchInvitations(bob))[0].viewKey).toBe(board.viewKey);
   });
 
-  it("puts a member in the member set, not the maintainer set", async () => {
+  it("puts an admin in the admin set, not the participant set", async () => {
     const { alice, bobPubkey, board } = await fixture();
-    const updated = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "member" }]);
+    const updated = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "admin" }]);
 
-    expect(updated.members).toEqual([bobPubkey]);
-    expect(updated.maintainers).toEqual([]);
+    expect(updated.admins).toEqual([bobPubkey]);
+    expect(updated.participants).toEqual([]);
   });
 
   it("is idempotent — re-inviting does not duplicate the entry", async () => {
     const { alice, bobPubkey, board } = await fixture();
-    const once = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
-    const twice = await inviteMembers(alice, once, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const once = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
+    const twice = await inviteMembers(alice, once, [{ pubkey: bobPubkey, role: "participant" }]);
 
-    expect(twice.maintainers).toEqual([bobPubkey]);
+    expect(twice.participants).toEqual([bobPubkey]);
   });
 
   it("moves someone between roles rather than listing them twice", async () => {
     const { alice, bobPubkey, board } = await fixture();
-    const asMember = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "member" }]);
-    const promoted = await inviteMembers(alice, asMember, [
-      { pubkey: bobPubkey, role: "maintainer" },
+    const asParticipant = await inviteMembers(alice, board, [
+      { pubkey: bobPubkey, role: "participant" },
+    ]);
+    const promoted = await inviteMembers(alice, asParticipant, [
+      { pubkey: bobPubkey, role: "admin" },
     ]);
 
-    expect(promoted.maintainers).toEqual([bobPubkey]);
-    expect(promoted.members).toEqual([]);
+    expect(promoted.admins).toEqual([bobPubkey]);
+    expect(promoted.participants).toEqual([]);
   });
 
-  it("refuses when the caller is not the board author", async () => {
+  it("refuses a caller the board does not list as an admin", async () => {
     const { bob, bobPubkey, board } = await fixture();
-    await expect(inviteMembers(bob, board, [{ pubkey: bobPubkey, role: "member" }])).rejects.toThrow(
-      /is not the author/,
-    );
+    await expect(
+      inviteMembers(bob, board, [{ pubkey: bobPubkey, role: "participant" }]),
+    ).rejects.toThrow(/is not an admin/);
+  });
+
+  it("refuses to let an admin hand out their own rank", async () => {
+    // The fold reads the admin list from the base board and nowhere else, so an
+    // admin who could promote a peer would make that list meaningless.
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const asAdmin = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "admin" }]);
+
+    await expect(
+      inviteMembers(bob, asAdmin, [{ pubkey: "9".repeat(64), role: "admin" }]),
+    ).rejects.toThrow(/is not the author/);
   });
 });
 
 describe("removeMember", () => {
   it("drops them from the board and publishes a kind 84", async () => {
     const { alice, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
-    const without = await removeMember(alice, withBob, bobPubkey);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
+    const { board: without, rotated } = await removeMember(alice, withBob, bobPubkey);
 
-    expect(without.maintainers).toEqual([]);
+    expect(without.participants).toEqual([]);
 
     const removal = (alice.runtime as FakeRuntime).published.find(
       (e) => e.kind === KANBAN_KINDS.membershipRemoval,
@@ -103,7 +119,7 @@ describe("removeMember", () => {
 
   it("lets the removed member find the notice with one query across every board", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
     await removeMember(alice, withBob, bobPubkey);
@@ -114,7 +130,7 @@ describe("removeMember", () => {
 
   it("ignores a removal notice that did not come from the board owner", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
 
@@ -133,15 +149,15 @@ describe("removeMember", () => {
 
   it("rotates by default, so the removed member's key stops working", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
     await createPrivateCard(alice, withBob, { title: "Ship it", status: "col-1" });
 
-    const without = await removeMember(alice, withBob, bobPubkey);
+    const { board: without, rotated } = await removeMember(alice, withBob, bobPubkey);
 
     expect(without.viewKey).not.toBe(board.viewKey);
-    expect(without.maintainers).toEqual([]);
+    expect(without.participants).toEqual([]);
     // Bob's stored key is the retired one: it no longer points anywhere.
     expect(await fetchPrivateBoards(bob)).toEqual([]);
     // Alice keeps hers, re-encrypted.
@@ -150,15 +166,15 @@ describe("removeMember", () => {
 
   it("with rotate: false it only stages the removal — the old key still opens the board", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
 
-    const without = await removeMember(alice, withBob, bobPubkey, { rotate: false });
+    const { board: without, rotated } = await removeMember(alice, withBob, bobPubkey, { rotate: false });
 
     // Doc 05 §8: dropping the tag takes no key away. This is the batching path,
     // and until rotateBoardKey runs the removed member still reads everything.
-    expect(without.maintainers).toEqual([]);
+    expect(without.participants).toEqual([]);
     expect(without.viewKey).toBe(board.viewKey);
     expect((await fetchPrivateBoards(bob))[0].viewKey).toBe(board.viewKey);
   });
@@ -167,14 +183,14 @@ describe("removeMember", () => {
 describe("rotateBoardKey", () => {
   it("mints a new key, re-encrypts everything, and leaves the board readable", async () => {
     const { alice, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     await createPrivateCard(alice, withBob, { title: "Ship it", status: "col-1" });
 
     const result = await rotateBoardKey(alice, withBob, { remove: [bobPubkey] });
 
     expect(result.board.viewKey).not.toBe(board.viewKey);
     expect(result.cardsRewritten).toBe(1);
-    expect(result.board.maintainers).toEqual([]);
+    expect(result.board.participants).toEqual([]);
     expect((await fetchPrivateCards(alice, result.board)).map((c) => c.title)).toEqual(["Ship it"]);
   });
 
@@ -189,7 +205,7 @@ describe("rotateBoardKey", () => {
 
   it("cuts off the removed member: their stored key no longer opens the board", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
     await createPrivateCard(alice, withBob, { title: "secret", status: "col-1" });
@@ -202,7 +218,7 @@ describe("rotateBoardKey", () => {
 
   it("re-invites everyone who remains, with the new key", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [first] = await fetchInvitations(bob);
     await acceptInvitation(bob, first);
 
@@ -218,7 +234,7 @@ describe("rotateBoardKey", () => {
 
   it("records the original author on a card it did not write", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
 
@@ -236,7 +252,7 @@ describe("rotateBoardKey", () => {
 
   it("does not overwrite an author recorded by an earlier rotation", async () => {
     const { alice, bob, bobPubkey, board } = await fixture();
-    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "maintainer" }]);
+    const withBob = await inviteMembers(alice, board, [{ pubkey: bobPubkey, role: "participant" }]);
     const [invitation] = await fetchInvitations(bob);
     await acceptInvitation(bob, invitation);
     await createPrivateCard(bob, (await fetchPrivateBoards(bob))[0], {
@@ -273,5 +289,116 @@ describe("rotateBoardKey", () => {
   it("refuses a rotator who is not the board author", async () => {
     const { bob, board } = await fixture();
     await expect(rotateBoardKey(bob, board)).rejects.toThrow(/is not the author/);
+  });
+});
+
+describe("promoteToAdmin", () => {
+  it("moves a participant up, out of the participant list", async () => {
+    const { alice, bobPubkey, board } = await fixture();
+    const withBob = await inviteMembers(alice, board, [
+      { pubkey: bobPubkey, role: "participant" },
+    ]);
+
+    const promoted = await promoteToAdmin(alice, withBob, bobPubkey);
+
+    expect(promoted.admins).toEqual([bobPubkey]);
+    expect(promoted.participants).toEqual([]);
+  });
+
+  it("lets the new admin re-column a board they do not own", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const promoted = await promoteToAdmin(alice, board, bobPubkey);
+
+    const patched = await updatePrivateBoard(bob, promoted, {
+      columns: [{ id: "c2", name: "Blocked", order: 1 }],
+    });
+
+    expect(patched.columns.map((c) => c.id)).toContain("c2");
+  });
+
+  it("refuses anyone but the creator", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const promoted = await promoteToAdmin(alice, board, bobPubkey);
+
+    await expect(promoteToAdmin(bob, promoted, "9".repeat(64))).rejects.toThrow(
+      /is not the author/,
+    );
+  });
+
+  it("is a no-op for someone who is already an admin", async () => {
+    const { alice, bobPubkey, board } = await fixture();
+    const once = await promoteToAdmin(alice, board, bobPubkey);
+    const twice = await promoteToAdmin(alice, once, bobPubkey);
+
+    expect(twice.admins).toEqual([bobPubkey]);
+  });
+});
+
+describe("demoteAdmin", () => {
+  it("leaves them a participant rather than off the board", async () => {
+    // Demotion is about the board, not their cards. Dropping them entirely would
+    // cost them write access nobody asked to remove.
+    const { alice, bobPubkey, board } = await fixture();
+    const promoted = await promoteToAdmin(alice, board, bobPubkey);
+
+    const demoted = await demoteAdmin(alice, promoted, bobPubkey);
+
+    expect(demoted.admins).toEqual([]);
+    expect(demoted.participants).toEqual([bobPubkey]);
+  });
+
+  it("stops their patches from applying", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const promoted = await promoteToAdmin(alice, board, bobPubkey);
+    await updatePrivateBoard(bob, promoted, { title: "Bob's title" });
+
+    const demoted = await demoteAdmin(alice, promoted, bobPubkey);
+
+    expect(demoted.title).not.toBe("Bob's title");
+  });
+
+  it("refuses anyone but the creator", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const promoted = await promoteToAdmin(alice, board, bobPubkey);
+
+    await expect(demoteAdmin(bob, promoted, bobPubkey)).rejects.toThrow(/is not the author/);
+  });
+
+  it("is a no-op for someone who was never an admin", async () => {
+    const { alice, bobPubkey, board } = await fixture();
+    const demoted = await demoteAdmin(alice, board, bobPubkey);
+    expect(demoted.participants).not.toContain(bobPubkey);
+  });
+});
+
+describe("an admin removing somebody", () => {
+  it("takes them off the roster but reports that nothing was revoked", async () => {
+    const { alice, bob, bobPubkey, board } = await fixture();
+    const carol = getPublicKey(generateSecretKey());
+
+    const staffed = await inviteMembers(alice, board, [
+      { pubkey: bobPubkey, role: "admin" },
+      { pubkey: carol, role: "participant" },
+    ]);
+
+    const { board: without, rotated } = await removeMember(bob, staffed, carol);
+
+    expect(without.participants).not.toContain(carol);
+    // Rotation republishes the board event, so an admin cannot do it. Reporting
+    // otherwise would tell the user access was cut off when it was not.
+    expect(rotated).toBe(false);
+    expect(without.viewKey).toBe(board.viewKey);
+  });
+
+  it("still rotates when the creator does it", async () => {
+    const { alice, bobPubkey, board } = await fixture();
+    const staffed = await inviteMembers(alice, board, [
+      { pubkey: bobPubkey, role: "participant" },
+    ]);
+
+    const { rotated, board: without } = await removeMember(alice, staffed, bobPubkey);
+
+    expect(rotated).toBe(true);
+    expect(without.viewKey).not.toBe(board.viewKey);
   });
 });

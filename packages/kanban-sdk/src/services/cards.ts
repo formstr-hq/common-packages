@@ -1,6 +1,6 @@
 import type { Event } from "nostr-tools";
 
-import { boardCoordinate, mergeTags } from "../codec/board";
+import { boardCoordinate, mergeTags, withOriginalAuthor } from "../codec/board";
 import {
   CARD_MANAGED_TAGS,
   PRIVATE_CARD_MANAGED_TAGS,
@@ -10,24 +10,20 @@ import {
   parsePublicCard,
 } from "../codec/card";
 import { computeRank } from "../codec/rank";
-import { NotAMaintainerError, type KanbanCtx } from "../contracts";
+import { NotAMaintainerError, NotEventAuthorError, type KanbanCtx } from "../contracts";
 import { blindedPointer } from "../crypto/blindedPointer";
 import { decryptWithViewKey, encryptWithViewKey, viewKeyFromNsec } from "../crypto/viewKey";
 import { newestByDTag, nextCreatedAt } from "../discovery/dedupe";
 import { collectDeleted, isDeleted } from "../discovery/deletions";
 import { KANBAN_KINDS } from "../kinds";
 import type { CardDraft, KanbanBoard, KanbanCard } from "../types";
+import { canEditCards } from "./access";
 import { resolveBoardViewKey } from "./boards";
 
 const coordinateOf = (event: Event): string =>
   `${event.kind}:${event.pubkey}:${event.tags.find((t) => t[0] === "d")?.[1] ?? ""}`;
 
-/** NIP-100: the board author plus every `p`-tagged maintainer may write cards. */
-export function canEditCards(board: KanbanBoard, pubkey: string): boolean {
-  if (!pubkey) return false;
-  if (board.pubkey === pubkey) return true;
-  return board.maintainers.includes(pubkey);
-}
+export { canAdminister, canEditCards } from "./access";
 
 async function assertMaintainer(ctx: KanbanCtx, board: KanbanBoard): Promise<string> {
   const signer = await ctx.getSigner();
@@ -84,7 +80,7 @@ export async function updateCard(
   card: KanbanCard,
   changes: Partial<CardDraft>,
 ): Promise<KanbanCard> {
-  await assertMaintainer(ctx, board);
+  const editor = await assertMaintainer(ctx, board);
 
   const draft: CardDraft = {
     title: changes.title ?? card.title,
@@ -99,11 +95,12 @@ export async function updateCard(
 
   // Merge, never rebuild. This is what stops an edit from stripping a tracker
   // card's k/refs tags — kanbanstr's data-loss bug §6.2.
-  const tags = mergeTags(
+  let tags = mergeTags(
     card.rawTags,
     buildPublicCardTags(draft, card.id, card.boardCoordinate, rank),
     CARD_MANAGED_TAGS,
   );
+  if (editor !== card.authorPubkey) tags = withOriginalAuthor(tags, card.authorPubkey);
   return publishCard(ctx, tags, nextCreatedAt(card.createdAt));
 }
 
@@ -137,7 +134,7 @@ export async function fetchCards(ctx: KanbanCtx, board: KanbanBoard): Promise<Ka
   });
   if (events.length === 0) return [];
 
-  const allowed = new Set([board.pubkey, ...board.maintainers]);
+  const allowed = new Set([board.pubkey, ...board.admins, ...board.participants]);
   const authored = events.filter((event) => allowed.has(event.pubkey));
 
   const deletions = await ctx.runtime.querySync(ctx.relays, {
@@ -224,7 +221,7 @@ export async function updatePrivateCard(
   card: KanbanCard,
   changes: Partial<CardDraft>,
 ): Promise<KanbanCard> {
-  await assertMaintainer(ctx, board);
+  const editor = await assertMaintainer(ctx, board);
 
   // Editing a card against the wrong board loses it entirely: the republish would
   // carry THIS board's blinded pointer but the card's own `a` coordinate, so the
@@ -252,11 +249,12 @@ export async function updatePrivateCard(
   };
   const rank = changes.rank ?? card.rank;
 
-  const inner = mergeTags(
+  let inner = mergeTags(
     card.rawTags,
     buildPrivateCardTags(draft, card.id, card.boardCoordinate, rank),
     PRIVATE_CARD_MANAGED_TAGS,
   );
+  if (editor !== card.authorPubkey) inner = withOriginalAuthor(inner, card.authorPubkey);
 
   return publishPrivateCard(
     ctx,
@@ -312,7 +310,7 @@ export async function fetchPrivateCards(
   });
   if (events.length === 0) return [];
 
-  const allowed = new Set([board.pubkey, ...board.maintainers]);
+  const allowed = new Set([board.pubkey, ...board.admins, ...board.participants]);
   const authored = events.filter((event) => allowed.has(event.pubkey));
   if (authored.length === 0) return [];
 
@@ -387,9 +385,61 @@ export function resolveWithRotation(
   return resolved;
 }
 
+/**
+ * Take a card off the board without a tombstone, or put it back.
+ *
+ * NIP-09 lets only a card's own author delete it, so this is how anyone else
+ * with write access removes one. `binned` is an ordinary edit every reader
+ * honours, it is reversible, and it survives later edits because neither
+ * managed-tag list owns it.
+ */
+export async function binCard(
+  ctx: KanbanCtx,
+  board: KanbanBoard,
+  card: KanbanCard,
+  binned = true,
+): Promise<KanbanCard> {
+  const editor = await assertMaintainer(ctx, board);
+
+  // Same trap as updatePrivateCard: republishing against the wrong board would
+  // carry this board's pointer and the card's own coordinate, losing it from both.
+  if (card.boardCoordinate !== boardCoordinate(board)) {
+    throw new Error(
+      `Card ${card.id} belongs to ${card.boardCoordinate}, not ${boardCoordinate(board)}`,
+    );
+  }
+
+  let tags = card.rawTags.filter((t) => t[0] !== "binned");
+  if (binned) tags = [...tags, ["binned"]];
+  if (editor !== card.authorPubkey) tags = withOriginalAuthor(tags, card.authorPubkey);
+
+  if (!card.isPrivate) return publishCard(ctx, tags, nextCreatedAt(card.createdAt));
+
+  const viewKeyNsec = await resolveBoardViewKey(ctx, board);
+  return publishPrivateCard(
+    ctx,
+    tags,
+    boardPointer(board, viewKeyNsec),
+    viewKeyNsec,
+    nextCreatedAt(card.createdAt),
+  );
+}
+
+/**
+ * Retract a card by tombstoning it.
+ *
+ * The check is against `card.pubkey` — who signed this version — not
+ * `authorPubkey`, because that is what NIP-09 binds a deletion to. After a key
+ * rotation republished someone else's card, the rotator signs it and so only the
+ * rotator can retract it; the original author bins it instead (`binCard`).
+ */
 export async function deleteCard(ctx: KanbanCtx, card: KanbanCard): Promise<void> {
   const signer = await ctx.getSigner();
+  const pubkey = await signer.getPublicKey();
   const kind = card.isPrivate ? KANBAN_KINDS.privateCard : KANBAN_KINDS.publicCard;
+  if (card.pubkey !== pubkey) {
+    throw new NotEventAuthorError(pubkey, `${kind}:${card.pubkey}:${card.id}`);
+  }
 
   const signed = await signer.signEvent({
     kind: KANBAN_KINDS.deletion,

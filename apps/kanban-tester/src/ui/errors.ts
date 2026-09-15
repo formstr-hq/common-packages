@@ -10,9 +10,13 @@ export function describeError(error: unknown): string {
     case "ViewKeyRequiredError":
       return "No view key for this board. Accept its invitation, or open it from a board list that carries the key.";
     case "NotAMaintainerError":
-      return "You are a member, not a maintainer — members can read and comment, not write cards.";
+      return "You have read access to this board, not write access — you can read and comment, not write cards.";
+    case "NotAnAdminError":
+      return "Only the board's creator and the keys they have promoted to admin can change its columns, title, or roster.";
+    case "NotEventAuthorError":
+      return "NIP-09 lets only an event's own author delete it, so a tombstone from you would be ignored. Bin the card instead.";
     case "NotBoardOwnerError":
-      return "Only the board owner can do that (invite, remove members, rotate the key).";
+      return "Only the board creator can do that (rotate the key, delete the board).";
     case "InvitationVerificationError":
       return "This invitation failed verification — the seal's author does not match the rumor's. Ignoring it.";
     case "BoardNotFoundError":

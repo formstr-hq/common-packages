@@ -15,7 +15,7 @@ async function fixture() {
   const { board } = await createPrivateBoard(alice, {
     title: "Q3",
     columns: [{ id: "col-1", name: "To Do", order: 0 }],
-    members: [getPublicKey(memberSecret)],
+    legacyViewers: [getPublicKey(memberSecret)],
     private: true,
   });
   const card = await createPrivateCard(alice, board, { title: "Ship it", status: "col-1" });
@@ -24,7 +24,7 @@ async function fixture() {
 }
 
 describe("canComment", () => {
-  it("admits the owner, maintainers, and members", async () => {
+  it("admits the creator, its writers, and viewers carried over from 0.1.x", async () => {
     const { board, memberSecret } = await fixture();
     expect(canComment(board, board.pubkey)).toBe(true);
     expect(canComment(board, getPublicKey(memberSecret))).toBe(true);
@@ -172,5 +172,13 @@ describe("deleteComment", () => {
     await deleteComment(alice, comment);
 
     expect(await fetchComments(alice, board, card.id)).toEqual([]);
+  });
+
+  it("refuses to tombstone a comment the signer did not write", async () => {
+    const { alice, member, board, card } = await fixture();
+    const comment = await createComment(member, board, card.id, { content: "mine" });
+
+    await expect(deleteComment(alice, comment)).rejects.toThrow(/did not sign/i);
+    expect((await fetchComments(alice, board, card.id)).map((c) => c.content)).toEqual(["mine"]);
   });
 });

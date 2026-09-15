@@ -23,8 +23,8 @@ function BoardGroup({ title, boards, empty }: { title: string; boards: KanbanBoa
               <strong>{board.title || "(untitled)"}</strong>
               <span className="muted small">{board.description}</span>
               <span className="muted small">
-                {board.columns.length} columns · {board.maintainers.length} maintainers
-                {board.members.length > 0 && ` · ${board.members.length} members`}
+                {board.columns.length} columns · {board.admins.length} admins
+                {board.participants.length > 0 && ` · ${board.participants.length} participants`}
               </span>
             </button>
           </li>
@@ -74,9 +74,9 @@ export function BoardsPage() {
         />
         <BoardGroup title="Public — yours" boards={boards.data.own} empty="No public boards yet." />
         <BoardGroup
-          title="Public — you maintain"
+          title="Public — you administer"
           boards={boards.data.shared}
-          empty="No public boards name you as a maintainer."
+          empty="No public boards name you as an admin."
         />
       </section>
 

@@ -16,7 +16,9 @@ export function useMembers(board: KanbanBoard | null): AsyncData<BoardMember[]> 
 
   return useAsyncData(sdk && board ? load : null, EMPTY, [
     sdk,
-    board ? `${board.pubkey}:${board.id}:${board.maintainers.join(",")}:${board.members.join(",")}` : null,
+    board
+      ? `${board.pubkey}:${board.id}:${board.admins.join(",")}:${board.participants.join(",")}`
+      : null,
     relays.join(","),
   ]);
 }

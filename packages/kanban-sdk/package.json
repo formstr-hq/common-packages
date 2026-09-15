@@ -1,14 +1,18 @@
 {
   "name": "@formstr/kanban-sdk",
-  "version": "0.1.0",
-  "description": "Headless TypeScript SDK for Nostr Kanban boards (NIP-100) — interoperable with kanbanstr.com",
+  "version": "0.2.0",
+  "description": "Headless TypeScript SDK for Nostr Kanban boards (NIP-100) \u2014 interoperable with kanbanstr.com",
   "license": "MIT",
   "type": "module",
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

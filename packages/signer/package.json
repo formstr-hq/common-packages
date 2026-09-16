@@ -1,7 +1,7 @@
 {
   "name": "@formstr/signer",
   "version": "0.2.2",
-  "description": "Nostr signer with login UI for NIP-07, NIP-46, NIP-49 (ncryptsec), and NIP-55",
+  "description": "Nostr signer with login UI for NIP-07, NIP-46, NIP-49 (ncryptsec), and NIP-55 (Android apps, native or browser)",
   "license": "MIT",
   "author": "Abhay <toabhayraizada@gmail.com>",
   "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/signer#readme",
@@ -24,6 +24,7 @@
     "bunker",
     "nostr-connect",
     "amber",
+    "nostrsigner",
     "formstr"
   ],
   "publishConfig": {

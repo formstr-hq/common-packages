@@ -3,7 +3,14 @@ import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { Signer } from '../core/signer.js';
 import type { RelayMismatchHandler, StoredAccount } from '../core/types.js';
 
-export type LoginTab = 'create' | 'ncryptsec' | 'extension' | 'bunker' | 'nostrconnect' | 'android';
+export type LoginTab =
+  | 'create'
+  | 'ncryptsec'
+  | 'extension'
+  | 'bunker'
+  | 'nostrconnect'
+  | 'nip55web'
+  | 'android';
 
 export interface LoginUiHandlers {
   onLogin?: (account: StoredAccount) => void;
@@ -15,6 +22,12 @@ export interface LoginUiHandlers {
   onRelayMismatch?: RelayMismatchHandler;
   /** Initial tab to show. Defaults to 'create'. */
   defaultTab?: LoginTab;
+  /**
+   * Optional diagnostic stream for the browser NIP-55 (intent/clipboard)
+   * flow. Wire it to an on-screen log when testing on a phone — the flow
+   * navigates away, so its behaviour is otherwise hard to observe.
+   */
+  onNip55WebDebug?: (message: string) => void;
 }
 
 export interface LoginUiBinding {
@@ -28,14 +41,30 @@ const TABS: ReadonlyArray<{ id: LoginTab; label: string }> = [
   { id: 'extension', label: 'Extension' },
   { id: 'bunker', label: 'Bunker URI' },
   { id: 'nostrconnect', label: 'Remote (QR)' },
+  { id: 'nip55web', label: 'Signer app' },
   { id: 'android', label: 'Android' },
 ];
 
-export function renderLoginHtml(): string {
-  const tabs = TABS.map(
-    (t) =>
-      `<button class="nostr-signer__tab nostr-signer__tab--${t.id}" type="button" data-tab="${t.id}">${t.label}</button>`,
-  ).join('');
+export interface RenderLoginOptions {
+  /**
+   * Include the "Signer app" tab (browser NIP-55). Defaults to `true`.
+   *
+   * Pass `signer.supportsNip55Web()` to hide it where it cannot work —
+   * notably inside a Capacitor native shell, where
+   * `loginWithAndroidSigner` is the right path. Omit it in a native build
+   * and the tab would only ever error.
+   */
+  includeNip55Web?: boolean;
+}
+
+export function renderLoginHtml(options: RenderLoginOptions = {}): string {
+  const includeNip55Web = options.includeNip55Web ?? true;
+  const tabs = TABS.filter((t) => t.id !== 'nip55web' || includeNip55Web)
+    .map(
+      (t) =>
+        `<button class="nostr-signer__tab nostr-signer__tab--${t.id}" type="button" data-tab="${t.id}">${t.label}</button>`,
+    )
+    .join('');
 
   return `<div class="nostr-signer__root">
   <div class="nostr-signer__modal">
@@ -91,6 +120,10 @@ export function renderLoginHtml(): string {
           <button class="nostr-signer__button nostr-signer__button--secondary" type="button" data-action="nostrconnect-cancel">Cancel</button>
         </div>
       </section>
+      ${includeNip55Web ? `<section class="nostr-signer__panel nostr-signer__panel--nip55web" data-panel="nip55web" hidden>
+        <p class="nostr-signer__hint">Sign in with a signer app installed on this Android device, using the browser (NIP-55). You&rsquo;ll be asked to approve each signature in the app.</p>
+        <button class="nostr-signer__button nostr-signer__button--primary" type="button" data-action="nip55web-login">Open signer app</button>
+      </section>` : ''}
       <section class="nostr-signer__panel nostr-signer__panel--android" data-panel="android" hidden>
         <p class="nostr-signer__hint">Sign in with an Android external signer app (NIP-55) such as Amber.</p>
         <p class="nostr-signer__status" data-region="android-status">Loading installed signers&hellip;</p>
@@ -114,6 +147,7 @@ export function attachLoginListeners(
 ): LoginUiBinding {
   const detachers: Array<() => void> = [];
   let nostrConnectAbort: AbortController | null = null;
+  let nip55WebAbort: AbortController | null = null;
 
   const on = <K extends keyof HTMLElementEventMap>(
     el: Element,
@@ -263,6 +297,31 @@ export function attachLoginListeners(
     }
   });
 
+  // ---- signer app (NIP-55 over the web) ----
+  // Absent when renderLoginHtml({ includeNip55Web: false }) omitted the tab.
+  const nip55WebBtn = rootEl.querySelector<HTMLButtonElement>(
+    '[data-action="nip55web-login"]',
+  );
+  if (nip55WebBtn) on(nip55WebBtn, 'click', async () => {
+    clearError();
+    const btn = nip55WebBtn;
+    btn.disabled = true;
+    nip55WebAbort = new AbortController();
+    try {
+      const account = await signer.loginWithNip55Web({
+        signal: nip55WebAbort.signal,
+        debug: handlers.onNip55WebDebug,
+      });
+      handlers.onLogin?.(account);
+    } catch (err) {
+      btn.disabled = false;
+      // A user cancelling (detach) is not an error worth surfacing.
+      if ((err as Error).name !== 'AbortError') showError(err as Error);
+    } finally {
+      nip55WebAbort = null;
+    }
+  });
+
   // ---- bunker URI ----
   const bunkerForm = q<HTMLFormElement>('[data-form="bunker"]');
   on(bunkerForm, 'submit', async (ev) => {
@@ -366,6 +425,7 @@ export function attachLoginListeners(
   return {
     detach: () => {
       nostrConnectAbort?.abort();
+      nip55WebAbort?.abort();
       for (const d of detachers) d();
     },
     selectTab,

@@ -160,7 +160,7 @@ describe('NIP-55 (Android external signer)', () => {
     expect(second.getActiveSigner()).not.toBeNull();
   });
 
-  it('rejects with the decoded type when the plugin returns a non-npub bech32 identifier', async () => {
+  it('rejects with the decoded type when the plugin returns a non-pubkey bech32 identifier', async () => {
     const fakeNsec = nip19.nsecEncode(generateSecretKey());
     const badPlugin = {
       setPackageName: async () => undefined,
@@ -172,7 +172,7 @@ describe('NIP-55 (Android external signer)', () => {
       nip44Encrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
       nip44Decrypt: async (_p: string, _t: string, id: string) => ({ result: '', id }),
     };
-    await expect(loginWithAndroidSigner(badPlugin)).rejects.toThrow(/non-npub/);
+    await expect(loginWithAndroidSigner(badPlugin)).rejects.toThrow(/non-pubkey/);
     // The error must call out which type was returned and preview the
     // value, so a caller looking at the message can immediately tell e.g.
     // nsec from nprofile. The nsec1 prefix is intentionally included —

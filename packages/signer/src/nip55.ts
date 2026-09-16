@@ -192,7 +192,7 @@ export async function loginWithAndroidSigner(
       '@formstr/signer: android signer did not return a package name and none was supplied',
     );
   }
-  const { pubkey, npub } = normalizeAndroidIdentifier(rawIdentifier);
+  const { pubkey, npub } = normalizeNip55Identifier(rawIdentifier);
   return {
     signer: new AndroidSigner(plugin, resolvedPackage, npub, pubkey),
     pubkey,
@@ -202,14 +202,19 @@ export async function loginWithAndroidSigner(
 }
 
 /**
- * Normalize whatever the Android signer plugin handed us in the `npub`
- * slot into a `{ pubkey, npub }` pair. Accepts either:
+ * Normalize whatever a NIP-55 transport handed us in the pubkey slot into a
+ * `{ pubkey, npub }` pair. Accepts:
  *   - a 32-byte lowercase hex pubkey (newer Amber builds return this),
- *   - a bech32 `npub1…` (the original NIP-55 spec shape).
- * Throws a debuggable error for anything else, including the preview
- * of what was actually received so the caller can triage.
+ *   - a bech32 `npub1…` (the original NIP-55 spec shape),
+ *   - a bech32 `nprofile1…`, which the web/clipboard transport may return.
+ * Throws a debuggable error for anything else, including the preview of
+ * what was actually received so the caller can triage.
+ *
+ * Shared by the Capacitor (`loginWithAndroidSigner`) and pure-web
+ * (`nip55Web.ts`) flows — both transports are NIP-55 and must agree on
+ * how identifiers normalize.
  */
-function normalizeAndroidIdentifier(
+export function normalizeNip55Identifier(
   rawIdentifier: unknown,
 ): { pubkey: string; npub: string } {
   if (typeof rawIdentifier === 'string' && HEX_PUBKEY_RE.test(rawIdentifier)) {
@@ -217,25 +222,28 @@ function normalizeAndroidIdentifier(
     return { pubkey, npub: nip19.npubEncode(pubkey) };
   }
   // Wrap nip19.decode so a bech32 failure ("Data must be at least 6
-  // characters long", "Invalid checksum", ...) surfaces what the plugin
+  // characters long", "Invalid checksum", ...) surfaces what the transport
   // actually returned. Without this, callers see an opaque bech32 crash
-  // and can't tell whether Amber sent back an empty string, an nsec, or
-  // something else entirely.
+  // and can't tell whether the signer sent back an empty string, an nsec,
+  // or something else entirely.
   let decoded: ReturnType<typeof nip19.decode>;
   try {
     decoded = nip19.decode(rawIdentifier as string);
   } catch (e) {
     // nostr-tools' nip19 decoder always throws Error instances on bech32
-    // failures ("Data must be at least 6 characters long", "Invalid
-    // checksum", "Unknown prefix", ...). Pass the message straight through.
+    // failures. Pass the message straight through.
     throw new Error(
-      `@formstr/signer: android signer returned an undecodable identifier (got ${describeIdentifier(rawIdentifier)}): ${(e as Error).message}`,
+      `@formstr/signer: signer returned an undecodable identifier (got ${describeIdentifier(rawIdentifier)}): ${(e as Error).message}`,
     );
   }
-  if (decoded.type !== 'npub') {
-    throw new Error(
-      `@formstr/signer: android signer returned a non-npub identifier (type=${decoded.type}, got ${describeIdentifier(rawIdentifier)})`,
-    );
+  if (decoded.type === 'npub') {
+    return { pubkey: decoded.data, npub: rawIdentifier as string };
   }
-  return { pubkey: decoded.data, npub: rawIdentifier as string };
+  if (decoded.type === 'nprofile') {
+    const pubkey = decoded.data.pubkey;
+    return { pubkey, npub: nip19.npubEncode(pubkey) };
+  }
+  throw new Error(
+    `@formstr/signer: signer returned a non-pubkey identifier (type=${decoded.type}, got ${describeIdentifier(rawIdentifier)})`,
+  );
 }

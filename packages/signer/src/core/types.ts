@@ -8,8 +8,10 @@ import type { StorageAdapter } from './storage.js';
  *  - `nip46`: NIP-46 remote signer (bunker URI or nostrconnect QR).
  *  - `ncryptsec`: NIP-49 encrypted nsec — decrypted into memory on unlock.
  *  - `android`: NIP-55 Android external signer app via a Capacitor plugin.
+ *  - `nip55-web`: NIP-55 Android external signer app from a plain browser,
+ *     via `nostrsigner` intents + clipboard (no native bridge).
  */
-export type LoginMethod = 'extension' | 'nip46' | 'ncryptsec' | 'android';
+export type LoginMethod = 'extension' | 'nip46' | 'ncryptsec' | 'android' | 'nip55-web';
 
 /**
  * Serialized account record persisted by the {@link StorageAdapter}.
@@ -70,6 +72,14 @@ export interface ActiveSigner {
   nip04Decrypt(peerPubkey: string, ciphertext: string): Promise<string>;
   nip44Encrypt(peerPubkey: string, plaintext: string): Promise<string>;
   nip44Decrypt(peerPubkey: string, ciphertext: string): Promise<string>;
+  /**
+   * Optional teardown, called by {@link Signer} when this signer is
+   * replaced — on a subsequent login/unlock, `switchAccount`, or
+   * `logout`. Implementations with live resources (an open bunker relay
+   * subscription, a clipboard poll, an in-flight request) should release
+   * them here. Omitted by stateless signers.
+   */
+  close?(): void | Promise<void>;
 }
 
 export interface RelayMismatchInfo {
@@ -115,6 +125,34 @@ export interface UnlockOptions {
    * without a pool the nip46 branch returns `null`.
    */
   pool?: AbstractSimplePool;
+}
+
+/**
+ * Options for {@link Signer.loginWithNip55Web} — the pure-browser NIP-55
+ * flow (Android intents + clipboard, no Capacitor bridge).
+ */
+export interface Nip55WebLoginOptions {
+  /**
+   * Environment bridge for this call. Falls back to
+   * {@link SignerConfig.nip55WebTransport}, then to the browser default.
+   */
+  transport?: import('../nip55Web.js').Nip55WebTransport;
+  /**
+   * How often to poll the clipboard while waiting for the signer app.
+   * Default 500ms. Polling is required because returning from the signer
+   * fires no foreground event on Android Chrome.
+   */
+  pollIntervalMs?: number;
+  /**
+   * Max time to wait for the signer app. NIP-55 web has no rejection
+   * signal, so a denied/abandoned request never resolves without this.
+   * Default 120000ms; `0` disables it.
+   */
+  timeoutMs?: number;
+  /** Abort the pairing request (rejects with `name === 'AbortError'`). */
+  signal?: AbortSignal;
+  /** Diagnostic sink for the intent/clipboard round-trip. */
+  debug?: (message: string) => void;
 }
 
 export interface NostrConnectOptions {
@@ -178,4 +216,10 @@ export interface SignerConfig {
    * or `listAndroidSignerApps(plugin)`.
    */
   androidSignerPlugin?: import('../nip55.js').AndroidSignerPlugin;
+  /**
+   * Environment bridge for the pure-web NIP-55 flow (Android browser,
+   * intents + clipboard). Defaults to a browser implementation; supply a
+   * stub in tests or non-browser hosts.
+   */
+  nip55WebTransport?: import('../nip55Web.js').Nip55WebTransport;
 }

@@ -35,6 +35,8 @@ export {
   Nip55WebSigner,
   browserNip55Transport,
   type Nip55WebOptions,
+  type Nip55WebSupport,
+  type Nip55WebSupportReason,
   type Nip55WebTransport,
 } from './nip55Web.js';
 export {

@@ -1,7 +1,17 @@
 import QRCode from 'qrcode';
 import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { Signer } from '../core/signer.js';
+import type { Nip55WebSupport } from '../nip55Web.js';
 import type { RelayMismatchHandler, StoredAccount } from '../core/types.js';
+
+/** Escape text before interpolating it into the HTML template. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 export type LoginTab =
   | 'create'
@@ -47,18 +57,32 @@ const TABS: ReadonlyArray<{ id: LoginTab; label: string }> = [
 
 export interface RenderLoginOptions {
   /**
-   * Include the "Signer app" tab (browser NIP-55). Defaults to `true`.
+   * The browser NIP-55 ("Signer app") status, from
+   * `signer.nip55WebSupport()`. `visible` controls whether the tab is
+   * rendered; `warning` renders an advisory note above the button without
+   * disabling it.
    *
-   * Pass `signer.supportsNip55Web()` to hide it where it cannot work —
-   * notably inside a Capacitor native shell, where
-   * `loginWithAndroidSigner` is the right path. Omit it in a native build
-   * and the tab would only ever error.
+   * Defaults to shown without a warning. Pass the real status so a native
+   * build hides the tab and Firefox for Android shows its warning.
+   */
+  nip55Web?: Nip55WebSupport;
+  /**
+   * Include the "Signer app" tab (browser NIP-55). Shorthand for the
+   * `visible` half of {@link nip55Web}; defaults to `true`. Ignored when
+   * `nip55Web` is supplied.
+   *
+   * @deprecated Prefer `nip55Web`, which can also carry a warning.
    */
   includeNip55Web?: boolean;
 }
 
 export function renderLoginHtml(options: RenderLoginOptions = {}): string {
-  const includeNip55Web = options.includeNip55Web ?? true;
+  const nip55Web: Nip55WebSupport =
+    options.nip55Web ??
+    (options.includeNip55Web === false
+      ? { visible: false }
+      : { visible: true });
+  const includeNip55Web = nip55Web.visible;
   const tabs = TABS.filter((t) => t.id !== 'nip55web' || includeNip55Web)
     .map(
       (t) =>
@@ -122,6 +146,7 @@ export function renderLoginHtml(options: RenderLoginOptions = {}): string {
       </section>
       ${includeNip55Web ? `<section class="nostr-signer__panel nostr-signer__panel--nip55web" data-panel="nip55web" hidden>
         <p class="nostr-signer__hint">Sign in with a signer app installed on this Android device, using the browser (NIP-55). You&rsquo;ll be asked to approve each signature in the app.</p>
+        ${nip55Web.warning ? `<p class="nostr-signer__warn" data-region="nip55web-warning" role="status">${escapeHtml(nip55Web.warning)}</p>` : ''}
         <button class="nostr-signer__button nostr-signer__button--primary" type="button" data-action="nip55web-login">Open signer app</button>
       </section>` : ''}
       <section class="nostr-signer__panel nostr-signer__panel--android" data-panel="android" hidden>

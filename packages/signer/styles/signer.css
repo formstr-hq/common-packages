@@ -162,6 +162,16 @@ textarea.nostr-signer__input {
   font-size: 0.85rem;
 }
 
+/* Advisory, non-blocking — the action below it stays enabled. */
+.nostr-signer__warn {
+  margin: 0 0 12px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
 .nostr-signer__qr {
   margin-top: 12px;
 }

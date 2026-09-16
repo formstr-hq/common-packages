@@ -76,7 +76,11 @@ function openLoginModal(options: {
   prefillNcryptsec?: string;
 } = {}): void {
   closeModal();
-  modalRoot.innerHTML = renderLoginHtml();
+  // Hide the browser NIP-55 tab inside the native shell, where the
+  // Capacitor plugin (Android tab) is the right path.
+  modalRoot.innerHTML = renderLoginHtml({
+    includeNip55Web: signer.supportsNip55Web(),
+  });
   modalRoot.hidden = false;
   if (options.prefillNcryptsec) {
     const input = modalRoot.querySelector<HTMLTextAreaElement>(

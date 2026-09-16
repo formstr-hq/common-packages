@@ -161,9 +161,33 @@ The obvious design — read the clipboard when the user returns to the tab — *
 
 This is why the transport interface has `readClipboard`/`writeClipboard` but no foreground callback: the browser simply does not provide a reliable return signal.
 
+### Browser only — not for native builds
+
+This flow is for a plain browser. Inside a Capacitor native shell the same
+device already has the real NIP-55 plugin, which supports every method and
+needs neither the clipboard nor a per-operation approval — so this path is
+disabled there (Capacitor injects a `Capacitor.isNativePlatform()` global,
+which the package checks without depending on `@capacitor/core`).
+
+Gate your UI on `signer.supportsNip55Web()`:
+
+```ts
+container.innerHTML = renderLoginHtml({
+  includeNip55Web: signer.supportsNip55Web(),
+});
+```
+
+In a native build that omits the tab and `loginWithNip55Web()` throws a
+message pointing at `loginWithAndroidSigner()`.
+
+`supportsNip55Web()` is a **capability** check, not an availability one:
+there is no web API to detect an installed Android app, so it cannot tell
+you whether a signer app is actually present. It answers "could this flow
+possibly work here", not "will it succeed".
+
 ### What to know
 
-- **Android + secure context only.** `Nip55WebSigner.isSupported()` requires an Android user agent and `navigator.clipboard.readText`. `loginWithNip55Web()` throws before persisting anything when unsupported. `http://localhost` counts as a secure context, which is handy for local testing.
+- **Android + secure context only.** `supportsNip55Web()` requires an Android user agent, the async clipboard API, and not being in a native shell. `loginWithNip55Web()` throws before persisting anything when unsupported. `http://localhost` counts as a secure context, which is handy for local testing.
 - **Chrome will ask to read the clipboard** the first time; approve it, or every read fails.
 - **One approval per operation.** There is no background channel, so `getPublicKey`, every `signEvent`, and every `nip04`/`nip44` call re-opens the app. `unlock()` resumes the account from its cached pubkey without opening the app; the first real signing call prompts.
 - **No rejection signal, but there is a timeout.** NIP-55's reject path is an Android intent extra a browser never sees, so a denial is indistinguishable from the user never returning. The package therefore times requests out (`timeoutMs`, default 120s; `0` disables) and rejects with a clear message. Pass a `signal` to cancel yourself — aborting rejects with `name === 'AbortError'`, matching the NIP-46 flow.
@@ -239,7 +263,7 @@ const detach = attachLoginListeners(container, signer, {
 // later: detach();
 ```
 
-The login modal renders one tab per method (Create, Existing key, Extension, Bunker URI, Remote QR, Signer app, Android). The Android tab is always rendered but its list of installed signers is fetched lazily on activation via `signer.listAndroidSignerApps()` — it errors clearly if no Android plugin is configured (e.g. when running on web). The Signer app tab drives `loginWithNip55Web()` and needs no plugin.
+The login modal renders one tab per method (Create, Existing key, Extension, Bunker URI, Remote QR, Signer app, Android). The Android tab is always rendered but its list of installed signers is fetched lazily on activation via `signer.listAndroidSignerApps()` — it errors clearly if no Android plugin is configured (e.g. when running on web). The Signer app tab drives `loginWithNip55Web()` and needs no plugin; pass `renderLoginHtml({ includeNip55Web: signer.supportsNip55Web() })` to hide it in native builds.
 
 ## Errors
 

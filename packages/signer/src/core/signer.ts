@@ -31,6 +31,7 @@ import {
 } from '../nip55.js';
 import {
   Nip55WebSigner,
+  browserNip55Transport,
   type Nip55WebTransport,
 } from '../nip55Web.js';
 
@@ -348,6 +349,22 @@ export class Signer {
   }
 
   /**
+   * Whether `loginWithNip55Web` can run in this environment — a plain
+   * Android browser with async clipboard access. False in a Capacitor
+   * native shell (use {@link loginWithAndroidSigner} there), and on
+   * desktop/iOS/SSR.
+   *
+   * A **capability** check, not an availability one: there is no web API
+   * to detect an installed Android app, so this says nothing about
+   * whether a signer app is actually installed. Use it to hide the
+   * browser flow where it cannot work, not to promise that it will.
+   */
+  supportsNip55Web(transport?: Nip55WebTransport): boolean {
+    const t = transport ?? this.#nip55WebTransport ?? browserNip55Transport();
+    return t.isSupported();
+  }
+
+  /**
    * Sign in via a NIP-55 Android external signer (Amber, etc) **from a
    * plain browser**, with no Capacitor/native bridge. Opens the installed
    * signer app through a `nostrsigner` intent and reads the result back
@@ -355,6 +372,10 @@ export class Signer {
    * intent names no package, this works with any app that registered the
    * `nostrsigner` scheme — one opens directly, several show the Android
    * "Open with" chooser.
+   *
+   * Not for native builds — inside a Capacitor shell use
+   * {@link loginWithAndroidSigner}, which needs no clipboard and no
+   * per-operation approval.
    *
    * Every operation is a separate approval, and a rejection is
    * indistinguishable from the user simply not returning, so callers must

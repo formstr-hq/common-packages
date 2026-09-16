@@ -783,6 +783,34 @@ describe('NIP-55 web (intents + clipboard)', () => {
       expect(s.listAccounts()).toHaveLength(0);
     });
 
+    it('supportsNip55Web reflects the configured transport', () => {
+      const supported = new FakeNip55Transport(generateSecretKey());
+      const unsupported = new FakeNip55Transport(generateSecretKey());
+      unsupported.supported = false;
+
+      expect(
+        createSigner({
+          storage: makeMockStorage(),
+          nip55WebTransport: supported,
+        }).supportsNip55Web(),
+      ).toBe(true);
+      expect(
+        createSigner({
+          storage: makeMockStorage(),
+          nip55WebTransport: unsupported,
+        }).supportsNip55Web(),
+      ).toBe(false);
+    });
+
+    it('supportsNip55Web accepts a per-call transport and falls back to the default', () => {
+      const s = createSigner({ storage: makeMockStorage() });
+      const supported = new FakeNip55Transport(generateSecretKey());
+      expect(s.supportsNip55Web(supported)).toBe(true);
+      // No transport configured -> browser default, which is not Android UA
+      // under happy-dom.
+      expect(s.supportsNip55Web()).toBe(false);
+    });
+
     it('switchAccount closes the outgoing signer', async () => {
       const skA = generateSecretKey();
       const skB = generateSecretKey();
@@ -850,6 +878,59 @@ describe('NIP-55 web (intents + clipboard)', () => {
       });
       await expect(s.logout()).resolves.toBeUndefined();
       expect(s.getActiveSigner()).toBeNull();
+    });
+  });
+
+  describe('native shell exclusion', () => {
+    const realUA = navigator.userAgent;
+    const g = globalThis as { Capacitor?: unknown };
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Linux; Android 14; Pixel)',
+        configurable: true,
+      });
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { readText: async () => '', writeText: async () => undefined },
+        configurable: true,
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: realUA,
+        configurable: true,
+      });
+      delete g.Capacitor;
+    });
+
+    it('is supported in a plain Android browser', () => {
+      expect(browserNip55Transport().isSupported()).toBe(true);
+    });
+
+    it('is unsupported inside a Capacitor native shell', () => {
+      g.Capacitor = { isNativePlatform: () => true };
+      expect(browserNip55Transport().isSupported()).toBe(false);
+    });
+
+    it('ignores a Capacitor global that reports web', () => {
+      g.Capacitor = { isNativePlatform: () => false };
+      expect(browserNip55Transport().isSupported()).toBe(true);
+    });
+
+    it('ignores a Capacitor global without isNativePlatform', () => {
+      g.Capacitor = {};
+      expect(browserNip55Transport().isSupported()).toBe(true);
+    });
+
+    it('tells a native build to use loginWithAndroidSigner', async () => {
+      g.Capacitor = { isNativePlatform: () => true };
+      const transport = new FakeNip55Transport(generateSecretKey());
+      transport.supported = false;
+      const signer = new Nip55WebSigner({ transport });
+      await expect(signer.getPublicKey()).rejects.toThrow(
+        /use loginWithAndroidSigner/,
+      );
     });
   });
 

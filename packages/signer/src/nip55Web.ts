@@ -129,16 +129,39 @@ function abortError(): Error {
   return error;
 }
 
+/** Capacitor's injected global, when running inside a native shell. */
+interface CapacitorGlobalLike {
+  isNativePlatform?: () => boolean;
+}
+
+/**
+ * True when the page is running inside a Capacitor native shell (the
+ * Android/iOS app) rather than a plain browser. Capacitor injects a
+ * `Capacitor` global into the WebView, so this needs no dependency on
+ * `@capacitor/core` — which the package deliberately does not pull in.
+ */
+function isNativeShell(): boolean {
+  const cap = (globalThis as { Capacitor?: CapacitorGlobalLike }).Capacitor;
+  return typeof cap?.isNativePlatform === 'function' && cap.isNativePlatform();
+}
+
 /**
  * Browser transport: `window.open` for the intent, `navigator.clipboard`
- * for the result, `visibilitychange` for the return. Globals are read
- * lazily so importing this module stays safe in Node.
+ * for the result. Globals are read lazily so importing this module stays
+ * safe in Node.
+ *
+ * This transport is for a **plain browser only**. Inside a Capacitor
+ * native shell the same device has the real NIP-55 plugin, which supports
+ * every method and does not need the clipboard or a per-operation
+ * approval, so this flow is not offered there — a native host should use
+ * `loginWithAndroidSigner` instead.
  */
 export function browserNip55Transport(): Nip55WebTransport {
   return {
     isSupported() {
       return (
         typeof navigator !== 'undefined' &&
+        !isNativeShell() &&
         /Android/i.test(navigator.userAgent) &&
         typeof navigator.clipboard?.readText === 'function'
       );
@@ -254,11 +277,15 @@ export class Nip55WebSigner implements ActiveSigner {
   }
 
   #checkSupport(): void {
-    if (!this.#transport.isSupported()) {
+    if (this.#transport.isSupported()) return;
+    if (isNativeShell()) {
       throw new Error(
-        '@formstr/signer: NIP-55 web signing requires an Android browser with clipboard access (a signer app registering the `nostrsigner` scheme must be installed)',
+        '@formstr/signer: the browser NIP-55 flow is not for native builds — use loginWithAndroidSigner() with the Capacitor plugin instead',
       );
     }
+    throw new Error(
+      '@formstr/signer: NIP-55 web signing requires an Android browser with clipboard access (a signer app registering the `nostrsigner` scheme must be installed)',
+    );
   }
 
   /** One poll tick: read the clipboard and settle if the signer answered. */

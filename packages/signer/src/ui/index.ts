@@ -45,11 +45,26 @@ const TABS: ReadonlyArray<{ id: LoginTab; label: string }> = [
   { id: 'android', label: 'Android' },
 ];
 
-export function renderLoginHtml(): string {
-  const tabs = TABS.map(
-    (t) =>
-      `<button class="nostr-signer__tab nostr-signer__tab--${t.id}" type="button" data-tab="${t.id}">${t.label}</button>`,
-  ).join('');
+export interface RenderLoginOptions {
+  /**
+   * Include the "Signer app" tab (browser NIP-55). Defaults to `true`.
+   *
+   * Pass `signer.supportsNip55Web()` to hide it where it cannot work —
+   * notably inside a Capacitor native shell, where
+   * `loginWithAndroidSigner` is the right path. Omit it in a native build
+   * and the tab would only ever error.
+   */
+  includeNip55Web?: boolean;
+}
+
+export function renderLoginHtml(options: RenderLoginOptions = {}): string {
+  const includeNip55Web = options.includeNip55Web ?? true;
+  const tabs = TABS.filter((t) => t.id !== 'nip55web' || includeNip55Web)
+    .map(
+      (t) =>
+        `<button class="nostr-signer__tab nostr-signer__tab--${t.id}" type="button" data-tab="${t.id}">${t.label}</button>`,
+    )
+    .join('');
 
   return `<div class="nostr-signer__root">
   <div class="nostr-signer__modal">
@@ -105,10 +120,10 @@ export function renderLoginHtml(): string {
           <button class="nostr-signer__button nostr-signer__button--secondary" type="button" data-action="nostrconnect-cancel">Cancel</button>
         </div>
       </section>
-      <section class="nostr-signer__panel nostr-signer__panel--nip55web" data-panel="nip55web" hidden>
+      ${includeNip55Web ? `<section class="nostr-signer__panel nostr-signer__panel--nip55web" data-panel="nip55web" hidden>
         <p class="nostr-signer__hint">Sign in with a signer app installed on this Android device, using the browser (NIP-55). You&rsquo;ll be asked to approve each signature in the app.</p>
         <button class="nostr-signer__button nostr-signer__button--primary" type="button" data-action="nip55web-login">Open signer app</button>
-      </section>
+      </section>` : ''}
       <section class="nostr-signer__panel nostr-signer__panel--android" data-panel="android" hidden>
         <p class="nostr-signer__hint">Sign in with an Android external signer app (NIP-55) such as Amber.</p>
         <p class="nostr-signer__status" data-region="android-status">Loading installed signers&hellip;</p>
@@ -283,9 +298,13 @@ export function attachLoginListeners(
   });
 
   // ---- signer app (NIP-55 over the web) ----
-  on(q('[data-action="nip55web-login"]'), 'click', async (ev) => {
+  // Absent when renderLoginHtml({ includeNip55Web: false }) omitted the tab.
+  const nip55WebBtn = rootEl.querySelector<HTMLButtonElement>(
+    '[data-action="nip55web-login"]',
+  );
+  if (nip55WebBtn) on(nip55WebBtn, 'click', async () => {
     clearError();
-    const btn = ev.currentTarget as HTMLButtonElement;
+    const btn = nip55WebBtn;
     btn.disabled = true;
     nip55WebAbort = new AbortController();
     try {

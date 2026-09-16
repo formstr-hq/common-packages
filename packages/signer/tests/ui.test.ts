@@ -79,6 +79,25 @@ describe('renderLoginHtml', () => {
     );
   });
 
+  it('omits the Signer app tab and panel when includeNip55Web is false', () => {
+    // Native shell: the Capacitor Android tab is the right path, so the
+    // browser flow must not be offered.
+    const html = renderLoginHtml({ includeNip55Web: false });
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    expect(container.querySelector('[data-tab="nip55web"]')).toBeNull();
+    expect(container.querySelector('[data-panel="nip55web"]')).toBeNull();
+    expect(container.querySelector('[data-action="nip55web-login"]')).toBeNull();
+    // The other six tabs remain.
+    expect(container.querySelectorAll('[data-tab]').length).toBe(6);
+    expect(container.querySelector('[data-tab="android"]')).toBeTruthy();
+  });
+
+  it('includes the Signer app tab by default', () => {
+    expect(root.querySelector('[data-tab="nip55web"]')).toBeTruthy();
+    expect(root.querySelector('[data-action="nip55web-login"]')).toBeTruthy();
+  });
+
   it('includes the error region and the close button', () => {
     expect(root.querySelector('[data-region="error"]')).toBeTruthy();
     expect(root.querySelector('[data-action="cancel"]')).toBeTruthy();
@@ -695,6 +714,19 @@ describe('attachLoginListeners', () => {
       const list = root.querySelector<HTMLUListElement>('[data-region="android-apps"]')!;
       const labels = Array.from(list.querySelectorAll('button')).map((b) => b.textContent);
       expect(labels).toEqual(['Latest (com.latest.signer)']);
+    });
+  });
+
+  describe('renderLoginHtml({ includeNip55Web: false })', () => {
+    it('attaches cleanly without the Signer app tab', () => {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      container.innerHTML = renderLoginHtml({ includeNip55Web: false });
+      const signer = makeSignerStub();
+      expect(() =>
+        attachLoginListeners(container, asSigner(signer)),
+      ).not.toThrow();
+      container.remove();
     });
   });
 

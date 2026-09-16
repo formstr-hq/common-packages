@@ -98,6 +98,50 @@ describe('renderLoginHtml', () => {
     expect(root.querySelector('[data-action="nip55web-login"]')).toBeTruthy();
   });
 
+  it('shows the option with a warning when nip55Web reports one', () => {
+    // Firefox for Android: visible and attemptable, with an advisory note.
+    const container = document.createElement('div');
+    container.innerHTML = renderLoginHtml({
+      nip55Web: {
+        visible: true,
+        warning: 'May not work in Firefox for Android.',
+        reason: 'firefox',
+      },
+    });
+    const warn = container.querySelector<HTMLElement>(
+      '[data-region="nip55web-warning"]',
+    );
+    expect(warn).toBeTruthy();
+    expect(warn!.textContent).toContain('not work in Firefox');
+    // A warning must not remove the action.
+    expect(container.querySelector('[data-action="nip55web-login"]')).toBeTruthy();
+  });
+
+  it('escapes the warning text rather than injecting markup', () => {
+    const container = document.createElement('div');
+    container.innerHTML = renderLoginHtml({
+      nip55Web: {
+        visible: true,
+        warning: '<img src=x onerror=alert(1)>',
+      },
+    });
+    const warn = container.querySelector<HTMLElement>(
+      '[data-region="nip55web-warning"]',
+    )!;
+    // The angle brackets are shown as text; no element is created.
+    expect(warn.querySelector('img')).toBeNull();
+    expect(warn.textContent).toContain('<img');
+  });
+
+  it('hides the tab when nip55Web.visible is false', () => {
+    const container = document.createElement('div');
+    container.innerHTML = renderLoginHtml({
+      nip55Web: { visible: false, reason: 'native' },
+    });
+    expect(container.querySelector('[data-tab="nip55web"]')).toBeNull();
+    expect(container.querySelectorAll('[data-tab]').length).toBe(6);
+  });
+
   it('includes the error region and the close button', () => {
     expect(root.querySelector('[data-region="error"]')).toBeTruthy();
     expect(root.querySelector('[data-action="cancel"]')).toBeTruthy();

@@ -32,6 +32,7 @@ import {
 import {
   Nip55WebSigner,
   browserNip55Transport,
+  type Nip55WebSupport,
   type Nip55WebTransport,
 } from '../nip55Web.js';
 
@@ -360,8 +361,24 @@ export class Signer {
    * browser flow where it cannot work, not to promise that it will.
    */
   supportsNip55Web(transport?: Nip55WebTransport): boolean {
+    return this.nip55WebSupport(transport).visible;
+  }
+
+  /**
+   * Whether to offer the browser NIP-55 option, plus an advisory `warning`
+   * where it is known to be flaky. Prefer this in UI code.
+   *
+   * Nothing here is a hard block. `visible: false` covers only environments
+   * where the mechanism cannot exist — a Capacitor native shell (the plugin
+   * path is better) and non-Android platforms (no `nostrsigner` handler).
+   * Firefox for Android is `visible: true` **with a warning**, because it
+   * advertises `readText` but never grants a persistent permission, so the
+   * poll loop usually cannot complete. Users are still allowed to try.
+   */
+  nip55WebSupport(transport?: Nip55WebTransport): Nip55WebSupport {
     const t = transport ?? this.#nip55WebTransport ?? browserNip55Transport();
-    return t.isSupported();
+    if (t.supportStatus) return t.supportStatus();
+    return { visible: t.isSupported() };
   }
 
   /**

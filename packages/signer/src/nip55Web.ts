@@ -25,6 +25,41 @@ import { normalizeNip55Identifier } from './nip55.js';
  *
  * @see https://github.com/nostr-protocol/nips/blob/master/55.md
  */
+/** Why the browser NIP-55 flow cannot run here. */
+export type Nip55WebSupportReason =
+  | 'native'
+  | 'not-android'
+  | 'no-clipboard'
+  | 'firefox';
+
+/**
+ * Whether the browser NIP-55 option should be shown, plus an advisory
+ * warning where it is known to be flaky.
+ *
+ * Visibility and warnings are deliberately separate, and nothing is
+ * hard-blocked. The option is hidden only where the mechanism cannot exist
+ * at all — a Capacitor native shell (the plugin path is strictly better)
+ * and non-Android platforms (the `nostrsigner` intent cannot resolve).
+ *
+ * Firefox for Android is **shown with a warning** rather than blocked. It
+ * advertises `readText` but never grants a persistent permission, so every
+ * read needs transient activation and the poll loop cannot complete —
+ * verified on an emulator (Firefox 125). We still let the user try, because
+ * blocking a browser outright is a worse failure than a warning, and
+ * browser behaviour changes.
+ */
+export interface Nip55WebSupport {
+  /** Render the option at all. False in native shells and on non-Android. */
+  visible: boolean;
+  /**
+   * Advisory, non-blocking message to show beside the option. The flow
+   * remains attemptable; this only sets expectations.
+   */
+  warning?: string;
+  /** Machine-readable reason for the warning / hidden state. */
+  reason?: Nip55WebSupportReason;
+}
+
 export interface Nip55WebTransport {
   /**
    * Whether this environment can run the intent + clipboard flow at all.
@@ -33,6 +68,13 @@ export interface Nip55WebTransport {
    * dead intent.
    */
   isSupported(): boolean;
+  /**
+   * Richer form of {@link isSupported}: whether to *offer* the option and
+   * whether it actually works. Hosts should prefer this so they can show an
+   * explanatory hint (e.g. "does not work on Firefox") rather than hide a
+   * capability that other browsers on the same device do have.
+   */
+  supportStatus?(): Nip55WebSupport;
   /** Hand the intent URI to the OS (a browser typically `window.open`s it). */
   open(intent: string): void;
   /** Read the current clipboard text. */
@@ -146,6 +188,30 @@ function isNativeShell(): boolean {
 }
 
 /**
+ * True for Gecko-based Android browsers (Firefox/Fenix, Focus, Klar).
+ *
+ * These are the one environment that reports `navigator.clipboard.readText`
+ * yet cannot run this flow. Firefox for Android never grants a persistent
+ * `clipboard-read` permission: every read needs transient user activation
+ * and is answered with an ephemeral "Paste" menu, so a background poll can
+ * only ever fail (verified on an emulator, Firefox 125 — even directly
+ * inside a click handler, with focus and user activation, `readText()`
+ * rejects with "Clipboard read operation is not allowed").
+ *
+ * UA sniffing is used because there is no synchronous feature test for
+ * "does reading require activation". `Gecko/` is checked alongside the
+ * product tokens so Focus/Klar are caught too; Chromium UAs only ever say
+ * "like Gecko", never "Gecko/".
+ *
+ * `navigator` is guaranteed by the caller — `supportStatus` returns before
+ * this in a DOM-less environment.
+ */
+function isGeckoBrowser(): boolean {
+  const ua = navigator.userAgent;
+  return /Firefox\/|FxiOS\/|Focus\/|Gecko\//.test(ua);
+}
+
+/**
  * Browser transport: `window.open` for the intent, `navigator.clipboard`
  * for the result. Globals are read lazily so importing this module stays
  * safe in Node.
@@ -158,13 +224,39 @@ function isNativeShell(): boolean {
  */
 export function browserNip55Transport(): Nip55WebTransport {
   return {
+    supportStatus() {
+      // Server-side rendering / plain Node: no DOM, so nothing to offer.
+      if (typeof navigator === 'undefined') {
+        return { visible: false, reason: 'not-android' as const };
+      }
+      // A Capacitor shell has the real NIP-55 plugin, which is strictly
+      // better (every method, no clipboard, no per-operation approval), so
+      // the browser flow is not offered there at all.
+      if (isNativeShell()) {
+        return { visible: false, reason: 'native' as const };
+      }
+      if (!/Android/i.test(navigator.userAgent)) {
+        return { visible: false, reason: 'not-android' as const };
+      }
+      if (typeof navigator.clipboard?.readText !== 'function') {
+        return { visible: false, reason: 'no-clipboard' as const };
+      }
+      if (isGeckoBrowser()) {
+        // Shown, but flagged: every read needs transient activation, so the
+        // poll loop cannot complete. Still attemptable on purpose.
+        return {
+          visible: true,
+          reason: 'firefox' as const,
+          warning:
+            'May not work in Firefox for Android — the clipboard usually cannot be read automatically. If it hangs, try Chrome, Brave, or the Android app.',
+        };
+      }
+      return { visible: true };
+    },
     isSupported() {
-      return (
-        typeof navigator !== 'undefined' &&
-        !isNativeShell() &&
-        /Android/i.test(navigator.userAgent) &&
-        typeof navigator.clipboard?.readText === 'function'
-      );
+      // "Has the API surface", not "is guaranteed to work": Firefox returns
+      // true here and is allowed to try, with a warning from supportStatus().
+      return this.supportStatus!().visible;
     },
     open(intent) {
       window.open(intent, '_blank');
@@ -211,6 +303,19 @@ export class Nip55WebSigner implements ActiveSigner {
   /** True when the configured transport can actually open a signer app. */
   isSupported(): boolean {
     return this.#transport.isSupported();
+  }
+
+  /**
+   * Whether to offer the option and whether it works. Prefer this over
+   * {@link isSupported} so a host can surface `message` — notably the
+   * Firefox case, which is shown but cannot complete.
+   */
+  supportStatus(): Nip55WebSupport {
+    const status = this.#transport.supportStatus;
+    if (status) return status.call(this.#transport);
+    // A custom transport without `supportStatus` only gets a boolean, so we
+    // can't add a warning; just mirror visibility.
+    return { visible: this.#transport.isSupported() };
   }
 
   async getPublicKey(): Promise<string> {
@@ -277,8 +382,10 @@ export class Nip55WebSigner implements ActiveSigner {
   }
 
   #checkSupport(): void {
-    if (this.#transport.isSupported()) return;
-    if (isNativeShell()) {
+    const { visible, reason } = this.supportStatus();
+    // A warning (e.g. Firefox) does not block — the user is allowed to try.
+    if (visible) return;
+    if (reason === 'native') {
       throw new Error(
         '@formstr/signer: the browser NIP-55 flow is not for native builds — use loginWithAndroidSigner() with the Capacitor plugin instead',
       );

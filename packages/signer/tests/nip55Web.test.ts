@@ -12,6 +12,7 @@ import {
 import {
   Nip55WebSigner,
   browserNip55Transport,
+  type Nip55WebSupport,
   createSigner,
   type Nip55WebTransport,
 } from '../src/index.js';
@@ -70,6 +71,9 @@ function parseIntent(intent: string): ParsedIntent {
  */
 class FakeNip55Transport implements Nip55WebTransport {
   supported = true;
+  /** Mirrors browserNip55Transport: hidden here means "cannot exist". */
+  visible = true;
+  warning: string | undefined = undefined;
   pubkeyMode: PubkeyMode = 'hex';
   tamperSignature = false;
   failOpen: unknown = null;
@@ -98,8 +102,18 @@ class FakeNip55Transport implements Nip55WebTransport {
     return getPublicKey(this.secretKey);
   }
 
+  /**
+   * Mirrors the real transport: `isSupported` is the hard gate (the API
+   * surface exists), while `supported` is kept for warning-only transports.
+   */
   isSupported(): boolean {
-    return this.supported;
+    return this.visible;
+  }
+
+  supportStatus(): Nip55WebSupport {
+    return this.visible
+      ? { visible: true, warning: this.warning }
+      : { visible: false, reason: 'not-android' };
   }
 
   open(intent: string): void {
@@ -467,7 +481,9 @@ describe('NIP-55 web (intents + clipboard)', () => {
   describe('failure handling', () => {
     it('throws before opening anything when the transport is unsupported', async () => {
       const transport = new FakeNip55Transport(generateSecretKey());
-      transport.supported = false;
+      // `visible: false` is the hard gate; `supported: false` is reserved
+      // for a warning-only transport (Firefox) that is still attemptable.
+      transport.visible = false;
       const signer = new Nip55WebSigner({ transport });
       expect(signer.isSupported()).toBe(false);
       await expect(signer.getPublicKey()).rejects.toThrow(/Android browser/);
@@ -783,10 +799,10 @@ describe('NIP-55 web (intents + clipboard)', () => {
       expect(s.listAccounts()).toHaveLength(0);
     });
 
-    it('supportsNip55Web reflects the configured transport', () => {
+    it('supportsNip55Web reflects the configured transport visibility', () => {
       const supported = new FakeNip55Transport(generateSecretKey());
-      const unsupported = new FakeNip55Transport(generateSecretKey());
-      unsupported.supported = false;
+      const hidden = new FakeNip55Transport(generateSecretKey());
+      hidden.visible = false;
 
       expect(
         createSigner({
@@ -797,9 +813,24 @@ describe('NIP-55 web (intents + clipboard)', () => {
       expect(
         createSigner({
           storage: makeMockStorage(),
-          nip55WebTransport: unsupported,
+          nip55WebTransport: hidden,
         }).supportsNip55Web(),
       ).toBe(false);
+    });
+
+    it('nip55WebSupport exposes a warning while staying visible', () => {
+      const warned = new FakeNip55Transport(generateSecretKey());
+      warned.warning = 'May not work in Firefox for Android.';
+      const s = createSigner({
+        storage: makeMockStorage(),
+        nip55WebTransport: warned,
+      });
+      expect(s.nip55WebSupport()).toEqual({
+        visible: true,
+        warning: 'May not work in Firefox for Android.',
+      });
+      // A warning must NOT hide or disable the option.
+      expect(s.supportsNip55Web()).toBe(true);
     });
 
     it('supportsNip55Web accepts a per-call transport and falls back to the default', () => {
@@ -904,13 +935,18 @@ describe('NIP-55 web (intents + clipboard)', () => {
       delete g.Capacitor;
     });
 
-    it('is supported in a plain Android browser', () => {
+    it('is visible and unsupported in a plain Android browser', () => {
       expect(browserNip55Transport().isSupported()).toBe(true);
+      expect(browserNip55Transport().supportStatus!()).toEqual({ visible: true });
     });
 
-    it('is unsupported inside a Capacitor native shell', () => {
+    it('is hidden inside a Capacitor native shell', () => {
       g.Capacitor = { isNativePlatform: () => true };
       expect(browserNip55Transport().isSupported()).toBe(false);
+      expect(browserNip55Transport().supportStatus!()).toEqual({
+        visible: false,
+        reason: 'native',
+      });
     });
 
     it('ignores a Capacitor global that reports web', () => {
@@ -924,13 +960,137 @@ describe('NIP-55 web (intents + clipboard)', () => {
     });
 
     it('tells a native build to use loginWithAndroidSigner', async () => {
+      // Use the real transport so the `native` reason is derived, not stubbed.
       g.Capacitor = { isNativePlatform: () => true };
-      const transport = new FakeNip55Transport(generateSecretKey());
-      transport.supported = false;
-      const signer = new Nip55WebSigner({ transport });
+      const signer = new Nip55WebSigner({
+        transport: browserNip55Transport(),
+      });
       await expect(signer.getPublicKey()).rejects.toThrow(
         /use loginWithAndroidSigner/,
       );
+    });
+  });
+
+  describe('Firefox for Android', () => {
+    const realUA = navigator.userAgent;
+    const FF_UA =
+      'Mozilla/5.0 (Android 14; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0';
+    const CHROME_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/152.0.0.0';
+
+    function setUA(ua: string): void {
+      Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true });
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { readText: async () => '', writeText: async () => undefined },
+        configurable: true,
+      });
+    }
+
+    afterEach(() => setUA(realUA));
+
+    it('is shown but warned about, not blocked', () => {
+      setUA(FF_UA);
+      const status = browserNip55Transport().supportStatus!();
+      expect(status.visible).toBe(true);
+      expect(status.reason).toBe('firefox');
+      expect(status.warning).toMatch(/Firefox/i);
+      // Still attemptable — we warn, we do not gate.
+      expect(browserNip55Transport().isSupported()).toBe(true);
+    });
+
+    it('does not warn on Chrome for Android', () => {
+      setUA(CHROME_UA);
+      const status = browserNip55Transport().supportStatus!();
+      expect(status.visible).toBe(true);
+      expect(status.warning).toBeUndefined();
+      expect(status.reason).toBeUndefined();
+    });
+
+    it('detects Gecko variants (Focus/Klar) too', () => {
+      setUA('Mozilla/5.0 (Android 14; Mobile; rv:125.0) Gecko/125.0 Focus/125.0');
+      expect(browserNip55Transport().supportStatus!().reason).toBe('firefox');
+    });
+
+    it('does not mistake Chromium "like Gecko" for Gecko', () => {
+      setUA(
+        'Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36',
+      );
+      expect(browserNip55Transport().supportStatus!().reason).toBeUndefined();
+    });
+
+    it('is hidden on a non-Android platform', () => {
+      setUA('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Firefox/125.0');
+      const status = browserNip55Transport().supportStatus!();
+      expect(status.visible).toBe(false);
+      expect(status.reason).toBe('not-android');
+    });
+
+    it('is hidden when the async clipboard API is missing', () => {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: CHROME_UA,
+        configurable: true,
+      });
+      Object.defineProperty(navigator, 'clipboard', {
+        value: undefined,
+        configurable: true,
+      });
+      const status = browserNip55Transport().supportStatus!();
+      expect(status.visible).toBe(false);
+      expect(status.reason).toBe('no-clipboard');
+    });
+  });
+
+  describe('server-side rendering (no navigator)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('is hidden and does not throw when navigator is absent', () => {
+      vi.stubGlobal('navigator', undefined);
+      // Guards SSR/prerender: importing and querying must be safe in Node.
+      expect(browserNip55Transport().isSupported()).toBe(false);
+      expect(browserNip55Transport().supportStatus!()).toEqual({
+        visible: false,
+        reason: 'not-android',
+      });
+      // The Gecko sniff also has to survive a missing navigator.
+      expect(browserNip55Transport().supportStatus!().reason).toBe('not-android');
+    });
+  });
+
+  describe('custom transport support fallback', () => {
+    /** A transport written before `supportStatus` existed. */
+    function legacyTransport(supported: boolean): Nip55WebTransport {
+      return {
+        isSupported: () => supported,
+        open: () => undefined,
+        readClipboard: () => Promise.resolve(''),
+        writeClipboard: () => Promise.resolve(),
+      };
+    }
+
+    it('mirrors isSupported when supportStatus is absent', () => {
+      const signer = new Nip55WebSigner({ transport: legacyTransport(true) });
+      expect(signer.supportStatus()).toEqual({ visible: true });
+    });
+
+    it('reports hidden when a legacy transport is unsupported', () => {
+      const signer = new Nip55WebSigner({ transport: legacyTransport(false) });
+      expect(signer.supportStatus()).toEqual({ visible: false });
+    });
+
+    it('applies the same fallback through Signer.nip55WebSupport', () => {
+      expect(
+        createSigner({
+          storage: makeMockStorage(),
+          nip55WebTransport: legacyTransport(true),
+        }).nip55WebSupport(),
+      ).toEqual({ visible: true });
+      expect(
+        createSigner({
+          storage: makeMockStorage(),
+          nip55WebTransport: legacyTransport(false),
+        }).nip55WebSupport(),
+      ).toEqual({ visible: false });
     });
   });
 

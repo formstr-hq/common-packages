@@ -1,6 +1,6 @@
 # @formstr/signer
 
-A vanilla TypeScript Nostr signer with an optional unstyled login UI. Supports NIP-07 (browser extension), NIP-46 (bunker URI + nostrconnect QR), NIP-49 (ncryptsec at rest), and NIP-55 (Android external signer apps).
+A vanilla TypeScript Nostr signer with an optional unstyled login UI. Supports NIP-07 (browser extension), NIP-46 (bunker URI + nostrconnect QR), NIP-49 (ncryptsec at rest), NIP-55 (Android external signer apps, via a Capacitor plugin **or** a plain browser), and a pure-web signer-app flow.
 
 ## Install
 
@@ -28,6 +28,7 @@ await signer.loginWithExtension();
 await signer.loginWithBunkerUri('bunker://...');
 await signer.loginWithNostrConnect({ relays: ['wss://relay.example'], onUri: (uri) => /* show QR */ });
 await signer.loginWithAndroidSigner({ packageName: 'com.greenart7c3.nostrsigner' });
+await signer.loginWithNip55Web(); // Android browser, no Capacitor shell — see below
 
 // Sign events — the active signer never exposes the privkey
 const active = signer.getActiveSigner()!;
@@ -79,6 +80,7 @@ Per-method behavior:
 | `extension` | constructs `ExtensionSigner` (stateless wrapper around `window.nostr`) | no |
 | `nip46` | reuses persisted `clientSecretKey` + `remoteSignerPubkey` + `relays` to attach a `BunkerSigner` — **skips the `connect` request**, which is what triggers a fresh approval prompt every reload | no |
 | `android` | builds the `AndroidSigner` directly from cached `pubkey` + `npub` + `androidPackageName`, **bypassing the plugin's `getPublicKey` content-provider call** | no |
+| `nip55-web` | builds a `Nip55WebSigner` from the cached `pubkey`; it does not open the signer app until the next sign/encrypt call | no |
 | `ncryptsec` | returns `null` — the passphrase is not (and must not be) persisted; caller drives the prompt and calls `loginWithNcryptsec(account.ncryptsec, passphrase)` | n/a (by design) |
 
 `unlock()` returns `null` (without emitting an event) when there is no active account, when the account is missing fields it needs to resume, when method is `nip46` but no `pool` was supplied, or when method is `android` but no plugin is configured. On success it emits the same `login`/`switch` event the corresponding `loginWith*` would.
@@ -133,7 +135,53 @@ const myPlugin: AndroidSignerPlugin = {
 
 The interface signatures intentionally mirror `nostr-signer-capacitor-plugin`'s exported `NostrSignerPlugin` so the real wrapper is directly assignable. If you write a custom plugin, the package's test suite includes a compile-time conformance guard (`tests/helpers/mockAndroidPlugin.ts`) you can model your own check on — wire it up in your CI and you'll catch any drift the moment the upstream wrapper changes shape.
 
-**Identifier shape.** The `npub` field returned by `getPublicKey` is permissive: the package accepts either a bech32 `npub1…` string (the NIP-55 spec shape) or a 32-byte hex pubkey (what current Amber builds actually return). Whichever you hand back, the package normalizes internally — `StoredAccount.npub` is always bech32 and `StoredAccount.pubkey` is always lowercase hex. Anything else surfaces as a debuggable error including a preview of what was received.
+**Identifier shape.** The `npub` field returned by `getPublicKey` is permissive: the package accepts either a bech32 `npub1…` string (the NIP-55 spec shape) or a 32-byte hex pubkey (what current Amber builds actually return). Whichever you hand back, the package normalizes internally — `StoredAccount.npub` is always bech32 and `StoredAccount.pubkey` is always lowercase hex. Anything else surfaces as a debuggable error including a preview of what was received. The same normalization (plus `nprofile1…`) is shared with the browser flow below.
+
+## NIP-55 in a plain browser (`loginWithNip55Web`)
+
+The Capacitor plugin above only works inside a native Android shell. `loginWithNip55Web()` covers the other case: a **plain browser on Android** (mobile web, a PWA) talking to any installed NIP-55 signer app with no native bridge.
+
+```ts
+await signer.loginWithNip55Web();
+```
+
+The mechanism:
+
+1. **Plant a sentinel.** The package overwrites the clipboard with a random `__formstr_nip55_sentinel_…__` string. This is what makes the result identifiable — otherwise a clipboard left over from an earlier approval would look like a fresh answer and resolve immediately.
+2. **Open the intent.** It opens `intent:#Intent;scheme=nostrsigner;S.type=…;end` via `window.open`. No package is named, so Android resolves it against every app that registered the scheme — one signer opens directly, several show the standard "Open with" chooser. This is not Amber-specific.
+3. **Poll the clipboard.** The signer app signs and copies the result to the clipboard. The package polls `navigator.clipboard.readText()` every `pollIntervalMs` (default 500ms) until the value differs from the sentinel, then resolves.
+
+### Why polling, not `visibilitychange`
+
+The obvious design — read the clipboard when the user returns to the tab — **does not work on Android Chrome**, verified on a Pixel emulator running Amber 6.6.4:
+
+- Returning from the signer app fires **no** `visibilitychange` or `focus` event. `window.open` produces a brief hide/show blip *before* the signer is even open (a `blur`, two `visibilitychange`s and a `focus` within ~400ms), and then nothing on the actual return. An event-driven read therefore never runs.
+- Even when a read is attempted right after returning, Chrome rejects it with `NotAllowedError: Document is not focused` — the page is visible but not focused, and it does not regain focus on its own.
+- `setInterval`, by contrast, keeps ticking while the tab is backgrounded, so polling observes the result regardless.
+
+This is why the transport interface has `readClipboard`/`writeClipboard` but no foreground callback: the browser simply does not provide a reliable return signal.
+
+### What to know
+
+- **Android + secure context only.** `Nip55WebSigner.isSupported()` requires an Android user agent and `navigator.clipboard.readText`. `loginWithNip55Web()` throws before persisting anything when unsupported. `http://localhost` counts as a secure context, which is handy for local testing.
+- **Chrome will ask to read the clipboard** the first time; approve it, or every read fails.
+- **One approval per operation.** There is no background channel, so `getPublicKey`, every `signEvent`, and every `nip04`/`nip44` call re-opens the app. `unlock()` resumes the account from its cached pubkey without opening the app; the first real signing call prompts.
+- **No rejection signal, but there is a timeout.** NIP-55's reject path is an Android intent extra a browser never sees, so a denial is indistinguishable from the user never returning. The package therefore times requests out (`timeoutMs`, default 120s; `0` disables) and rejects with a clear message. Pass a `signal` to cancel yourself — aborting rejects with `name === 'AbortError'`, matching the NIP-46 flow.
+- **Signatures are verified.** `signEvent` computes the event id, sends the complete unsigned event, then checks the returned 128-char hex signature with `verifyEvent` before returning it.
+- **The clipboard is clobbered** by the sentinel write. This is inherent to the transport; warn users if your app cares about clipboard contents.
+- **Prefer NIP-46 when you can.** The NIP-55 spec itself recommends NIP-46 for web clients precisely because this flow can't run in the background. Keep the browser NIP-55 path for users who want their existing signer app without a pairing step.
+
+The environment bridge is pluggable for tests and unusual hosts:
+
+```ts
+import type { Nip55WebTransport } from '@formstr/signer';
+
+const s = createSigner({ nip55WebTransport: myTransport });
+// or per call:
+await s.loginWithNip55Web({ transport: myTransport });
+```
+
+`browserNip55Transport()` is exported as the default implementation. `pollIntervalMs` (default 500) trades latency against how often the clipboard is read. `Nip55WebSigner` also exposes a `close()` that cancels an in-flight request and stops its poll; `Signer` calls it automatically when the active signer is replaced (a new login/unlock, `switchAccount`, or `logout`), so a pending request never leaks past its session.
 
 ## NIP-46 app identity (required for nostrconnect)
 
@@ -191,7 +239,7 @@ const detach = attachLoginListeners(container, signer, {
 // later: detach();
 ```
 
-The login modal renders one tab per method (Create, Existing key, Extension, Bunker URI, Remote QR, Android). The Android tab is always rendered but its list of installed signers is fetched lazily on activation via `signer.listAndroidSignerApps()` — it errors clearly if no Android plugin is configured (e.g. when running on web).
+The login modal renders one tab per method (Create, Existing key, Extension, Bunker URI, Remote QR, Signer app, Android). The Android tab is always rendered but its list of installed signers is fetched lazily on activation via `signer.listAndroidSignerApps()` — it errors clearly if no Android plugin is configured (e.g. when running on web). The Signer app tab drives `loginWithNip55Web()` and needs no plugin.
 
 ## Errors
 
@@ -199,11 +247,12 @@ All `loginWith*` methods reject with bare `Error` instances. Categories you can 
 
 - **Validation** — empty passphrase, empty relays, malformed bunker URI.
 - **Wrong credential** — `loginWithNcryptsec` with a bad passphrase throws synchronously after decrypt.
-- **External denial** — extension/bunker/Android signer rejects the request.
-- **Transport** — NIP-46 relay unreachable, pairing timeout, abort.
+- **External denial** — extension/bunker/Android signer rejects the request. The browser NIP-55 flow has no denial signal (see its section), so pair it with a timeout.
+- **Transport** — NIP-46 relay unreachable, pairing timeout, abort; browser NIP-55 empty/inaccessible clipboard, or an unverifiable signature.
 - **Configuration** —
   - `loginWithNostrConnect` throws if neither `appName` (in `createSigner`) nor `metadata.name` (per call) is set. See "NIP-46 app identity" above.
   - `loginWithAndroidSigner` / `listAndroidSignerApps` throws if no plugin is configured.
+  - `loginWithNip55Web` throws if the environment is not an Android browser with clipboard access.
 
 Error messages are prefixed with `@formstr/signer:` for messages the package generates itself. Errors from `nostr-tools` or the Capacitor plugin propagate unchanged. There is currently no typed `code` field — discriminate by string match or by which method threw.
 
@@ -246,6 +295,7 @@ The UI ships with these class names. Override in your own CSS.
 | `.nostr-signer__tab--extension` | NIP-07 tab |
 | `.nostr-signer__tab--bunker` | NIP-46 bunker URI tab |
 | `.nostr-signer__tab--nostrconnect` | NIP-46 nostrconnect (QR) tab |
+| `.nostr-signer__tab--nip55web` | NIP-55 browser/`nostrsigner` tab |
 | `.nostr-signer__tab--android` | NIP-55 Android tab |
 
 ### Panels
@@ -258,6 +308,7 @@ The UI ships with these class names. Override in your own CSS.
 | `.nostr-signer__panel--extension` | extension panel |
 | `.nostr-signer__panel--bunker` | bunker URI panel |
 | `.nostr-signer__panel--nostrconnect` | nostrconnect panel |
+| `.nostr-signer__panel--nip55web` | NIP-55 browser/`nostrsigner` panel |
 | `.nostr-signer__panel--android` | Android signer panel |
 | `.nostr-signer__panel--created` | post-creation backup-the-ncryptsec panel |
 

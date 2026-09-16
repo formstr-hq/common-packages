@@ -10,6 +10,7 @@ export type {
   SignerEvent,
   NostrConnectOptions,
   BunkerLoginOptions,
+  Nip55WebLoginOptions,
   RelayMismatchInfo,
   RelayMismatchHandler,
   UnlockOptions,
@@ -24,11 +25,18 @@ export { ExtensionSigner, getWindowNostr, type WindowNostr } from './nip07.js';
 export {
   AndroidSigner,
   loginWithAndroidSigner,
+  normalizeNip55Identifier,
   type AndroidSignerPlugin,
   type AndroidSignerAppInfo,
   type AndroidLoginOptions,
   type AndroidLoginResult,
 } from './nip55.js';
+export {
+  Nip55WebSigner,
+  browserNip55Transport,
+  type Nip55WebOptions,
+  type Nip55WebTransport,
+} from './nip55Web.js';
 export {
   BunkerSigner,
   connectWithBunkerUri,

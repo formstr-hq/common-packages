@@ -59,6 +59,8 @@ function methodLabel(method: StoredAccount['method']): string {
       return 'remote signer';
     case 'android':
       return 'android signer';
+    case 'nip55-web':
+      return 'signer app (web)';
   }
 }
 
@@ -87,6 +89,9 @@ function openLoginModal(options: {
     pool,
     onLogin: () => closeModal(),
     onCancel: () => closeModal(),
+    // Surface the intent/clipboard round-trip — the page leaves and returns,
+    // so without this there's no way to see what happened on a phone.
+    onNip55WebDebug: (message) => appendLog(`nip55: ${message}`, 'muted'),
   });
 }
 
@@ -115,6 +120,11 @@ async function unlockActive(): Promise<void> {
         await signer.loginWithAndroidSigner({
           packageName: account.androidPackageName,
         });
+        return;
+      case 'nip55-web':
+        // Resumes from the cached pubkey without opening the signer app;
+        // the first sign/encrypt call is what prompts.
+        await signer.unlock();
         return;
     }
   } catch (err) {

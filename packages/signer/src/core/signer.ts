@@ -4,6 +4,7 @@ import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type {
   ActiveSigner,
   BunkerLoginOptions,
+  Nip55WebLoginOptions,
   NostrConnectOptions,
   SignerConfig,
   SignerEvent,
@@ -28,6 +29,10 @@ import {
   type AndroidSignerAppInfo,
   type AndroidSignerPlugin,
 } from '../nip55.js';
+import {
+  Nip55WebSigner,
+  type Nip55WebTransport,
+} from '../nip55Web.js';
 
 const ACCOUNTS_KEY = 'accounts';
 const ACTIVE_KEY = 'active-pubkey';
@@ -53,6 +58,7 @@ const ACTIVE_KEY = 'active-pubkey';
 export class Signer {
   readonly #storage: StorageAdapter;
   readonly #defaultAndroidPlugin: AndroidSignerPlugin | undefined;
+  readonly #nip55WebTransport: Nip55WebTransport | undefined;
   readonly #appMetadata: { name?: string; url?: string; image?: string };
   #accounts: StoredAccount[] = [];
   #activePubkey: string | null = null;
@@ -62,6 +68,7 @@ export class Signer {
   constructor(config: SignerConfig = {}) {
     this.#storage = config.storage ?? localStorageAdapter(config.storageKeyPrefix);
     this.#defaultAndroidPlugin = config.androidSignerPlugin;
+    this.#nip55WebTransport = config.nip55WebTransport;
     this.#appMetadata = {
       name: config.appName,
       url: config.appUrl,
@@ -100,8 +107,35 @@ export class Signer {
     this.#persistAccounts();
   }
 
+  /**
+   * Release the currently-held signer, if it has a `close()`. Called
+   * whenever the active signer is replaced or cleared so live resources
+   * (bunker subscriptions, `visibilitychange` listeners, in-flight NIP-55
+   * requests) don't outlive the session. Errors are swallowed — teardown
+   * must never block a login/switch/logout.
+   */
+  #closeActiveSigner(): void {
+    const signer = this.#activeSigner;
+    if (!signer?.close) return;
+    try {
+      const result = signer.close();
+      // close() may be async (BunkerSigner tears down relay subscriptions).
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(() => {
+          // best-effort teardown
+        });
+      }
+    } catch {
+      // best-effort teardown — never block a login/switch/logout
+    }
+  }
+
   #setActive(account: StoredAccount, signer: ActiveSigner): void {
     const wasDifferent = this.#activePubkey !== null && this.#activePubkey !== account.pubkey;
+    // Close the outgoing signer only when it is actually being replaced —
+    // re-asserting the same account (e.g. unlock) would otherwise tear
+    // down the very signer we are handing back.
+    if (this.#activeSigner !== signer) this.#closeActiveSigner();
     this.#activePubkey = account.pubkey;
     this.#activeSigner = signer;
     this.#persistActive();
@@ -313,6 +347,57 @@ export class Signer {
     return account;
   }
 
+  /**
+   * Sign in via a NIP-55 Android external signer (Amber, etc) **from a
+   * plain browser**, with no Capacitor/native bridge. Opens the installed
+   * signer app through a `nostrsigner` intent and reads the result back
+   * from the clipboard once the user returns to the tab. Because the
+   * intent names no package, this works with any app that registered the
+   * `nostrsigner` scheme — one opens directly, several show the Android
+   * "Open with" chooser.
+   *
+   * Every operation is a separate approval, and a rejection is
+   * indistinguishable from the user simply not returning, so callers must
+   * impose their own timeout. Prefer NIP-46 when a persistent session is
+   * acceptable — the NIP-55 spec recommends it for web clients.
+   *
+   * @throws if the environment cannot run the flow (not Android, no async
+   * clipboard) or the signer returns an unexpected value.
+   */
+  async loginWithNip55Web(options: Nip55WebLoginOptions = {}): Promise<StoredAccount> {
+    const transport = options.transport ?? this.#nip55WebTransport;
+    // Pair with a throwaway signer so `options.signal` cancels only the
+    // pairing attempt. The signal belongs to the login call, not to the
+    // account — retaining it would poison the signer, since hosts commonly
+    // abort the login controller once the modal closes on success.
+    const pairing = new Nip55WebSigner({
+      transport,
+      pollIntervalMs: options.pollIntervalMs,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      debug: options.debug,
+    });
+    // getPublicKey throws for an unsupported environment (not Android / no
+    // async clipboard) or an aborted pairing, before anything is persisted.
+    const pubkey = await pairing.getPublicKey();
+    const signer = new Nip55WebSigner({
+      transport,
+      pollIntervalMs: options.pollIntervalMs,
+      timeoutMs: options.timeoutMs,
+      pubkey,
+      debug: options.debug,
+    });
+    const npub = nip19.npubEncode(pubkey);
+    const account: StoredAccount = {
+      npub,
+      pubkey,
+      method: 'nip55-web',
+    };
+    this.#upsertAccount(account);
+    this.#setActive(account, signer);
+    return account;
+  }
+
   /** Snapshot of every persisted account, in insertion order. */
   listAccounts(): StoredAccount[] {
     return [...this.#accounts];
@@ -369,6 +454,10 @@ export class Signer {
    *    {@link loginWithAndroidSigner} performs and that — on Amber —
    *    surfaces as a permission prompt every cold start.
    *
+   *  - `nip55-web`: constructs a {@link Nip55WebSigner} with the stored
+   *    `pubkey` cached. Like `android`, this opens no signer app during
+   *    unlock; the first sign/encrypt call is what prompts.
+   *
    *  - `ncryptsec`: returns `null`. There is no silent path — the user's
    *    passphrase isn't (and shouldn't be) persisted. The caller must
    *    drive the passphrase prompt and call {@link loginWithNcryptsec}.
@@ -424,6 +513,17 @@ export class Signer {
         return signer;
       }
 
+      case 'nip55-web': {
+        // Resume with the cached pubkey so unlocking does not itself open
+        // the signer app; only the next sign/encrypt call does.
+        const signer = new Nip55WebSigner({
+          transport: this.#nip55WebTransport,
+          pubkey: account.pubkey,
+        });
+        this.#setActive(account, signer);
+        return signer;
+      }
+
       case 'ncryptsec':
         // No silent path — passphrase is not (and must not be) persisted.
         return null;
@@ -440,6 +540,7 @@ export class Signer {
   async switchAccount(pubkey: string): Promise<void> {
     const account = this.#accounts.find(a => a.pubkey === pubkey);
     if (!account) throw new Error(`switchAccount: no account for pubkey ${pubkey}`);
+    this.#closeActiveSigner();
     this.#activePubkey = pubkey;
     this.#activeSigner = null;
     this.#persistActive();
@@ -457,6 +558,7 @@ export class Signer {
     this.#accounts = this.#accounts.filter(a => a.pubkey !== target);
     this.#persistAccounts();
     if (this.#activePubkey === target) {
+      this.#closeActiveSigner();
       this.#activePubkey = null;
       this.#activeSigner = null;
       this.#persistActive();

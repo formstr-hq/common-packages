@@ -12,6 +12,7 @@ interface MockSigner {
   loginWithBunkerUri: ReturnType<typeof vi.fn>;
   loginWithNostrConnect: ReturnType<typeof vi.fn>;
   loginWithAndroidSigner: ReturnType<typeof vi.fn>;
+  loginWithNip55Web: ReturnType<typeof vi.fn>;
   listAndroidSignerApps: ReturnType<typeof vi.fn>;
   getActiveAccount: ReturnType<typeof vi.fn>;
 }
@@ -24,6 +25,7 @@ function makeSignerStub(): MockSigner {
     loginWithBunkerUri: vi.fn(),
     loginWithNostrConnect: vi.fn(),
     loginWithAndroidSigner: vi.fn(),
+    loginWithNip55Web: vi.fn(),
     listAndroidSignerApps: vi.fn().mockResolvedValue([]),
     getActiveAccount: vi.fn(),
   };
@@ -57,9 +59,9 @@ afterEach(() => {
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 describe('renderLoginHtml', () => {
-  it('renders all six tabs and their panels', () => {
+  it('renders all seven tabs and their panels', () => {
     const tabs = root.querySelectorAll('[data-tab]');
-    expect(tabs.length).toBe(6);
+    expect(tabs.length).toBe(7);
     const panelIds = Array.from(root.querySelectorAll<HTMLElement>('[data-panel]')).map(
       (p) => p.dataset.panel,
     );
@@ -70,6 +72,7 @@ describe('renderLoginHtml', () => {
         'extension',
         'bunker',
         'nostrconnect',
+        'nip55web',
         'android',
         'created',
       ]),
@@ -507,6 +510,35 @@ describe('attachLoginListeners', () => {
     });
   });
 
+  describe('signer app (NIP-55 web) flow', () => {
+    it('calls loginWithNip55Web and fires onLogin on success', async () => {
+      const account = fakeAccount('nip55-web');
+      const signer = makeSignerStub();
+      signer.loginWithNip55Web.mockResolvedValue(account);
+      const onLogin = vi.fn();
+      attachLoginListeners(root, asSigner(signer), { onLogin });
+      root.querySelector<HTMLButtonElement>('[data-action="nip55web-login"]')!.click();
+      await flush();
+      expect(signer.loginWithNip55Web).toHaveBeenCalledTimes(1);
+      expect(onLogin).toHaveBeenCalledWith(account);
+    });
+
+    it('re-enables the button and shows the error when login fails', async () => {
+      const signer = makeSignerStub();
+      signer.loginWithNip55Web.mockRejectedValue(new Error('no signer app'));
+      attachLoginListeners(root, asSigner(signer));
+      const btn = root.querySelector<HTMLButtonElement>(
+        '[data-action="nip55web-login"]',
+      )!;
+      btn.click();
+      await flush();
+      expect(btn.disabled).toBe(false);
+      expect(
+        root.querySelector<HTMLDivElement>('[data-region="error"]')!.textContent,
+      ).toContain('no signer app');
+    });
+  });
+
   describe('android flow', () => {
     const clickAndroidTab = (): void => {
       root.querySelector<HTMLButtonElement>('[data-tab="android"]')!.click();
@@ -697,6 +729,53 @@ describe('attachLoginListeners', () => {
       await flush();
       binding.detach();
       expect(signalRef?.aborted).toBe(true);
+    });
+
+    it('aborts an in-flight NIP-55 web login on detach', async () => {
+      const signer = makeSignerStub();
+      let signalRef: AbortSignal | undefined;
+      signer.loginWithNip55Web.mockImplementation(
+        (opts) =>
+          new Promise<StoredAccount>((_, reject) => {
+            signalRef = opts.signal;
+            opts.signal!.addEventListener('abort', () => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      const binding = attachLoginListeners(root, asSigner(signer));
+      root.querySelector<HTMLButtonElement>('[data-action="nip55web-login"]')!.click();
+      await flush();
+      binding.detach();
+      expect(signalRef?.aborted).toBe(true);
+    });
+
+    it('does not surface an AbortError from a cancelled NIP-55 web login', async () => {
+      const signer = makeSignerStub();
+      signer.loginWithNip55Web.mockImplementation(
+        (opts) =>
+          new Promise<StoredAccount>((_, reject) => {
+            opts.signal!.addEventListener('abort', () => {
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      const onError = vi.fn();
+      attachLoginListeners(root, asSigner(signer), { onError });
+      root.querySelector<HTMLButtonElement>('[data-action="nip55web-login"]')!.click();
+      await flush();
+      const btn = root.querySelector<HTMLButtonElement>('[data-action="nip55web-login"]')!;
+      btn.click();
+      await flush();
+      // No error region content and no onError for an abort.
+      expect(
+        root.querySelector<HTMLDivElement>('[data-region="error"]')!.hidden,
+      ).toBe(true);
+      expect(onError).not.toHaveBeenCalled();
     });
   });
 });

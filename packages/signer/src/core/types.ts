@@ -222,4 +222,19 @@ export interface SignerConfig {
    * stub in tests or non-browser hosts.
    */
   nip55WebTransport?: import('../nip55Web.js').Nip55WebTransport;
+  /**
+   * NIP-46 permissions to request on every `connect` when the caller passes
+   * no per-call `perms` — for both the `bunker://` and `nostrconnect://`
+   * flows. Format is the spec's comma-list of `method[:params]`, e.g.
+   * `['nip44_decrypt', 'sign_event:13']`.
+   *
+   * This is how a host gets blanket approval for the operations it always
+   * needs (decrypt everything, sign its own kinds) instead of the user
+   * approving each one: a remote signer caches the grant against the client
+   * pubkey, and reconnects reuse it. Without it, bunkers such as Amber may
+   * have nothing concrete to authorize and prompt per request.
+   *
+   * It has no effect on NIP-55 (see {@link Signer} docs) or local keys.
+   */
+  defaultPerms?: string[];
 }

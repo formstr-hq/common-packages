@@ -148,7 +148,9 @@ await signer.loginWithNip55Web();
 The mechanism:
 
 1. **Plant a sentinel.** The package overwrites the clipboard with a random `__formstr_nip55_sentinel_…__` string. This is what makes the result identifiable — otherwise a clipboard left over from an earlier approval would look like a fresh answer and resolve immediately.
-2. **Open the intent.** It opens `intent:#Intent;scheme=nostrsigner;S.type=…;end` via `window.open`. No package is named, so Android resolves it against every app that registered the scheme — one signer opens directly, several show the standard "Open with" chooser. This is not Amber-specific.
+2. **Open the intent.** It opens `intent:#Intent;scheme=nostrsigner;S.type=…;end` via `window.open` under a fixed window name (`formstr-nip55-signer`), so the whole session reuses **one** tab. Do not change this to `'_blank'`: that target forces a brand-new browsing context on every call, and since each signer operation opens the intent, a mailbox that decrypts several messages at once would spawn — and leak — a tab per message. No package is named, so Android resolves it against every app that registered the scheme — one signer opens directly, several show the standard "Open with" chooser. This is not Amber-specific.
+
+   Operations are also **serialized**: NIP-55 web has one signer window and one clipboard, so a second request (e.g. concurrent decrypts) queues until the first settles rather than cancelling it.
 3. **Poll the clipboard.** The signer app signs and copies the result to the clipboard. The package polls `navigator.clipboard.readText()` every `pollIntervalMs` (default 500ms) until the value differs from the sentinel, then resolves.
 
 ### Why polling, not `visibilitychange`

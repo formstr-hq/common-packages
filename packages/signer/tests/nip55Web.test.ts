@@ -83,6 +83,8 @@ class FakeNip55Transport implements Nip55WebTransport {
   holdResult = false;
   /** When true, readClipboard hangs until resolveRead/rejectRead is called. */
   deferRead = false;
+  /** When true, writeClipboard hangs until resolveWrite is called. */
+  deferWrite = false;
   /** When set, open() uses this instead of computing a result. */
   overrideResult: string | null = null;
   readonly opened: string[] = [];
@@ -93,6 +95,7 @@ class FakeNip55Transport implements Nip55WebTransport {
     resolve(value: string): void;
     reject(error: unknown): void;
   }> = [];
+  #deferredWrite: { resolve(): void; text: string } | null = null;
 
   constructor(secretKey: Uint8Array) {
     this.secretKey = secretKey;
@@ -129,9 +132,24 @@ class FakeNip55Transport implements Nip55WebTransport {
 
   writeClipboard(text: string): Promise<void> {
     if (this.failWrite) return Promise.reject(this.failWrite);
+    if (this.deferWrite) {
+      return new Promise<void>((resolve) => {
+        this.#deferredWrite = { resolve, text };
+      });
+    }
     this.wrote.push(text);
     this.clipboard = text;
     return Promise.resolve();
+  }
+
+  /** Complete a deferred writeClipboard (records it like the sync path). */
+  resolveWrite(): void {
+    const write = this.#deferredWrite;
+    if (!write) throw new Error('resolveWrite: no deferred write pending');
+    this.#deferredWrite = null;
+    this.wrote.push(write.text);
+    this.clipboard = write.text;
+    write.resolve();
   }
 
   readClipboard(): Promise<string> {
@@ -538,17 +556,86 @@ describe('NIP-55 web (intents + clipboard)', () => {
       );
     });
 
-    it('rejects a superseded request and cleans up', async () => {
+    // Serialization, not supersede: NIP-55 web has one signer window and one
+    // clipboard, so concurrent operations queue instead of cancelling. The mail
+    // app decrypts up to three wraps at once; dropping two of them was a real
+    // bug, and the old behavior also opened a window per attempt.
+    it('queues concurrent requests instead of cancelling earlier ones', async () => {
       const sk = generateSecretKey();
       const transport = new FakeNip55Transport(sk);
       const signer = new Nip55WebSigner({ transport, pollIntervalMs: POLL });
       const first = signer.getPublicKey();
       const second = signer.getPublicKey();
-      await expect(first).rejects.toThrow(/superseded/);
-      expect(await settle(second)).toBe(getPublicKey(sk));
+      // Both succeed, in order; the first is never rejected.
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(await first).toBe(getPublicKey(sk));
+      // The second only reaches the signer after the first settles.
+      expect(transport.opened).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(await second).toBe(getPublicKey(sk));
     });
 
-    it('discards a poll that resolves after the request was superseded', async () => {
+    // The mail app decrypts up to three wraps concurrently. Each decrypt is one
+    // intent; serialization means the second does not open its window until the
+    // first has settled, so a burst can never spawn a window per operation.
+    it('opens only one signer window for a burst of queued decrypts', async () => {
+      const sk = generateSecretKey();
+      const transport = new FakeNip55Transport(sk);
+      transport.holdResult = true;
+      const peer = generateSecretKey();
+      const peerPub = getPublicKey(peer);
+      const cipher = nip44.v2.encrypt(
+        'secret',
+        nip44.v2.utils.getConversationKey(peer, getPublicKey(sk)),
+      );
+      // Cache the pubkey so each decrypt is exactly one request (no hidden
+      // get_public_key in front of it).
+      const signer = new Nip55WebSigner({
+        transport,
+        pubkey: getPublicKey(sk),
+        pollIntervalMs: POLL,
+      });
+
+      const a = signer.nip44Decrypt(peerPub, cipher);
+      const b = signer.nip44Decrypt(peerPub, cipher);
+      await vi.advanceTimersByTimeAsync(POLL);
+      // Only the head of the queue has been opened — the burst did not fan out.
+      expect(transport.opened).toHaveLength(1);
+
+      transport.deliver();
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(await a).toBe('secret');
+      // Only now does the second intent reach the signer.
+      expect(transport.opened).toHaveLength(2);
+      transport.deliver();
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(await b).toBe('secret');
+    });
+
+    it('a lifetime abort rejects the active request and everything queued', async () => {
+      const sk = generateSecretKey();
+      const transport = new FakeNip55Transport(sk);
+      transport.holdResult = true;
+      const controller = new AbortController();
+      const signer = new Nip55WebSigner({
+        transport,
+        signal: controller.signal,
+        pollIntervalMs: POLL,
+      });
+      const active = signer.getPublicKey();
+      const queued = signer.getPublicKey();
+      await vi.advanceTimersByTimeAsync(POLL);
+
+      // The signal is a lifetime teardown (account switch), not a per-attempt
+      // cancel: every outstanding request must reject.
+      controller.abort();
+      await expect(active).rejects.toMatchObject({ name: 'AbortError' });
+      await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+      // Nothing is left to open.
+      expect(transport.opened).toHaveLength(1);
+    });
+
+    it('discards a poll that resolves after the request settled', async () => {
       const sk = generateSecretKey();
       const transport = new FakeNip55Transport(sk);
       transport.deferRead = true;
@@ -560,12 +647,13 @@ describe('NIP-55 web (intents + clipboard)', () => {
       expect(transport.pendingReads()).toBeGreaterThan(0);
 
       const second = signer.getPublicKey();
-      await expect(first).rejects.toThrow(/superseded/);
-
-      // Release the stale read — it must not resolve the second request.
-      while (transport.pendingReads() > 0) transport.resolveRead('stale');
+      // Release the stale read with the real result — the first resolves, and
+      // the second must not be resolved by that same read.
       transport.deferRead = false;
-      expect(await settle(second)).toBe(getPublicKey(sk));
+      while (transport.pendingReads() > 0) transport.resolveRead(getPublicKey(sk));
+      expect(await first).toBe(getPublicKey(sk));
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(await second).toBe(getPublicKey(sk));
     });
 
     it('close() cancels an in-flight request', async () => {
@@ -579,6 +667,44 @@ describe('NIP-55 web (intents + clipboard)', () => {
       await expectation;
       // A second close with nothing pending is a no-op.
       expect(() => signer.close()).not.toThrow();
+    });
+
+    it('a request cancelled during the sentinel write never opens a window', async () => {
+      const transport = new FakeNip55Transport(generateSecretKey());
+      transport.deferWrite = true;
+      const signer = new Nip55WebSigner({ transport, pollIntervalMs: POLL });
+      const promise = signer.getPublicKey();
+      const expectation = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+
+      // close() lands while writeClipboard is still pending: the async
+      // continuation must not claim a sentinel or open the intent.
+      await Promise.resolve();
+      signer.close();
+      transport.resolveWrite();
+      await expectation;
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(transport.opened).toHaveLength(0);
+    });
+
+    it('a poll tick after settle does not resolve the wrong request', async () => {
+      const sk = generateSecretKey();
+      const transport = new FakeNip55Transport(sk);
+      transport.deferRead = true;
+      const signer = new Nip55WebSigner({ transport, pollIntervalMs: POLL });
+      const promise = signer.getPublicKey();
+      // Get a poll in flight, then settle the request behind its back.
+      await vi.advanceTimersByTimeAsync(POLL);
+      expect(transport.pendingReads()).toBeGreaterThan(0);
+      const expectation = expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+      signer.close();
+      await expectation;
+
+      // Release the stale read: it must be dropped, not resolved.
+      transport.deferRead = false;
+      while (transport.pendingReads() > 0) transport.resolveRead('stale-result');
+      await vi.advanceTimersByTimeAsync(POLL);
+      // Nothing opened a second window, and the stale value went nowhere.
+      expect(transport.opened).toHaveLength(1);
     });
 
     it('close() does not permanently disable the signer', async () => {
@@ -1151,7 +1277,10 @@ describe('NIP-55 web (intents + clipboard)', () => {
 
       expect(transport.isSupported()).toBe(true);
       transport.open('intent:test');
-      expect(openSpy).toHaveBeenCalledWith('intent:test', '_blank');
+      // A stable target name, NOT '_blank': a fixed name reuses one tab so a
+      // burst of signer calls cannot spawn (and leak) a tab each.
+      expect(openSpy).toHaveBeenCalledWith('intent:test', expect.any(String));
+      expect(openSpy).not.toHaveBeenCalledWith('intent:test', '_blank');
       expect(await transport.readClipboard()).toBe('signed');
       await transport.writeClipboard('sentinel');
       expect(writeText).toHaveBeenCalledWith('sentinel');

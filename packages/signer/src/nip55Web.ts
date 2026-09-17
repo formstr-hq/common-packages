@@ -140,6 +140,8 @@ export interface Nip55WebOptions {
 interface PendingRequest {
   resolve(value: string): void;
   reject(error: unknown): void;
+  /** The intent to open once this request reaches the head of the queue. */
+  intent: string;
   /** The value planted before opening the signer, if the write succeeded. */
   sentinel: string | null;
   /** Interval id for the clipboard poll; cleared on settle. */
@@ -152,6 +154,17 @@ interface PendingRequest {
 
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/**
+ * The window name intent URIs are opened under.
+ *
+ * `window.open(intent, '_blank')` asks the browser to create a **new** browsing
+ * context every call, so a burst of signer operations opened a burst of tabs and
+ * none were ever closed — enough to crash a phone browser. A fixed name instead
+ * reuses (navigates) one tab: the OS intent is honoured, but there is never more
+ * than one signer window.
+ */
+const SIGNER_WINDOW_NAME = 'formstr-nip55-signer';
 
 let sentinelCounter = 0;
 
@@ -259,7 +272,11 @@ export function browserNip55Transport(): Nip55WebTransport {
       return this.supportStatus!().visible;
     },
     open(intent) {
-      window.open(intent, '_blank');
+      // A stable window NAME, not '_blank'. `_blank` asks for a brand-new
+      // browsing context on every call, so one signer operation per tab — a
+      // mailbox's concurrent decrypts would spawn a tab per message and crash
+      // the browser. A fixed name reuses a single tab across the whole session.
+      window.open(intent, SIGNER_WINDOW_NAME);
     },
     readClipboard() {
       return navigator.clipboard.readText();
@@ -284,7 +301,17 @@ export class Nip55WebSigner implements ActiveSigner {
   readonly #timeoutMs: number;
   readonly #signal: AbortSignal | undefined;
   readonly #debug: ((message: string) => void) | undefined;
-  #pending: PendingRequest | null = null;
+  /**
+   * The one request currently occupying the signer, if any.
+   *
+   * NIP-55 web allows exactly one approval at a time — there is one signer
+   * window and one clipboard — so operations are serialized rather than run
+   * concurrently. A burst (the mail app decrypts up to three wraps at once)
+   * is queued, not coalesced or dropped.
+   */
+  #active: PendingRequest | null = null;
+  /** Requests waiting for the signer, oldest first. */
+  #queue: PendingRequest[] = [];
   #pubkey: string | null = null;
 
   constructor(options: Nip55WebOptions = {}) {
@@ -368,17 +395,13 @@ export class Nip55WebSigner implements ActiveSigner {
   }
 
   /**
-   * Cancel any in-flight request and stop its clipboard poll. Subsequent
+   * Cancel the in-flight request and drop anything queued behind it. Subsequent
    * operations still work — this is a teardown of live resources, not a
    * permanent disable (the {@link Signer} calls it when replacing the
    * active signer).
    */
   close(): void {
-    if (this.#pending) {
-      const pending = this.#pending;
-      this.#settle();
-      pending.reject(abortError());
-    }
+    this.#cancelAll();
   }
 
   #checkSupport(): void {
@@ -405,104 +428,144 @@ export class Nip55WebSigner implements ActiveSigner {
       this.#log(`clipboard read failed: ${(error as Error).message}`);
       return;
     }
-    // A read can resume after the request was superseded/settled while it
-    // was in flight; the interval is cleared then, but this tick is already
-    // running. Drop it rather than resolving the wrong request.
-    if (this.#pending !== pending) return;
+    // A read can resume after the request was settled while it was in flight;
+    // the interval is cleared then, but this tick is already running. Drop it
+    // rather than resolving the wrong request.
+    if (this.#active !== pending) return;
     const trimmed = text.trim();
     if (trimmed.length === 0) return;
     // With a sentinel we require a *change*; without one (the write failed)
     // accept any non-empty value, matching the pre-sentinel behaviour.
     if (pending.sentinel !== null && trimmed === pending.sentinel) return;
     this.#log(`clipboard result (${trimmed.length} chars)`);
-    this.#settle();
+    // Settle BEFORE resolving so the next queued request can start.
+    this.#settle(pending);
     pending.resolve(trimmed);
   };
 
+  /**
+   * Enqueue one operation. NIP-55 web has a single signer window and a single
+   * clipboard, so only one request may be in flight at a time; a second call
+   * (e.g. concurrent mail decrypts) waits its turn instead of cancelling the
+   * first. The timeout clock starts when the request reaches the head of the
+   * queue, not when it is enqueued — otherwise a long queue would time out
+   * requests the signer never got a chance to answer.
+   */
   #request(intent: string): Promise<string> {
     this.#checkAborted();
-    this.#cancelPending();
     return new Promise<string>((resolve, reject) => {
       const pending: PendingRequest = {
         resolve,
         reject,
+        intent,
         sentinel: null,
         poll: null,
         timer: null,
         onAbort: null,
       };
-      this.#pending = pending;
       if (this.#signal) {
-        const onAbort = () => this.#fail(pending, abortError());
+        // A lifetime abort tears down everything outstanding, not just one
+        // attempt: the signer is being discarded (account switch), so every
+        // queued and in-flight request must reject.
+        const onAbort = () => this.#cancelAll();
         this.#signal.addEventListener('abort', onAbort);
         pending.onAbort = onAbort;
       }
-      if (this.#timeoutMs > 0) {
-        pending.timer = setTimeout(() => {
-          this.#fail(
-            pending,
-            new Error(
-              `@formstr/signer: NIP-55 request timed out after ${this.#timeoutMs}ms (the signer app never returned a result)`,
-            ),
-          );
-        }, this.#timeoutMs);
-      }
-
-      // Plant a sentinel before opening the signer. Without it, a stale
-      // clipboard from an earlier approval would look like a fresh result
-      // and resolve immediately. Best-effort: if the write is refused we
-      // proceed without it rather than failing the whole flow.
-      void (async () => {
-        try {
-          const sentinel = makeSentinel();
-          await this.#transport.writeClipboard(sentinel);
-          if (this.#pending === pending) pending.sentinel = sentinel;
-          this.#log('planted clipboard sentinel');
-        } catch (error) {
-          this.#log(`sentinel write failed: ${(error as Error).message}`);
-        }
-        if (this.#pending !== pending) return;
-        try {
-          this.#log(`opening signer app: ${intent.slice(0, 80)}…`);
-          this.#transport.open(intent);
-        } catch (error) {
-          this.#fail(pending, error);
-          return;
-        }
-        // Start polling only after the intent is out; the sentinel write and
-        // open are skipped on the very first ticks otherwise.
-        pending.poll = setInterval(() => {
-          void this.#poll(pending);
-        }, this.#pollIntervalMs);
-      })();
+      this.#queue.push(pending);
+      this.#pump();
     });
   }
 
+  /** Start the next queued request if the signer is free. */
+  #pump(): void {
+    if (this.#active || this.#queue.length === 0) return;
+    const pending = this.#queue.shift()!;
+    this.#active = pending;
+
+    // The timeout runs only while this request owns the signer.
+    if (this.#timeoutMs > 0) {
+      pending.timer = setTimeout(() => {
+        this.#fail(
+          pending,
+          new Error(
+            `@formstr/signer: NIP-55 request timed out after ${this.#timeoutMs}ms (the signer app never returned a result)`,
+          ),
+        );
+      }, this.#timeoutMs);
+    }
+
+    // Plant a sentinel before opening the signer. Without it, a stale
+    // clipboard from an earlier approval would look like a fresh result
+    // and resolve immediately. Best-effort: if the write is refused we
+    // proceed without it rather than failing the whole flow.
+    void (async () => {
+      try {
+        const sentinel = makeSentinel();
+        await this.#transport.writeClipboard(sentinel);
+        // Guard against the request settling (close/abort) while the async
+        // write was in flight — a settled request must not claim a sentinel
+        // or, below, open a window.
+        if (this.#active === pending) pending.sentinel = sentinel;
+        this.#log('planted clipboard sentinel');
+      } catch (error) {
+        this.#log(`sentinel write failed: ${(error as Error).message}`);
+      }
+      if (this.#active !== pending) return;
+      try {
+        this.#log(`opening signer app: ${pending.intent.slice(0, 80)}…`);
+        this.#transport.open(pending.intent);
+      } catch (error) {
+        this.#fail(pending, error);
+        return;
+      }
+      // Start polling only after the intent is out; the sentinel write and
+      // open are skipped on the very first ticks otherwise.
+      pending.poll = setInterval(() => {
+        void this.#poll(pending);
+      }, this.#pollIntervalMs);
+    })();
+  }
+
   /**
-   * Reject the current request. Every caller is cleared on settle — the
-   * timeout timer and abort listener are removed, and `open()` is
-   * synchronous — so `pending` is always the active request here.
+   * Fail the active request (timeout, or `open()` throwing) and free the
+   * signer. Abort is handled separately by {@link #cancelAll}, which tears
+   * down the queue too.
    */
   #fail(pending: PendingRequest, error: unknown): void {
-    this.#settle();
+    this.#settle(pending);
     pending.reject(error);
   }
 
-  #settle(): void {
-    const pending = this.#pending;
-    this.#pending = null;
-    if (pending?.poll) clearInterval(pending.poll);
-    if (pending?.timer) clearTimeout(pending.timer);
-    if (pending?.onAbort && this.#signal) {
-      this.#signal.removeEventListener('abort', pending.onAbort);
-    }
+  /** Mark the active request finished, clear its timers, and pump the queue. */
+  #settle(pending: PendingRequest): void {
+    if (this.#active === pending) this.#active = null;
+    this.#queue = this.#queue.filter((p) => p !== pending);
+    this.#cleanup(pending);
+    this.#pump();
   }
 
-  #cancelPending(): void {
-    if (!this.#pending) return;
-    const pending = this.#pending;
-    this.#settle();
-    pending.reject(new Error('@formstr/signer: NIP-55 request superseded'));
+  /** Remove a request's timers and abort listener. Idempotent. */
+  #cleanup(pending: PendingRequest): void {
+    if (pending.poll) clearInterval(pending.poll);
+    if (pending.timer) clearTimeout(pending.timer);
+    if (pending.onAbort && this.#signal) {
+      this.#signal.removeEventListener('abort', pending.onAbort);
+    }
+    pending.poll = null;
+    pending.timer = null;
+    pending.onAbort = null;
+  }
+
+  /** Reject everything live — the in-flight request and the queue behind it. */
+  #cancelAll(): void {
+    const active = this.#active;
+    const queued = this.#queue;
+    this.#active = null;
+    this.#queue = [];
+    for (const pending of active ? [active, ...queued] : queued) {
+      this.#cleanup(pending);
+      pending.reject(abortError());
+    }
   }
 
   #checkAborted(): void {

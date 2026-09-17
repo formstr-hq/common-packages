@@ -258,3 +258,34 @@ describe("RelayConnection reconnect", () => {
     }
   });
 });
+
+describe("RelayPool NIP-42 AUTH", () => {
+  it("routes a relay challenge to the configured signer and replies AUTH", async () => {
+    const { f, p } = pool();
+    const signed = makeEvent({ id: "auth".padEnd(64, "0"), kind: 22242 });
+    let asked: any = null;
+    p.setOnAuth(async (t) => {
+      asked = t;
+      return signed;
+    });
+
+    p.subscribe([A], [{ kinds: [1059] }], { onEvent: () => {} }, { eoseDeadlineMs: 10 ** 9 });
+    f.last(A).open();
+    f.last(A).emit(["AUTH", "chal"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(asked).toMatchObject({ kind: 22242, tags: [["relay", A], ["challenge", "chal"]] });
+    expect(f.last(A).sent.find((m) => m[0] === "AUTH")).toEqual(["AUTH", signed]);
+  });
+
+  it("refuses safely when no signer is configured", async () => {
+    const { f, p } = pool();
+    p.subscribe([A], [{ kinds: [1] }], { onEvent: () => {} }, { eoseDeadlineMs: 10 ** 9 });
+    f.last(A).open();
+    f.last(A).emit(["AUTH", "chal"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(f.last(A).sent.some((m) => m[0] === "AUTH")).toBe(false);
+  });
+});

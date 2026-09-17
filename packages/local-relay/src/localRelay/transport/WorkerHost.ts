@@ -35,8 +35,9 @@ export interface WorkerHostHooks {
   ) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
   onUnobserve?: (subId: string) => void;
-  /** A client published an event: store it locally + send upstream with tracking. */
-  onPublish?: (pubId: string, event: Event) => void;
+  /** A client published an event: store it locally + send upstream with tracking.
+   *  `relays` are explicit target hints (e.g. a recipient's DM inbox relays). */
+  onPublish?: (pubId: string, event: Event, relays?: string[]) => void;
   /** Report live relay connection health (read-only observation). */
   onRelayHealth?: (reqId: string) => void;
   /** Report which relays a stored event has been seen on (provenance). */
@@ -117,7 +118,7 @@ export class WorkerHost {
         // Store + OK locally (so local subs see it instantly), then send upstream
         // with per-relay tracking that resolves into a publishResult.
         this.relayCore.handle(["EVENT", m.event]);
-        this.hooks.onPublish?.(m.pubId, m.event);
+        this.hooks.onPublish?.(m.pubId, m.event, m.relays);
         break;
       case "ingest":
         // Local store only (no OK, no upstream) — optimistic adds / imports.

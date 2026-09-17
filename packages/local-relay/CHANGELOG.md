@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.6.2
+
+### Fixed
+- **NIP-42 AUTH is now actually performed.** A relay that answered a `REQ` with
+  an `AUTH` challenge was silently skipped: `RelayConnection` parsed only
+  `EVENT`/`EOSE`/`CLOSED`/`OK`, so the challenge was discarded, the `onAuth` hook
+  was never wired (it existed only in a doc comment), and `SignerPort.sign()` was
+  never called in production. On a relay that gates its gift-wrapped DM stream
+  behind AUTH — which is common, since kind-1059 reads expose a recipient's
+  metadata — this presented as an account that received almost no mail while
+  other relays worked, with no error anywhere.
+
+  `RelayConnection` now signs a kind-22242 event bound to the relay's URL and the
+  challenge (via `onAuth` → `SignerPort` → the host's signer), replies `["AUTH",
+  event]`, and **replays every active `REQ`** — the ones sent before the
+  challenge were not honoured. A challenge is signed at most once per socket and
+  never concurrently; a refused or throwing signer, or a socket that drops while
+  signing, leaves the relay unauthenticated exactly as before. This implements
+  the behaviour `docs/USAGE.md` §12 already documented.
+
+## 0.6.1
+
+### Fixed
+- **NIP-17 gift wraps (`kind:1059`) are no longer misrouted on publish.** The
+  publish path applied the NIP-65 outbox model to every event: author write
+  relays ∪ user relays ∪ each p-tagged pubkey's kind-10002 **read** relays. For a
+  gift wrap that is wrong twice over — it's signed by a throwaway per-message key
+  (so the author has no write relays), and a recipient receives DMs on their
+  kind-10050 **DM inbox**, which is deliberately separate from their read relays.
+  In practice a wrap collapsed to the *sender's* own relays and never reached a
+  recipient whose inbox wasn't in that set. Gift wraps now route to recipient DM
+  inbox relays only (see Added), never to read relays or the gossip pool.
+
+### Added
+- **Explicit publish relay hints:** `publishEvent(event, { relays })` (and
+  `LocalRelayClient.publish(event, { relays })`) fold extra target relays into
+  routing — the one way to reach relays the worker can't derive. This is how a
+  NIP-17 sender delivers a gift wrap to a recipient's kind-10050 inbox: the
+  worker can't discover an arbitrary pubkey's inbox, so the sender (which
+  resolved it to compose the message) passes it in. Any recipient `kind:10050`
+  already in the store is folded in too; user relays remain a best-effort
+  fallback. Delivery stays durable via the outbox.
+
 ## 0.5.0
 
 ### Fixed

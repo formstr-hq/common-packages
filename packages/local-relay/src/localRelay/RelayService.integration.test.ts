@@ -917,3 +917,74 @@ describe("RelayService — NIP-42 AUTH end to end", () => {
     await service.stop();
   });
 });
+
+describe("RelayService — gift-wrap publish targeting (NIP-17 routing)", () => {
+  it("ignores non-p and empty p-tags when resolving DM targets", async () => {
+    const { f, client } = await wire();
+    // A wrap with an empty p-tag, an unrelated tag, and a valid recipient with
+    // no known inbox: the malformed tags must neither throw nor contribute a
+    // target, so the default fallback (user relays) is what remains.
+    const wrap = makeEvent({
+      id: "w".repeat(64),
+      kind: 1059,
+      pubkey: "ephemeral",
+      tags: [["p", ""], ["e", "x"], ["p", "bob"]],
+    });
+    client.publish(wrap);
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+  });
+
+  it("does not mix read relays into the target set when an inbox is known for one recipient", async () => {
+    const { f, service, client } = await wire();
+    // bob (inbox known) and erin (only read relays). Because at least one
+    // recipient inbox resolved, the NIP-65 read-relay tier must stay OUT —
+    // a DM is not broadened onto read relays.
+    service.db.add(
+      makeEvent({ kind: 10050, pubkey: "bob", tags: [["relay", "wss://bob-inbox"]] })
+    );
+    service.db.add(
+      makeEvent({ kind: 10002, pubkey: "erin", tags: [["r", "wss://erin-read"]] })
+    );
+    const wrap = makeEvent({
+      id: "w".repeat(64),
+      kind: 1059,
+      pubkey: "ephemeral",
+      tags: [["p", "bob"], ["p", "erin"]],
+    });
+    client.publish(wrap);
+    await settle();
+
+    expect(f.count("wss://bob-inbox")).toBe(1);
+    expect(f.count("wss://erin-read")).toBe(0);
+  });
+
+  it("drops a hint relay that arrives alongside a store inbox without duplicating", async () => {
+    const { f, service, client } = await wire();
+    service.db.add(
+      makeEvent({ kind: 10050, pubkey: "bob", tags: [["relay", "wss://bob-inbox"]] })
+    );
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "bob"]] });
+    // The same relay as both hint and store inbox must collapse to one target.
+    client.publish(wrap, { relays: ["wss://bob-inbox"] });
+    await settle();
+    expect(f.count("wss://bob-inbox")).toBe(1);
+  });
+
+  it("clears a pending outbox flush timer when paused", async () => {
+    // Arm the outbox with a failing publish so a retry timer is scheduled, then
+    // pause: pause() must clear it so no sweep runs against closed sockets.
+    const { f, client } = await wire();
+    const wrap = makeEvent({ id: "w".repeat(64), kind: 1059, pubkey: "ephemeral", tags: [["p", "dave"]] });
+    client.publish(wrap);
+    await settle();
+    f.last("wss://u1").open();
+    // Reject so the event becomes outbox debt with a backoff timer.
+    f.last("wss://u1").emit(["OK", wrap.id, false, "blocked"]);
+    await settle();
+
+    client.pause(); // must clear the outbox timer without throwing
+    await settle();
+    expect(f.count("wss://u1")).toBe(1);
+  });
+});

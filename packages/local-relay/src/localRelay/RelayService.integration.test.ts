@@ -868,3 +868,52 @@ describe("RelayService — online state", () => {
     await service.stop();
   });
 });
+
+describe("RelayService — NIP-42 AUTH end to end", () => {
+  it("a challenged relay is authenticated via the signer RPC and its REQ replayed", async () => {
+    const { client: clientCh, worker: workerCh } = createChannelPair();
+    const f = fakeSocketFactory();
+    const service = new RelayService({
+      channel: workerCh,
+      socketFactory: f.factory,
+      storage: new MemoryStorage(),
+      verify: () => true,
+      now: () => NOW,
+    });
+    await service.start();
+
+    // Stand in for a @formstr/signer-backed main thread: report the templates
+    // the worker asks us to sign, and answer with a signed kind-22242 event.
+    const signTemplates: any[] = [];
+    const signedAuth = makeEvent({ id: "auth".padEnd(64, "0"), kind: 22242 });
+    const client = new LocalRelayClient(clientCh, {
+      unobserveGraceMs: 0,
+      onSignRequest: async (t) => {
+        signTemplates.push(t);
+        return signedAuth;
+      },
+    });
+    client.setUserRelays(["wss://u1"]);
+    await settle();
+
+    client.observe([{ kinds: [1059] }], { onEvent: () => {} });
+    await settle();
+
+    const sock = f.last("wss://u1");
+    sock.open();
+    const subId = reqOn(sock)[0][1];
+
+    // The relay challenges; the worker must sign, AUTH, and resubscribe.
+    sock.emit(["AUTH", "integration-chal"]);
+    await settle();
+
+    expect(signTemplates).toHaveLength(1);
+    expect(signTemplates[0]).toMatchObject({
+      kind: 22242,
+      tags: [["relay", "wss://u1"], ["challenge", "integration-chal"]],
+    });
+    expect(sock.sent.find((m) => m[0] === "AUTH")).toEqual(["AUTH", signedAuth]);
+    expect(reqOn(sock).filter((m) => m[1] === subId).length).toBe(2);
+    await service.stop();
+  });
+});

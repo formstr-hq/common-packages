@@ -8,10 +8,16 @@
  * forwards them to the pool. Verification + storage happen above (SyncEngine →
  * RelayCore.ingest), keeping this layer crypto-free.
  *
- * NIP-42 AUTH: an `onAuth` hook is accepted for later wiring; the happy path
- * (no auth required) works without it.
+ * NIP-42 AUTH: a relay may answer a REQ with an `AUTH` challenge and then serve
+ * nothing until we authenticate (some send `CLOSED <sub> auth-required`, some
+ * just go quiet). When `onAuth` is supplied this connection builds the kind-22242
+ * template (bound to this relay's URL + the challenge), asks the host to sign
+ * it, replies `["AUTH", event]`, and re-issues every active REQ — the ones sent
+ * before the challenge were not honoured. Without `onAuth` the challenge is
+ * ignored, which is the correct behavior for a relay that never challenges.
  */
 import type { Event, Filter } from "../core/types";
+import type { EventTemplate } from "nostr-tools";
 
 export interface RelayConnectionHandlers {
   onEvent: (subId: string, event: Event, relay: string) => void;
@@ -22,6 +28,13 @@ export interface RelayConnectionHandlers {
   /** Relay closed this sub (e.g. auth-required) — counts as "done" upstream. */
   onClosed: (subId: string, relay: string, message: string) => void;
   onOk?: (eventId: string, ok: boolean, message: string, relay: string) => void;
+  /**
+   * Sign a NIP-42 AUTH template (kind 22242, tagged with this relay's URL and
+   * the relay's challenge). Return the signed event, or null to refuse — a
+   * refusal (no signer, user denied) leaves the relay unauthenticated, exactly
+   * as if the hook were absent.
+   */
+  onAuth?: (template: EventTemplate) => Promise<Event | null>;
 }
 
 export interface RelayConnectionOptions {
@@ -40,6 +53,14 @@ export class RelayConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUs = false;
   private readonly opts: Required<RelayConnectionOptions>;
+  /**
+   * The challenge currently being signed for this socket, and whether a sign is
+   * in flight. A relay may re-challenge; we sign once per distinct challenge and
+   * never two concurrently. Cleared on every (re)connect — a new socket needs a
+   * fresh AUTH even for the same string.
+   */
+  private authChallenge: string | null = null;
+  private authInFlight = false;
 
   constructor(
     readonly url: string,
@@ -75,6 +96,9 @@ export class RelayConnection {
     this.socket = socket;
     socket.onopen = () => {
       this.backoffAttempts = 0;
+      // A fresh socket must authenticate afresh; the relay will re-challenge.
+      this.authChallenge = null;
+      this.authInFlight = false;
       // Resubscribe everything that was active before the (re)connect.
       for (const [subId, filters] of Array.from(this.activeReqs.entries())) {
         this.write(["REQ", subId, ...filters]);
@@ -170,7 +194,51 @@ export class RelayConnection {
       case "OK":
         this.handlers.onOk?.(msg[1], !!msg[2], msg[3] ?? "", this.url);
         break;
-      // NOTICE / AUTH: ignored for now (AUTH hook lands with NIP-42 wiring).
+      case "AUTH":
+        void this.authenticate(String(msg[1] ?? ""));
+        break;
+      // NOTICE is informational.
+    }
+  }
+
+  /**
+   * Answer a NIP-42 challenge: sign kind 22242 and re-issue every active REQ.
+   *
+   * REQs sent before the challenge are not honoured by the relay, so the
+   * resubscribe after AUTH is what actually starts the data flowing. A refusal
+   * or missing hook is not an error — the relay simply stays unauthenticated,
+   * and its CLOSED/deadline handling above treats it as done.
+   */
+  private async authenticate(challenge: string): Promise<void> {
+    if (!this.handlers.onAuth || !challenge) return;
+    // Never sign two challenges concurrently, and never re-sign one we have
+    // already answered on this socket (a relay may re-send AUTH at any time).
+    if (this.authInFlight || this.authChallenge === challenge) return;
+    this.authChallenge = challenge;
+    this.authInFlight = true;
+    try {
+      const template: EventTemplate = {
+        kind: 22242,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [
+          ["relay", this.url],
+          ["challenge", challenge],
+        ],
+        content: "",
+      };
+      const event = await this.handlers.onAuth(template);
+      // Refused, or the socket died while we were signing — either way, do not
+      // authenticate a stale socket.
+      if (!event || !this.connected) return;
+      this.write(["AUTH", event]);
+      // The relay ignored every REQ sent before AUTH; replay them now.
+      for (const [subId, filters] of Array.from(this.activeReqs.entries())) {
+        this.write(["REQ", subId, ...filters]);
+      }
+    } catch {
+      // A throwing signer must not break the connection; stay unauthenticated.
+    } finally {
+      this.authInFlight = false;
     }
   }
 

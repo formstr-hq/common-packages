@@ -220,6 +220,11 @@ export class RelayService {
     // A relay (re)connecting is our only trustworthy "reachable" signal: flush any
     // delivery debt owed to it, and refresh online state if it's a user relay.
     this.pool.setOnConnect((relay) => this.onRelayConnect(relay));
+    // NIP-42: a relay that challenges gets its kind-22242 signed by the main
+    // thread (WorkerHost routes the RPC). The closure reads signerPort at call
+    // time, so it is correct even if a connection is built before the first
+    // challenge arrives.
+    this.pool.setOnAuth((template) => this.host.signerPort.sign(template));
     // Deletions, replaceable supersessions, and prunes all surface as store
     // `remove`s — drop any outbox debt for a vanished event in one place.
     this.db.onChange((change) => {

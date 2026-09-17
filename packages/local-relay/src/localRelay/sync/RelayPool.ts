@@ -16,12 +16,16 @@
  * with FakeSocket, no real network.
  */
 import type { Event, Filter } from "../core/types";
+import type { EventTemplate } from "nostr-tools";
 import { SocketFactory, webSocketFactory } from "./Socket";
 import {
   RelayConnection,
   RelayConnectionHandlers,
   RelayConnectionOptions,
 } from "./RelayConnection";
+
+/** Signs a NIP-42 AUTH template; null refuses (relay stays unauthenticated). */
+export type AuthSigner = (template: EventTemplate) => Promise<Event | null>;
 
 export interface PoolSubscribeHandlers {
   onEvent: (event: Event, relay: string) => void;
@@ -98,6 +102,9 @@ export class RelayPool {
   /** Notified whenever any relay's socket reaches OPEN (connect or reconnect). */
   private onConnect: ((relay: string) => void) | null = null;
 
+  /** Signs NIP-42 AUTH challenges for every connection (see RelayConnection). */
+  private onAuth: AuthSigner | null = null;
+
   constructor(
     private factory: SocketFactory = webSocketFactory,
     private connOptions: RelayConnectionOptions = {}
@@ -106,6 +113,15 @@ export class RelayPool {
   /** Register a single listener for relay (re)connects (outbox flush / online). */
   setOnConnect(handler: (relay: string) => void): void {
     this.onConnect = handler;
+  }
+
+  /**
+   * Provide the NIP-42 signer. Connections built AFTER this call use it; call
+   * `resetRelays` to rebuild existing ones against a newly-available signer
+   * (the signer arrives with the session, while connections may predate it).
+   */
+  setOnAuth(signer: AuthSigner | null): void {
+    this.onAuth = signer;
   }
 
   /**
@@ -250,6 +266,7 @@ export class RelayPool {
         onEose: (subId) => this.markDone(subId, url),
         onClosed: (subId) => this.markDone(subId, url),
         onOk: (eventId, ok, message) => this.onPublishOk(eventId, ok, message, url),
+        onAuth: (template) => this.onAuth?.(template) ?? Promise.resolve(null),
       };
       conn = new RelayConnection(url, this.factory, handlers, this.connOptions);
       this.connections.set(url, conn);

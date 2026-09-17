@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.6.2
+
+### Fixed
+- **NIP-42 AUTH is now actually performed.** A relay that answered a `REQ` with
+  an `AUTH` challenge was silently skipped: `RelayConnection` parsed only
+  `EVENT`/`EOSE`/`CLOSED`/`OK`, so the challenge was discarded, the `onAuth` hook
+  was never wired (it existed only in a doc comment), and `SignerPort.sign()` was
+  never called in production. On a relay that gates its gift-wrapped DM stream
+  behind AUTH — which is common, since kind-1059 reads expose a recipient's
+  metadata — this presented as an account that received almost no mail while
+  other relays worked, with no error anywhere.
+
+  `RelayConnection` now signs a kind-22242 event bound to the relay's URL and the
+  challenge (via `onAuth` → `SignerPort` → the host's signer), replies `["AUTH",
+  event]`, and **replays every active `REQ`** — the ones sent before the
+  challenge were not honoured. A challenge is signed at most once per socket and
+  never concurrently; a refused or throwing signer, or a socket that drops while
+  signing, leaves the relay unauthenticated exactly as before. This implements
+  the behaviour `docs/USAGE.md` §12 already documented.
+
+## 0.6.1
 
 ### Fixed
 - **NIP-17 gift wraps (`kind:1059`) are no longer misrouted on publish.** The

@@ -764,6 +764,15 @@ const client = new LocalRelayClient(workerChannel(worker), {
 Return `null` to decline (the worker handles refusal gracefully). If you omit
 `onSignRequest`, all worker sign requests are refused.
 
+The worker builds the template (`kind: 22242`, tagged with the relay's URL and
+the relay's challenge); you only sign it. After `AUTH` is accepted the worker
+**re-issues the relay's active subscriptions**, because a `REQ` sent before the
+challenge is not honoured — so mail held behind AUTH starts arriving only then.
+
+Each socket authenticates independently: a reconnect (or a relay re-challenge)
+signs again, so the signer must be available for the whole session, not only at
+connect time. A relay that never challenges never triggers a sign request.
+
 ---
 
 ## 13. Lifecycle: pause / resume / accounts

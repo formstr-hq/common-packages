@@ -28,6 +28,7 @@ import type {
 
 /** Cross-app default relay set. Keep any override a superset or boards stop syncing. */
 export const DEFAULT_RELAYS = [
+  "wss://relay.formstr.app",
   "wss://relay.damus.io/",
   "wss://nos.lol/",
   "wss://relay.primal.net/",

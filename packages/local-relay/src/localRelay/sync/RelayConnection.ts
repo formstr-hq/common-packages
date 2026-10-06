@@ -12,9 +12,17 @@
  * nothing until we authenticate (some send `CLOSED <sub> auth-required`, some
  * just go quiet). When `onAuth` is supplied this connection builds the kind-22242
  * template (bound to this relay's URL + the challenge), asks the host to sign
- * it, replies `["AUTH", event]`, and re-issues every active REQ — the ones sent
- * before the challenge were not honoured. Without `onAuth` the challenge is
- * ignored, which is the correct behavior for a relay that never challenges.
+ * it, replies `["AUTH", event]`, and — once the relay has ACCEPTED that AUTH —
+ * re-issues every active REQ, since the ones sent before the challenge were not
+ * honoured. Without `onAuth` the challenge is ignored, which is the correct
+ * behavior for a relay that never challenges.
+ *
+ * The replay is deliberately NOT back-to-back with the AUTH frame: a relay
+ * verifies the AUTH signature asynchronously and rejects a REQ that arrives
+ * before that check finishes (observed on relay.formstr.app, where an immediate
+ * replay is still answered `CLOSED auth-required`). We therefore wait for the
+ * AUTH `OK true` — with a short grace timeout as a fallback for relays that
+ * don't acknowledge AUTH — and replay then. An explicit `OK false` cancels it.
  */
 import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
@@ -45,6 +53,13 @@ export interface RelayConnectionOptions {
 
 import type { Socket, SocketFactory } from "./Socket";
 
+/**
+ * How long to wait for an `OK` for our AUTH event before replaying the active
+ * REQs anyway. The `OK true` is the reliable trigger; this is a ceiling for
+ * relays that authenticate without acknowledging, so a sub can't hang forever.
+ */
+export const AUTH_REPLAY_GRACE_MS = 600;
+
 export class RelayConnection {
   private socket: Socket | null = null;
   private sendQueue: unknown[] = [];
@@ -61,6 +76,18 @@ export class RelayConnection {
    */
   private authChallenge: string | null = null;
   private authInFlight = false;
+  /**
+   * The id of the AUTH event we are waiting on an `OK` for. Set when we write
+   * `["AUTH", event]`; on `OK true` we replay the active REQs, on `OK false` we
+   * abandon the attempt. Cleared by `fireAuthReplay` and on (re)connect.
+   */
+  private pendingAuthEventId: string | null = null;
+  /**
+   * Fallback timer that replays the active REQs if the relay never answers the
+   * AUTH with an `OK`. Some relays authenticate silently, and without this the
+   * subs would hang in `auth-required` forever.
+   */
+  private authReplayTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly url: string,
@@ -99,6 +126,11 @@ export class RelayConnection {
       // A fresh socket must authenticate afresh; the relay will re-challenge.
       this.authChallenge = null;
       this.authInFlight = false;
+      this.pendingAuthEventId = null;
+      if (this.authReplayTimer) {
+        clearTimeout(this.authReplayTimer);
+        this.authReplayTimer = null;
+      }
       // Resubscribe everything that was active before the (re)connect.
       for (const [subId, filters] of Array.from(this.activeReqs.entries())) {
         this.write(["REQ", subId, ...filters]);
@@ -144,6 +176,11 @@ export class RelayConnection {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.authReplayTimer) {
+      clearTimeout(this.authReplayTimer);
+      this.authReplayTimer = null;
+    }
+    this.pendingAuthEventId = null;
     this.activeReqs.clear();
     try {
       this.socket?.close();
@@ -192,6 +229,13 @@ export class RelayConnection {
         this.handlers.onClosed(msg[1], this.url, msg[2] ?? "");
         break;
       case "OK":
+        // The relay accepted/refused an event we published. If it's our AUTH
+        // event, this is the point at which the relay is genuinely authenticated
+        // — only now is a REQ replay safe (see `authenticate`).
+        if (this.pendingAuthEventId && msg[1] === this.pendingAuthEventId) {
+          if (msg[2]) this.fireAuthReplay();
+          else this.cancelAuthReplay();
+        }
         this.handlers.onOk?.(msg[1], !!msg[2], msg[3] ?? "", this.url);
         break;
       case "AUTH":
@@ -202,12 +246,17 @@ export class RelayConnection {
   }
 
   /**
-   * Answer a NIP-42 challenge: sign kind 22242 and re-issue every active REQ.
+   * Answer a NIP-42 challenge: sign kind 22242 and, once the relay accepts the
+   * AUTH, re-issue every active REQ.
    *
    * REQs sent before the challenge are not honoured by the relay, so the
-   * resubscribe after AUTH is what actually starts the data flowing. A refusal
-   * or missing hook is not an error — the relay simply stays unauthenticated,
-   * and its CLOSED/deadline handling above treats it as done.
+   * resubscribe after AUTH is what actually starts the data flowing — but it
+   * must wait for the relay to register the AUTH. Signing is async; the relay
+   * also verifies the AUTH asynchronously. We therefore write `["AUTH", event]`
+   * and defer the replay until either the matching `OK true` arrives (the
+   * reliable signal) or a short grace timeout fires (relays that authenticate
+   * silently). A refusal or missing hook is not an error — the relay simply
+   * stays unauthenticated, and its CLOSED/deadline handling treats it as done.
    */
   private async authenticate(challenge: string): Promise<void> {
     if (!this.handlers.onAuth || !challenge) return;
@@ -230,15 +279,42 @@ export class RelayConnection {
       // Refused, or the socket died while we were signing — either way, do not
       // authenticate a stale socket.
       if (!event || !this.connected) return;
+      this.pendingAuthEventId = event.id;
       this.write(["AUTH", event]);
-      // The relay ignored every REQ sent before AUTH; replay them now.
-      for (const [subId, filters] of Array.from(this.activeReqs.entries())) {
-        this.write(["REQ", subId, ...filters]);
-      }
+      // Fallback for relays that authenticate silently (no `OK`): replay after a
+      // short grace. The `OK true` path cancels this and replays immediately.
+      this.authReplayTimer = setTimeout(() => this.fireAuthReplay(), AUTH_REPLAY_GRACE_MS);
     } catch {
       // A throwing signer must not break the connection; stay unauthenticated.
     } finally {
       this.authInFlight = false;
+    }
+  }
+
+  /**
+   * The relay has registered our AUTH (or the grace window elapsed): replay every
+   * active REQ on the authenticated socket. Idempotent — safe to call from both
+   * the `OK` handler and the grace timer. `pendingAuthEventId` is intentionally
+   * NOT cleared here: if the relay's `OK` lands after the grace timer, the `OK`
+   * handler replays again on a now-genuinely-authenticated socket.
+   */
+  private fireAuthReplay(): void {
+    if (this.authReplayTimer) {
+      clearTimeout(this.authReplayTimer);
+      this.authReplayTimer = null;
+    }
+    if (!this.connected) return;
+    for (const [subId, filters] of Array.from(this.activeReqs.entries())) {
+      this.write(["REQ", subId, ...filters]);
+    }
+  }
+
+  /** The relay refused our AUTH — give up on this attempt without replaying. */
+  private cancelAuthReplay(): void {
+    this.pendingAuthEventId = null;
+    if (this.authReplayTimer) {
+      clearTimeout(this.authReplayTimer);
+      this.authReplayTimer = null;
     }
   }
 

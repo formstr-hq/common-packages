@@ -1,4 +1,8 @@
-import { RelayConnection, RelayConnectionHandlers } from "./RelayConnection";
+import {
+  RelayConnection,
+  RelayConnectionHandlers,
+  AUTH_REPLAY_GRACE_MS,
+} from "./RelayConnection";
 import { fakeSocketFactory, makeEvent } from "../testkit";
 
 const URL = "wss://a";
@@ -142,7 +146,7 @@ describe("RelayConnection NIP-42 AUTH", () => {
     return { f, conn, templates };
   }
 
-  it("signs a challenge, replies AUTH, and replays active REQs", async () => {
+  it("signs a challenge, replies AUTH, and replays active REQs after the AUTH is accepted", async () => {
     const f = fakeSocketFactory();
     const templates: any[] = [];
     const conn = new RelayConnection(URL, f.factory, {
@@ -171,13 +175,94 @@ describe("RelayConnection NIP-42 AUTH", () => {
     const sent = f.last(URL).sent;
     const auth = sent.find((m) => m[0] === "AUTH");
     expect(auth).toEqual(["AUTH", AUTH_OK]);
-    // REQs sent before AUTH were not honoured: the sub must be replayed AFTER.
-    const authIndex = sent.findIndex((m) => m[0] === "AUTH");
-    const reqIndexes = sent
+
+    // A relay verifies the AUTH asynchronously; the replay must NOT be
+    // back-to-back with it or the REQ is rejected as still unauthenticated.
+    // Nothing beyond the initial REQ + AUTH has been sent yet.
+    expect(sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length).toBe(1);
+
+    // The relay acknowledges the AUTH — NOW the sub is replayed.
+    f.last(URL).emit(["OK", AUTH_OK.id, true, ""]);
+    const authIndex = f.last(URL).sent.findIndex((m) => m[0] === "AUTH");
+    const reqIndexes = f.last(URL).sent
       .map((m, i) => (m[0] === "REQ" && m[1] === "s1" ? i : -1))
       .filter((i) => i >= 0);
     expect(reqIndexes.length).toBe(2); // initial + post-auth replay
     expect(Math.max(...reqIndexes)).toBeGreaterThan(authIndex);
+  });
+
+  it("replays active REQs after a grace window when the relay never OKs the AUTH", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        onAuth: async () => AUTH_OK,
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      f.last(URL).open();
+      f.last(URL).emit(["AUTH", "c-silent"]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const reqs = () =>
+        f.last(URL).sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length;
+      expect(reqs()).toBe(1); // no replay until the grace window elapses
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(reqs()).toBe(2); // silent auth → fallback replay
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays again if the AUTH OK lands after the grace window (silent relay, late ack)", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        onAuth: async () => AUTH_OK,
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      f.last(URL).open();
+      f.last(URL).emit(["AUTH", "c-late"]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const reqs = () =>
+        f.last(URL).sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length;
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(reqs()).toBe(2); // fallback replay
+      // The relay's OK arrives late: replay once more on the now-authenticated socket.
+      f.last(URL).emit(["OK", AUTH_OK.id, true, ""]);
+      expect(reqs()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay active REQs when the relay refuses the AUTH", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        onAuth: async () => AUTH_OK,
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      f.last(URL).open();
+      f.last(URL).emit(["AUTH", "c-refuse"]);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      f.last(URL).emit(["OK", AUTH_OK.id, false, "invalid: bad sig"]);
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(
+        f.last(URL).sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays silent when no onAuth hook is configured", () => {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.4
+
+### Fixed
+- **Discard an AUTH event that resolves after its socket was replaced.**
+  `authenticate()` awaited the signer and then checked only `connected` before
+  writing `["AUTH", event]`. If the socket dropped and reconnected during
+  signing, that check passed on the NEW socket and the stale challenge was
+  written to it — leaving the fresh socket unauthenticated (it was never sent
+  the challenge the event answered). The connection now captures the socket the
+  challenge belongs to and discards the resolved event unless the same socket
+  is still live.
+
 ## 0.6.3
 
 ### Fixed

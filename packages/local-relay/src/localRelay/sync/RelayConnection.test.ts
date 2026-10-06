@@ -398,4 +398,98 @@ describe("RelayConnection NIP-42 AUTH", () => {
     await Promise.resolve();
     expect(templates).toHaveLength(2);
   });
+
+  it("clears a pending AUTH replay timer on destroy", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        onAuth: async () => AUTH_OK,
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      f.last(URL).open();
+      f.last(URL).emit(["AUTH", "c-destroy"]);
+      await Promise.resolve();
+      await Promise.resolve();
+      // The AUTH is signed and the grace fallback is now armed.
+      expect(f.last(URL).sent.some((m) => m[0] === "AUTH")).toBe(true);
+
+      conn.destroy();
+      // The armed timer must be cleared: advancing past the grace window must
+      // not fire a replay (the socket is gone anyway, but the timer is a leak).
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(
+        f.last(URL).sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fires a grace replay even if the socket is already gone", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        autoReconnect: false,
+        onAuth: async () => AUTH_OK,
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      const sock = f.last(URL);
+      sock.open();
+      sock.emit(["AUTH", "c-gone"]);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(sock.sent.some((m) => m[0] === "AUTH")).toBe(true);
+
+      // Drop WITHOUT destroy (no reconnect scheduled): the grace timer still
+      // fires on a dead socket — `fireAuthReplay` must bail on `!connected`.
+      sock.close();
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(
+        sock.sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not replay on a stale socket after a drop (reconnected socket)", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeSocketFactory();
+      let releaseSign: (() => void) | null = null;
+      const conn = new RelayConnection(URL, f.factory, {
+        ...noop,
+        autoReconnect: false,
+        onAuth: () =>
+          new Promise((resolve) => {
+            releaseSign = () => resolve(AUTH_OK);
+          }),
+      });
+      conn.req("s1", [{ kinds: [1059] }]);
+      const first = f.last(URL);
+      first.open();
+      first.emit(["AUTH", "c-race"]);
+      // Drop the socket while the sign is still in flight, then reconnect.
+      first.close();
+      conn.connect();
+      const second = f.last(URL);
+      second.open();
+      // The sign resolves now; it must NOT write AUTH to the reconnected socket
+      // (it belongs to the dead one).
+      releaseSign!();
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(AUTH_REPLAY_GRACE_MS + 1);
+      expect(second.sent.some((m) => m[0] === "AUTH")).toBe(false);
+      expect(
+        second.sent.filter((m) => m[0] === "REQ" && m[1] === "s1").length
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

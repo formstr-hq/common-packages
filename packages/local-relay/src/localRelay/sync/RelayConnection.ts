@@ -265,6 +265,11 @@ export class RelayConnection {
     if (this.authInFlight || this.authChallenge === challenge) return;
     this.authChallenge = challenge;
     this.authInFlight = true;
+    // Capture the socket this challenge belongs to. Signing is async; if the
+    // socket drops and is replaced while we wait, the resolved event must be
+    // discarded rather than written to the NEW socket — its challenge differs,
+    // and AUTHing it with a stale challenge leaves it unauthenticated.
+    const socket = this.socket;
     try {
       const template: EventTemplate = {
         kind: 22242,
@@ -276,9 +281,9 @@ export class RelayConnection {
         content: "",
       };
       const event = await this.handlers.onAuth(template);
-      // Refused, or the socket died while we were signing — either way, do not
-      // authenticate a stale socket.
-      if (!event || !this.connected) return;
+      // Refused, or the socket died/was replaced while we were signing — either
+      // way, do not authenticate a stale socket.
+      if (!event || this.socket !== socket || !this.connected) return;
       this.pendingAuthEventId = event.id;
       this.write(["AUTH", event]);
       // Fallback for relays that authenticate silently (no `OK`): replay after a

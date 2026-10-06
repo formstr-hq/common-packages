@@ -913,6 +913,12 @@ describe("RelayService — NIP-42 AUTH end to end", () => {
       tags: [["relay", "wss://u1"], ["challenge", "integration-chal"]],
     });
     expect(sock.sent.find((m) => m[0] === "AUTH")).toEqual(["AUTH", signedAuth]);
+    // The relay verifies the AUTH asynchronously; the REQ replay must wait for
+    // the AUTH OK, so only the original REQ is on the wire right now.
+    expect(reqOn(sock).filter((m) => m[1] === subId).length).toBe(1);
+    // The relay confirms the AUTH — the sub is replayed on the authenticated socket.
+    sock.emit(["OK", signedAuth.id, true, ""]);
+    await settle();
     expect(reqOn(sock).filter((m) => m[1] === subId).length).toBe(2);
     await service.stop();
   });

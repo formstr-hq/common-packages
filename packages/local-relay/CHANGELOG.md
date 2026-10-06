@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.6.4
+
+### Fixed
+- **Discard an AUTH event that resolves after its socket was replaced.**
+  `authenticate()` awaited the signer and then checked only `connected` before
+  writing `["AUTH", event]`. If the socket dropped and reconnected during
+  signing, that check passed on the NEW socket and the stale challenge was
+  written to it — leaving the fresh socket unauthenticated (it was never sent
+  the challenge the event answered). The connection now captures the socket the
+  challenge belongs to and discards the resolved event unless the same socket
+  is still live.
+
+## 0.6.3
+
+### Fixed
+- **NIP-42 AUTH is now actually effective on relays that gate reads behind it.**
+  0.6.2 sent the `AUTH` event and immediately replayed the active `REQ`s
+  back-to-back. Relays verify the AUTH signature asynchronously, so the
+  replayed `REQ` arrived before the relay had registered the AUTH and was
+  rejected (`CLOSED auth-required`) — the subscription then stayed dark. In
+  practice the relay only served data when the signer happened to resolve with
+  ~zero latency (e.g. a local key), so any real signer (Amber/NIP-46/NIP-07,
+  even a few ms away) still read nothing from an AUTH-gated relay. On
+  `relay.formstr.app`, whose kind-1059 gift-wrap stream requires AUTH, this
+  looked like DMs never arriving.
+
+  `RelayConnection` now writes `["AUTH", event]` and defers the `REQ` replay
+  until the relay acknowledges the AUTH with `OK true` (with a short grace
+  timeout as a fallback for relays that authenticate silently). An explicit
+  `OK false` cancels the replay. The AUTH request is still signed at most once
+  per socket and never concurrently.
+
 ## 0.6.2
 
 ### Fixed

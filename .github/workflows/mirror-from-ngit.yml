@@ -1,0 +1,42 @@
+name: Mirror ngit -> GitHub
+
+# GitHub `main` is a read-only mirror of the canonical ngit repository.
+# Merges land on ngit (nostr://npub1cgd35.../relay.ngit.dev/common-packages);
+# this workflow fast-forwards GitHub `main` to match it.
+#
+# Note: a push made with the built-in GITHUB_TOKEN does not trigger other
+# workflows, so GitHub Actions CI will not run on mirrored commits. Use a
+# personal access token here instead if CI on the mirror is required.
+
+on:
+  schedule:
+    # every 10 minutes
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-from-ngit
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Fast-forward main from ngit
+        run: |
+          set -euo pipefail
+          git remote add ngit \
+            https://relay.ngit.dev/npub1cgd35mxmy37vhkfcmjckk9dylguz6q8l67cj6h9m45tj5rx569cql9kfex/common-packages.git
+          git fetch --no-tags ngit main
+          echo "ngit main:   $(git rev-parse FETCH_HEAD)"
+          echo "github main: $(git rev-parse HEAD)"
+          # Non-fast-forward (GitHub diverged) fails loudly on purpose.
+          git push origin FETCH_HEAD:main

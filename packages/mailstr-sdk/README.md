@@ -12,7 +12,10 @@ email. It covers the client side of the protocol end to end:
   tell senders where to deliver (`publishSetup`),
 - **Inbox** — read NIP-59 gift-wrapped mail (kind 1059 → kind 13 seal →
   kind 1301 mail rumor), verify it, and parse the RFC 2822 payload
-  (`readInbox`, `unwrapMail`).
+  (`readInbox`, `unwrapMail`),
+- **Send** — build the same rumor → seal → gift-wrap chain outbound, to a
+  Nostr key or (via the domain's SMTP bridge) a legacy email address
+  (`sendMail`).
 
 Wire compatibility is pinned against the mailstr server (nail
 `nostr-bridge`) protocol implementation — kinds, verification rules and the
@@ -125,6 +128,38 @@ Failure reasons: `not-for-us` (routine — the wrap was encrypted to someone
 else), `malformed-seal`, `bad-seal-signature`, `wrong-seal-kind`,
 `malformed-rumor`, `author-mismatch`, `wrong-rumor-kind`, `expired`,
 `wrapkey-mismatch`.
+
+### Send mail
+
+Outbound mail mirrors `unwrapMail` in reverse — a kind-1301 rumor is sealed
+(kind 13) and gift-wrapped (kind 1059) to the recipient's key:
+
+```ts
+import { sendMail } from "@formstr/mailstr-sdk";
+
+// To a Nostr key (mailstr mailbox), by npub or hex:
+await sendMail(identity.secretKey, {
+  to: "npub1…",
+  subject: "Hi",
+  text: "Sent from the SDK.",
+});
+
+// To a legacy email address — routed through the domain's SMTP bridge,
+// which is discovered from the `_smtp@<domain>` NIP-05 record:
+await sendMail(identity.secretKey, {
+  to: "friend@outside.example",
+  subject: "Hi",
+  text: "…",
+  // bridge: { pubkey, relays },  // or pass an explicit BridgeIdentity
+});
+```
+
+`to` accepts a hex pubkey, an `npub1…`, or an email address. Mailstr-local
+addresses (`name@mailstr.app`) must be addressed by key — the bridge refuses
+to relay to its own domains (`outbound.ts` §6B). Pass a fully-formed message
+with `raw` instead of `subject`/`text`, and inject `pool` to control transport
+(tests). Each call returns the published `wrap`, the resolved `recipient` key,
+and per-relay `results`.
 
 ## Protocol notes
 

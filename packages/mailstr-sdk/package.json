@@ -4,6 +4,9 @@
   "description": "Headless TypeScript SDK for Mailstr — Nostr-native email: identity, NIP-98 auth, mailbox claiming, DM-relay setup, and kind-1059 gift-wrap inbox reading",
   "license": "MIT",
   "author": "Abhay <toabhayraizada@gmail.com>",
+  "engines": {
+    "node": ">=20"
+  },
   "homepage": "https://github.com/formstr-hq/common-packages/tree/main/packages/mailstr-sdk#readme",
   "repository": {
     "type": "git",

@@ -40,7 +40,10 @@ describe("sendMail — rumor/seal/wrap construction", () => {
     expect(result.wrap.kind).toBe(KIND_GIFTWRAP);
     expect(result.wrap.tags).toContainEqual(["p", recipient.pubkey]);
 
-    const unwrapped = unwrapMail(result.wrap, recipient.secretKey);
+    // Pass the same frozen clock: `now` is fixed for sendMail, but unwrapMail
+    // defaults to the wall clock and rejects rumors older than
+    // MAX_RUMOR_AGE_SECONDS (300), which made this assertion a time bomb.
+    const unwrapped = unwrapMail(result.wrap, recipient.secretKey, { now });
     expect(unwrapped.ok).toBe(true);
     if (!unwrapped.ok) return;
     expect(unwrapped.seal.kind).toBe(KIND_SEAL);

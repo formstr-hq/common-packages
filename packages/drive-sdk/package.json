@@ -1,7 +1,7 @@
 {
   "name": "@formstr/drive-sdk",
-  "version": "0.1.0",
-  "description": "Protocol-only NIP-FS helpers for encrypted files on Nostr and Blossom",
+  "version": "0.2.0",
+  "description": "NIP-FS for Formstr Drive: encrypted file metadata on Nostr, single blobs on Blossom, and file sharing \u2014 byte-compatible with formstr-drive",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,10 +20,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./local-relay": {
+      "types": "./dist/local-relay.d.ts",
+      "import": "./dist/local-relay.js",
+      "require": "./dist/local-relay.cjs"
     }
   },
   "files": [
     "dist",
+    "docs",
     "LICENSE",
     "README.md"
   ],
@@ -35,13 +41,23 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "@sinclair/typebox": "^0.34.41",
     "nostr-tools": "^2.23.5"
   },
   "devDependencies": {
+    "@formstr/local-relay": "workspace:*",
     "@vitest/coverage-v8": "^2.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@formstr/local-relay": ">=0.6.0 <1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@formstr/local-relay": {
+      "optional": true
+    }
   }
 }

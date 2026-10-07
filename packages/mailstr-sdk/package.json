@@ -1,6 +1,6 @@
 {
   "name": "@formstr/mailstr-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Headless TypeScript SDK for Mailstr — Nostr-native email: identity, NIP-98 auth, mailbox claiming, DM-relay setup, and kind-1059 gift-wrap inbox reading",
   "license": "MIT",
   "author": "Abhay <toabhayraizada@gmail.com>",

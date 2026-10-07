@@ -25,6 +25,9 @@ export const GATED_TOOLS = [
   "delete_file",
   "rename_file",
   "move_file",
+  "send_mail",
+  "claim_mailbox",
+  "publish_mail_setup",
 ] as const;
 
 export type GatedTool = (typeof GATED_TOOLS)[number];

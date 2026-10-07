@@ -1,5 +1,6 @@
-import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
+import { finalizeEvent, SimplePool, type Event, type EventTemplate } from "nostr-tools";
 import { KIND_DM_RELAYS, KIND_PROFILE } from "./constants.js";
+import type { MailSigner } from "./signer.js";
 
 /**
  * First-run setup, mirroring what the mailstr web client publishes:
@@ -42,51 +43,69 @@ export interface PublishSetupOptions {
   pool?: Pick<SimplePool, "publish">;
 }
 
+/** The two kind-0 / kind-10050 templates setup publishes. */
+function setupTemplates(opts: PublishSetupOptions, relays: string[]): EventTemplate[] {
+  const profile: EventTemplate = {
+    kind: KIND_PROFILE,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [],
+    content: JSON.stringify({
+      name: opts.name,
+      ...(opts.nip05 ? { nip05: opts.nip05 } : {}),
+      ...(opts.about ? { about: opts.about } : {}),
+      ...(opts.picture ? { picture: opts.picture } : {}),
+      ...opts.profileExtra,
+    }),
+  };
+  const dmRelays: EventTemplate = {
+    kind: KIND_DM_RELAYS,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: relays.map((r) => ["relay", r]),
+    content: "",
+  };
+  return [profile, dmRelays];
+}
+
+/** Publish both fully-built setup events, all-settled per relay. */
+async function publishBoth(
+  events: [Event, Event],
+  relays: string[],
+  pool: Pick<SimplePool, "publish">,
+): Promise<{ profile: SetupEventOutcome; dmRelays: SetupEventOutcome }> {
+  const [profileOutcome, dmRelayOutcome] = await Promise.all([
+    publishEverywhere(pool, relays, events[0]),
+    publishEverywhere(pool, relays, events[1]),
+  ]);
+  return { profile: profileOutcome, dmRelays: dmRelayOutcome };
+}
+
 /**
- * Publish the profile + DM-relay setup events. Relays may reject either
- * event (auth, rate limits); both outcomes are reported per relay instead of
- * throwing, matching the web client's all-settled behavior.
+ * Publish the profile + DM-relay setup events with a raw secret key. Relays may
+ * reject either event (auth, rate limits); both outcomes are reported per relay
+ * instead of throwing, matching the web client's all-settled behavior.
  */
 export async function publishSetup(
   secretKey: Uint8Array,
   opts: PublishSetupOptions,
 ): Promise<{ profile: SetupEventOutcome; dmRelays: SetupEventOutcome }> {
   const relays = opts.relays ?? DEFAULT_SETUP_RELAYS;
-
-  const profile = finalizeEvent(
-    {
-      kind: KIND_PROFILE,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [],
-      content: JSON.stringify({
-        name: opts.name,
-        ...(opts.nip05 ? { nip05: opts.nip05 } : {}),
-        ...(opts.about ? { about: opts.about } : {}),
-        ...(opts.picture ? { picture: opts.picture } : {}),
-        ...opts.profileExtra,
-      }),
-    },
-    secretKey,
-  );
-
-  const dmRelays = finalizeEvent(
-    {
-      kind: KIND_DM_RELAYS,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: relays.map((r) => ["relay", r]),
-      content: "",
-    },
-    secretKey,
-  );
-
-  // One pool for both publishes: reuses relay connections instead of
-  // dialing every relay twice.
+  const [profile, dmRelays] = setupTemplates(opts, relays).map((t) => finalizeEvent(t, secretKey));
+  // One pool for both publishes: reuses relay connections instead of dialing
+  // every relay twice.
   const pool = opts.pool ?? new SimplePool();
-  const [profileOutcome, dmRelayOutcome] = await Promise.all([
-    publishEverywhere(pool, relays, profile),
-    publishEverywhere(pool, relays, dmRelays),
-  ]);
-  return { profile: profileOutcome, dmRelays: dmRelayOutcome };
+  return publishBoth([profile, dmRelays], relays, pool);
+}
+
+/** Publish setup events through a {@link MailSigner} (NIP-07/NIP-46/MCP). */
+export async function publishSetupWith(
+  signer: MailSigner,
+  opts: PublishSetupOptions,
+): Promise<{ profile: SetupEventOutcome; dmRelays: SetupEventOutcome }> {
+  const relays = opts.relays ?? DEFAULT_SETUP_RELAYS;
+  const templates = setupTemplates(opts, relays);
+  const [profile, dmRelays] = await Promise.all(templates.map((t) => signer.signEvent(t)));
+  const pool = opts.pool ?? new SimplePool();
+  return publishBoth([profile, dmRelays], relays, pool);
 }
 
 /**

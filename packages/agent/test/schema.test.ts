@@ -5,9 +5,9 @@ import { getToolSchemas } from "../src/schema";
 describe("getToolSchemas", () => {
   const schemas = getToolSchemas();
 
-  it("derives one schema per registry tool (53)", () => {
-    expect(schemas).toHaveLength(53);
-    expect(new Set(schemas.map((s) => s.name)).size).toBe(53);
+  it("derives one schema per registry tool (59)", () => {
+    expect(schemas).toHaveLength(59);
+    expect(new Set(schemas.map((s) => s.name)).size).toBe(59);
   });
 
   it("every schema has name, description and an object json-schema", () => {

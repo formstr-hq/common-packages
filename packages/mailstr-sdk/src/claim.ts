@@ -1,5 +1,7 @@
+import { nip19 } from "nostr-tools";
 import { identityFromSecretKey } from "./identity.js";
-import { signNip98 } from "./nip98.js";
+import { signNip98, signNip98With } from "./nip98.js";
+import type { MailSigner } from "./signer.js";
 
 /**
  * Mailstr mailbox claim/purchase flow (port of the reference claim script):
@@ -93,26 +95,58 @@ export type ClaimOutcome =
 
 const FALLBACK_FETCH_MS = 20_000;
 
-export async function claimMailbox(
-  secretKey: Uint8Array,
+/** A minted mailbox invoice, before payment. */
+export interface MailboxInvoice {
+  /** bolt11 invoice to pay. */
+  invoice: string;
+  /** Payment hash — needed to watch/subscribe to payment status. */
+  paymentHash: string;
+  /** Amount in sats, when the API states one. */
+  amountSats: number | undefined;
+  /** The NIP-05 address this invoice buys, e.g. "irona@mailstr.app". */
+  nip05: string;
+}
+
+/**
+ * Result of requesting a mailbox invoice. `ok` carries the invoice; otherwise
+ * a status matching {@link ClaimOutcome}'s pre-payment failures, so callers can
+ * surface the same reasons — and, crucially, a host that holds no wallet can
+ * stop here and let the human pay out of band.
+ */
+export type MailboxInvoiceOutcome =
+  | ({ status: "ok" } & MailboxInvoice)
+  | { status: "name-taken" }
+  | { status: "invoice-request-failed"; httpStatus: number; detail: string }
+  | { status: "invoice-shape-unexpected"; detail: string };
+
+/** Everything the claim flow needs from an identity — key or signer backed. */
+interface ClaimIdentity {
+  pubkey: string;
+  npub: string;
+  /** NIP-98 `Authorization` header for a given request. */
+  auth: (url: string, method: string, body: string) => Promise<string>;
+}
+
+/**
+ * Request a mailbox invoice without paying it — the half of {@link claimMailbox}
+ * for a host that cannot hold a Lightning wallet. Signs the NIP-98 request with
+ * `identity.auth`, returns the bolt11 invoice and its payment hash, and leaves
+ * payment (and the NIP-05 binding poll) to the caller.
+ */
+async function requestInvoice(
+  identity: ClaimIdentity,
   opts: ClaimMailboxOptions,
-): Promise<ClaimOutcome> {
+): Promise<MailboxInvoiceOutcome> {
   const api = (opts.api ?? DEFAULT_CLAIM_API).replace(/\/+$/, "");
   const domain = opts.domain ?? DEFAULT_MAIL_DOMAIN;
   const tier = opts.tier ?? DEFAULT_TIER;
   const nip05 = `${opts.name}@${domain}`;
   const fetchJson = opts.fetchJson ?? defaultFetchJson;
-  const delay = opts.delay ?? defaultDelay;
-  const timeoutMs = opts.timeoutMs ?? 300_000;
-  const wsTimeoutMs = opts.wsTimeoutMs ?? 240_000;
-  const pollIntervalMs = opts.pollIntervalMs ?? 10_000;
-
-  const identity = identityFromSecretKey(secretKey);
   const namesUrl = `https://${domain}/.well-known/nostr.json?name=${encodeURIComponent(opts.name)}`;
 
-  // 0) The name must still be free. A failed availability probe is not
-  // blocking: the invoice API validates ownership server-side anyway, and
-  // relays serving NIP-05 are often flakier than the API itself.
+  // The name must still be free. A failed availability probe is not blocking:
+  // the invoice API validates ownership server-side anyway, and relays serving
+  // NIP-05 are often flakier than the API itself.
   let avail: Awaited<ReturnType<FetchJson>> | undefined;
   try {
     avail = await fetchJson(namesUrl);
@@ -124,10 +158,9 @@ export async function claimMailbox(
     return { status: "name-taken" };
   }
 
-  // 1) NIP-98-signed invoice request.
   const body = JSON.stringify({ pubkey: identity.pubkey, nip05, tierId: tier });
   const invoiceUrl = `${api}/api/generate-invoice/mail`;
-  const auth = await signNip98(secretKey, invoiceUrl, "POST", body);
+  const auth = await identity.auth(invoiceUrl, "POST", body);
   let inv: Awaited<ReturnType<FetchJson>>;
   try {
     inv = await fetchJson(invoiceUrl, {
@@ -145,7 +178,34 @@ export async function claimMailbox(
   if (!invoiceBody.invoice || !invoiceBody.paymentHash) {
     return { status: "invoice-shape-unexpected", detail: summarize(inv.body) };
   }
-  const { invoice, paymentHash, amount } = invoiceBody;
+  return {
+    status: "ok",
+    invoice: invoiceBody.invoice,
+    paymentHash: invoiceBody.paymentHash,
+    amountSats: invoiceBody.amount,
+    nip05,
+  };
+}
+
+/** Shared body of the two claim variants. */
+async function claim(identity: ClaimIdentity, opts: ClaimMailboxOptions): Promise<ClaimOutcome> {
+  const delay = opts.delay ?? defaultDelay;
+  const timeoutMs = opts.timeoutMs ?? 300_000;
+  const wsTimeoutMs = opts.wsTimeoutMs ?? 240_000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 10_000;
+  const domain = opts.domain ?? DEFAULT_MAIL_DOMAIN;
+  const nip05 = `${opts.name}@${domain}`;
+  const fetchJson = opts.fetchJson ?? defaultFetchJson;
+  const api = (opts.api ?? DEFAULT_CLAIM_API).replace(/\/+$/, "");
+  const namesUrl = `https://${domain}/.well-known/nostr.json?name=${encodeURIComponent(opts.name)}`;
+
+  // 0-1) Availability probe + NIP-98-signed invoice request.
+  const req = await requestInvoice(identity, opts);
+  if (req.status !== "ok") {
+    if (req.status === "name-taken") return { status: "name-taken" };
+    return req;
+  }
+  const { invoice, paymentHash, amountSats: amount } = req;
 
   // 2) Pay through the caller's hook — the SDK holds no wallets or secrets.
   let preimage: string | null;
@@ -240,6 +300,78 @@ export async function claimMailbox(
     paymentHash,
     amountSats: amount,
   };
+}
+
+/** Claim a mailbox with a raw secret key (dedicated-mail-identity path). */
+export async function claimMailbox(
+  secretKey: Uint8Array,
+  opts: ClaimMailboxOptions,
+): Promise<ClaimOutcome> {
+  const identity = identityFromSecretKey(secretKey);
+  return claim(
+    {
+      pubkey: identity.pubkey,
+      npub: identity.npub,
+      auth: (url, method, body) => signNip98(secretKey, url, method, body),
+    },
+    opts,
+  );
+}
+
+/** Request a mailbox invoice with a raw secret key, without paying it. */
+export async function requestMailboxInvoice(
+  secretKey: Uint8Array,
+  opts: ClaimMailboxOptions,
+): Promise<MailboxInvoiceOutcome> {
+  const identity = identityFromSecretKey(secretKey);
+  return requestInvoice(
+    {
+      pubkey: identity.pubkey,
+      npub: identity.npub,
+      auth: (url, method, body) => signNip98(secretKey, url, method, body),
+    },
+    opts,
+  );
+}
+
+/**
+ * Claim a mailbox through a {@link MailSigner} (NIP-07/NIP-46/MCP). The NIP-98
+ * invoice request is signed by the host signer, so its pubkey is the one the
+ * claimed address will bind to.
+ */
+export async function claimMailboxWith(
+  signer: MailSigner,
+  opts: ClaimMailboxOptions,
+): Promise<ClaimOutcome> {
+  const pubkey = await signer.getPublicKey();
+  return claim(
+    {
+      pubkey,
+      npub: nip19.npubEncode(pubkey),
+      auth: (url, method, body) => signNip98With(signer, url, method, body),
+    },
+    opts,
+  );
+}
+
+/**
+ * Request a mailbox invoice through a {@link MailSigner}, without paying it.
+ * This is the entry point for hosts that hold no wallet (the MCP): it returns a
+ * bolt11 invoice for the human to pay, and the caller polls NIP-05 for binding.
+ */
+export async function requestMailboxInvoiceWith(
+  signer: MailSigner,
+  opts: ClaimMailboxOptions,
+): Promise<MailboxInvoiceOutcome> {
+  const pubkey = await signer.getPublicKey();
+  return requestInvoice(
+    {
+      pubkey,
+      npub: nip19.npubEncode(pubkey),
+      auth: (url, method, body) => signNip98With(signer, url, method, body),
+    },
+    opts,
+  );
 }
 
 function summarize(body: unknown): string {

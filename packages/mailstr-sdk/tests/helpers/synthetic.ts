@@ -116,3 +116,22 @@ export function wrapChain(
 export function reserializeRumor(r: Rumor): string {
   return JSON.stringify(r);
 }
+
+/**
+ * A `MailSigner` backed by a throwaway key — stands in for the MCP's
+ * keystore/nip46 signer in tests. Structurally identical to handing the SDK a
+ * `@formstr/core` NostrSigner or a `@formstr/signer` ActiveSigner.
+ */
+export function makeMailSigner(secretKey: Uint8Array) {
+  const conversationKey = (pubkey: string) =>
+    nip44.v2.utils.getConversationKey(secretKey, pubkey);
+  return {
+    getPublicKey: () => Promise.resolve(getPublicKey(secretKey)),
+    nip44Encrypt: (pubkey: string, plaintext: string) =>
+      Promise.resolve(nip44.v2.encrypt(plaintext, conversationKey(pubkey))),
+    nip44Decrypt: (pubkey: string, ciphertext: string) =>
+      Promise.resolve(nip44.v2.decrypt(ciphertext, conversationKey(pubkey))),
+    signEvent: (template: Parameters<typeof finalizeEvent>[0]) =>
+      Promise.resolve(finalizeEvent(template, secretKey)),
+  };
+}

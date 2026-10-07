@@ -65,6 +65,17 @@ export const MODULE_DEFAULT_RELAYS = {
     "wss://relay.nostr.band",
     "wss://nos.lol",
   ],
+  // Mail reads kind-1059 gift wraps p-tagged to the user. These default inbox
+  // relays mirror @formstr/mailstr-sdk's DEFAULT_INBOX_RELAYS (the bootstrap
+  // fallbacks the reference reader observes) so mail sent by the standalone
+  // client is found here too. Delivery actually targets the recipient's
+  // kind-10050 list; these are where we look when building our own.
+  mail: [
+    "wss://relay.formstr.app",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://relay.snort.social",
+  ],
 } as const;
 
 export type ModuleName = keyof typeof MODULE_DEFAULT_RELAYS;

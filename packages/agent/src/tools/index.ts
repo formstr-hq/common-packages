@@ -1,6 +1,7 @@
 import { calendarTools } from "./calendar";
 import { driveTools } from "./drive";
 import { formsTools } from "./forms";
+import { mailTools } from "./mail";
 import { pagesTools } from "./pages";
 import { pollsTools } from "./polls";
 import type { ToolDef, ToolEntry, ToolModule } from "./types";
@@ -23,6 +24,7 @@ export const toolRegistry: ToolEntry[] = [
   ...tag(pagesTools, "pages"),
   ...tag(pollsTools, "polls"),
   ...tag(driveTools, "drive"),
+  ...tag(mailTools, "mail"),
 ].map(withStrictArgs);
 
 export type { ToolDef, ToolEntry, ToolCtx, ToolModule } from "./types";

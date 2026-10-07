@@ -27,6 +27,29 @@ Wire compatibility is pinned against the mailstr server (nail
 pnpm add @formstr/mailstr-sdk
 ```
 
+## Two identity models
+
+Most functions take a raw 32-byte secret key — ideal when your app owns a
+**dedicated mail identity** ([`createIdentity`](#identity-no-persistence--your-app-owns-storage)).
+Hosts that never expose a private key (NIP-07 extensions, NIP-46 bunkers, the
+MCP keystore) use the `…With` variants, which take a `MailSigner`:
+
+```ts
+import { readInboxWith, sendMailWith, type MailSigner } from "@formstr/mailstr-sdk";
+
+// Any object with these four methods works — a @formstr/signer ActiveSigner,
+// a @formstr/core NostrSigner, or your own wrapper. The private key never
+// enters mailstr-sdk.
+const signer: MailSigner = /* … */;
+const inbox = await readInboxWith(signer, { relays: ["wss://relay.formstr.app"] });
+await sendMailWith(signer, { to: "npub1…", subject: "Hi", text: "…" });
+```
+
+The identity behind the signer **is** the mail identity: mailstr's bridge
+authorizes a sender by matching the seal's pubkey against the NIP-05 record for
+the From address, so the account you sign with must be the account its
+`name@domain` address is bound to.
+
 ## Usage
 
 ### Identity (no persistence — your app owns storage)

@@ -9,7 +9,7 @@ export interface ToolCtx {
 }
 
 /** The module a tool belongs to. Hosts use it to expose a subset of the registry. */
-export type ToolModule = "forms" | "calendar" | "pages" | "polls" | "drive";
+export type ToolModule = "forms" | "calendar" | "pages" | "polls" | "drive" | "mail";
 
 /** A tool as its own module file declares it, before the registry stamps `module`. */
 export interface ToolDef {

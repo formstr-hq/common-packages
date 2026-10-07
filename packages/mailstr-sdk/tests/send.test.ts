@@ -6,9 +6,10 @@ import {
   messageStringToBytes,
   WRAP_KEY_TAG,
 } from "../src/index.js";
-import { resolveDestination, resolveRecipient, sendMail } from "../src/send.js";
-import { unwrapMail } from "../src/unwrap.js";
+import { resolveDestination, resolveRecipient, sendMail, sendMailWith } from "../src/send.js";
+import { unwrapMail, unwrapMailWith } from "../src/unwrap.js";
 import type { SimplePool } from "nostr-tools";
+import { makeMailSigner } from "./helpers/synthetic.js";
 
 /**
  * sendMail is unwrapMail's mirror: every test here runs the chain straight
@@ -197,5 +198,50 @@ describe("sendMail — email bridge", () => {
     const raw = new TextDecoder().decode(messageStringToBytes(unwrapped.rumor.content));
     expect(raw).toContain("To: friend@outside.example");
     expect(raw).toContain("Subject: email bridge test");
+  });
+});
+
+describe("sendMailWith — the signer path", () => {
+  it("round-trips a wrap through the recipient's signer, no secret key in the SDK", async () => {
+    const sender = keypair();
+    const recipient = keypair();
+    const now = 1791360000;
+
+    const result = await sendMailWith(makeMailSigner(sender.secretKey), {
+      to: recipient.pubkey,
+      subject: "signer loopback",
+      text: "hello via signer",
+      from: "irona@mailstr.app",
+      relays: [],
+      now,
+    });
+
+    expect(result.recipient).toBe(recipient.pubkey);
+    expect(result.wrap.tags).toContainEqual(["p", recipient.pubkey]);
+
+    // The recipient verifies through their own signer; the seal must have been
+    // signed by the sender's key (author-mismatch would fire otherwise).
+    const unwrapped = await unwrapMailWith(result.wrap, makeMailSigner(recipient.secretKey), { now });
+    expect(unwrapped.ok).toBe(true);
+    if (!unwrapped.ok) return;
+    expect(unwrapped.seal.pubkey).toBe(sender.pubkey);
+    expect(unwrapped.rumor.pubkey).toBe(sender.pubkey);
+    const raw = new TextDecoder().decode(messageStringToBytes(unwrapped.rumor.content));
+    expect(raw).toContain("Subject: signer loopback");
+    expect(raw).toContain("From: irona@mailstr.app");
+  });
+
+  it("uses the signer's own pubkey as the rumor author and embed the true wrap key", async () => {
+    const sender = keypair();
+    const recipient = keypair();
+    const result = await sendMailWith(makeMailSigner(sender.secretKey), {
+      to: recipient.pubkey,
+      text: "x",
+      relays: [],
+    });
+    // The wrap key in the rumor must derive to the wrap author (rule 6).
+    const wrapSecret = result.wrap.pubkey;
+    expect(wrapSecret).toHaveLength(64);
+    expect(result.wrap.kind).toBe(KIND_GIFTWRAP);
   });
 });

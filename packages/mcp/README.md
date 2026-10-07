@@ -227,6 +227,26 @@ service supports (more than the super-app builder UI currently exposes).
 Other modules (calendar, pages, polls, drive) expose the v1 read/create tools and gated
 actions; see the source under `src/tools/`.
 
+## Mail tools
+
+Email through mailstr, using the same identity you logged in with (the account the
+`you@mailstr.app` address is bound to). No key material leaves the signer.
+
+**Read (always on)**
+
+- `list_mail` — your inbox: sender, subject, date per message (kind-1059 gift-wrapped mail).
+- `read_mail` — the full body of one message by its id.
+- `who_is_my_mail_address` — the account's mail address (NIP-05) and pubkey.
+
+**Gated (require `--allow-writes` + `confirm: true`)**
+
+- `send_mail` — send email to an npub/hex key, or an external address via the domain's SMTP bridge.
+- `claim_mailbox` — start claiming `you@mailstr.app`. Returns a **Lightning invoice to pay in
+  your own wallet** — the server holds no wallet, so it cannot pay it. Mail works once NIP-05
+  propagates.
+- `publish_mail_setup` — publish your profile (with the NIP-05 address) and the kind-10050
+  delivery-relay list senders read.
+
 ## Safety model
 
 Destructive / outward tools are **not registered** unless `--allow-writes` (or

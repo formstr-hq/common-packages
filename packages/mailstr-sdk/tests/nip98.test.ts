@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { verifyEvent, type Event } from 'nostr-tools';
 import { bytesToHex } from 'nostr-tools/utils';
-import { createIdentity, createNip98Event, signNip98 } from '../src/index.js';
+import { createIdentity, createNip98Event, signNip98, signNip98With } from '../src/index.js';
+import { makeMailSigner } from './helpers/synthetic.js';
 
 const URL_ = 'https://api.formstr.app/api/generate-invoice/mail';
 const BODY = '{"pubkey":"abc","nip05":"irona@mailstr.app","tierId":"base"}';
@@ -50,5 +51,14 @@ describe('NIP-98 auth headers', () => {
       ['u', URL_],
       ['method', 'GET'],
     ]);
+  });
+
+  it('signNip98With produces the same header shape through a signer', async () => {
+    const { secretKey, pubkey } = createIdentity();
+    const header = await signNip98With(makeMailSigner(secretKey), URL_, 'POST', BODY);
+    const decoded = JSON.parse(atob(header.slice('Nostr '.length))) as Event;
+    expect(verifyEvent(decoded)).toBe(true);
+    expect(decoded.pubkey).toBe(pubkey);
+    expect(decoded.tags).toContainEqual(['payload', await sha256Hex(BODY)]);
   });
 });

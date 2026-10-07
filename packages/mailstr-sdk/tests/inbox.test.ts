@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SimplePool, type Filter } from 'nostr-tools';
-import { createIdentity, readInbox } from '../src/index.js';
-import { makeKeypair, wrapChain } from './helpers/synthetic.js';
+import { createIdentity, readInbox, readInboxWith } from '../src/index.js';
+import { makeKeypair, wrapChain, makeMailSigner } from './helpers/synthetic.js';
 
 vi.mock('nostr-tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('nostr-tools')>();
@@ -221,5 +221,26 @@ describe('readInbox', () => {
     expect(out.failures).toHaveLength(0);
     expect(out.mail).toHaveLength(1);
     expect(out.mail[0].text).toBe('note');
+  });
+});
+
+describe('readInboxWith — the signer path', () => {
+  it("queries p-tagged to the signer's own pubkey and parses mail", async () => {
+    const recipient = createIdentity();
+    const sender = makeKeypair();
+    const { rumor, wrap } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey, content: RFC822 },
+      { recipientSk: recipient.secretKey },
+    );
+    fakePool.registry.wraps = [wrap];
+    const out = await readInboxWith(makeMailSigner(recipient.secretKey));
+    expect(fakePool.registry.filter).toEqual({
+      kinds: [1059],
+      '#p': [recipient.pubkey],
+      limit: 100,
+    });
+    expect(out.mail).toHaveLength(1);
+    expect(out.mail[0].subject).toBe('Weekly update');
+    expect(out.mail[0].raw).toBe(rumor.content);
   });
 });

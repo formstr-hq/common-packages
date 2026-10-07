@@ -4,9 +4,9 @@ import { GATED_TOOLS } from "../src/safety";
 import { toolRegistry } from "../src/tools";
 
 describe("toolRegistry", () => {
-  it("exposes all 53 tools with unique names", () => {
-    expect(toolRegistry).toHaveLength(53);
-    expect(new Set(toolRegistry.map((t) => t.name)).size).toBe(53);
+  it("exposes all 59 tools with unique names", () => {
+    expect(toolRegistry).toHaveLength(59);
+    expect(new Set(toolRegistry.map((t) => t.name)).size).toBe(59);
   });
 
   it("every entry has a description and inputSchema", () => {
@@ -22,7 +22,7 @@ describe("toolRegistry", () => {
     // Forms/Calendar/Drive while the MCP server ships everything. An untagged
     // tool would be filtered out of every host silently, so `module` is
     // required and stamped where the per-module arrays are combined.
-    const modules = new Set(["forms", "calendar", "pages", "polls", "drive"]);
+    const modules = new Set(["forms", "calendar", "pages", "polls", "drive", "mail"]);
     for (const t of toolRegistry) {
       expect(modules, `${t.name} has an unknown module: ${t.module}`).toContain(t.module);
     }

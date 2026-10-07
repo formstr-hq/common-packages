@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { getEventHash } from 'nostr-tools';
 import { bytesToHex } from 'nostr-tools/utils';
-import { unwrapMail, WRAP_KEY_TAG } from '../src/index.js';
+import { unwrapMail, unwrapMailWith, WRAP_KEY_TAG } from '../src/index.js';
 import type { Rumor } from '../src/types.js';
-import { makeKeypair, wrapSeal, wrapChain, sealRumor, makeRumor } from './helpers/synthetic.js';
+import { makeKeypair, wrapSeal, wrapChain, sealRumor, makeRumor, makeMailSigner } from './helpers/synthetic.js';
 
 // Real current time: fresh rumors are created_at ≈ now, so only tests that
 // explicitly build older rumors hit the staleness rule.
@@ -226,5 +226,53 @@ describe('unwrapMail — failures', () => {
     const r = unwrapMail(wrap, recipient.secretKey, { now: NOW });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('wrapkey-mismatch');
+  });
+});
+
+describe('unwrapMailWith — the signer path', () => {
+  it('unwraps a valid chain identically to the secret-key path', async () => {
+    const { recipient, sender } = scenario();
+    const { wrap, seal, rumor } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey, content: 'hello via signer' },
+      { recipientSk: recipient.secretKey },
+    );
+    const result = await unwrapMailWith(wrap, makeMailSigner(recipient.secretKey), { now: NOW });
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.seal.id).toBe(seal.id);
+      expect(result.rumor).toEqual(rumor);
+    }
+  });
+
+  it('a signer that refuses the outer decrypt surfaces as not-for-us', async () => {
+    const { recipient, sender } = scenario();
+    const { wrap } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey },
+      { recipientSk: recipient.secretKey },
+    );
+    const refusing = {
+      ...makeMailSigner(recipient.secretKey),
+      nip44Decrypt: () => Promise.reject(new Error('signer declined')),
+    };
+    expect(await unwrapMailWith(wrap, refusing, { now: NOW })).toEqual({
+      ok: false,
+      reason: 'not-for-us',
+    });
+  });
+
+  it('enforces the same rules (author-mismatch) through a signer', async () => {
+    const { recipient, sender } = scenario();
+    const impostor = makeKeypair();
+    const base = makeRumor({ senderSk: sender.secretKey, recipientPk: recipient.pubkey });
+    const spoofed = {
+      ...base,
+      pubkey: impostor.pubkey,
+      id: getEventHash({ ...base, pubkey: impostor.pubkey }),
+    };
+    const seal = sealRumor(spoofed, sender.secretKey, recipient.pubkey);
+    const wrap = wrapSeal(seal, recipient.pubkey, makeKeypair().secretKey);
+    const r = await unwrapMailWith(wrap, makeMailSigner(recipient.secretKey), { now: NOW });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('author-mismatch');
   });
 });

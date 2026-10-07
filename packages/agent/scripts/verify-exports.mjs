@@ -11,6 +11,7 @@ const subpaths = [
   "@formstr/agent/services/drive",
   "@formstr/agent/services/polls",
   "@formstr/agent/services/profile",
+  "@formstr/agent/services/mail",
   "@formstr/agent/tools",
 ];
 let failed = 0;

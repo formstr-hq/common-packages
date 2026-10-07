@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   claimMailbox,
+  claimMailboxWith,
   createIdentity,
+  requestMailboxInvoiceWith,
   type ClaimOutcome,
   type FetchJson,
   type PaymentWatcher,
   type WebSocketFactory,
 } from '../src/index.js';
+import { makeMailSigner } from './helpers/synthetic.js';
 
 const INVOICE = 'lnbc210n1pn4wner...';
 const PAYMENT_HASH = 'f'.repeat(64);
@@ -292,5 +295,77 @@ describe('claimMailbox — event types', () => {
       'payment-sent-binding-unverified',
     ];
     expect(statuses).toHaveLength(7);
+  });
+});
+
+describe('requestMailboxInvoiceWith — invoice without payment', () => {
+  it('returns the bolt11 invoice and payment hash, signer-signed, without paying', async () => {
+    const id = createIdentity();
+    let paid = false;
+    const outcome = await requestMailboxInvoiceWith(makeMailSigner(id.secretKey), {
+      name: 'irona',
+      payInvoice: async () => {
+        paid = true; // must never be called by the invoice-only path
+      },
+      fetchJson: fakeFetch({
+        post: {
+          ok: true,
+          status: 200,
+          body: { invoice: INVOICE, paymentHash: PAYMENT_HASH, amount: AMOUNT },
+        },
+      }),
+    });
+    expect(outcome).toEqual({
+      status: 'ok',
+      invoice: INVOICE,
+      paymentHash: PAYMENT_HASH,
+      amountSats: AMOUNT,
+      nip05: 'irona@mailstr.app',
+    });
+    expect(paid).toBe(false);
+  });
+
+  it('reports name-taken without requesting an invoice', async () => {
+    const id = createIdentity();
+    let posted = false;
+    const outcome = await requestMailboxInvoiceWith(makeMailSigner(id.secretKey), {
+      name: 'irona',
+      payInvoice: async () => {},
+      fetchJson: async (_url, init) => {
+        if (init?.method === 'POST') posted = true;
+        return { ok: true, status: 200, body: { names: { irona: 'someone-else' } } };
+      },
+    });
+    expect(outcome.status).toBe('name-taken');
+    expect(posted).toBe(false);
+  });
+});
+
+describe('claimMailboxWith — the signer path', () => {
+  it('signs the invoice request with the signer key and claims on binding', async () => {
+    const id = createIdentity();
+    const log: { url: string; init?: { method?: string; headers?: Record<string, string>; body?: string } }[] = [];
+    const outcome = await claimMailboxWith(makeMailSigner(id.secretKey), {
+      name: 'irona',
+      payInvoice: async () => {},
+      WebSocket: null,
+      timeoutMs: 30,
+      pollIntervalMs: 0,
+      fetchJson: fakeFetch({
+        names: { irona: id.pubkey },
+        post: {
+          ok: true,
+          status: 200,
+          body: { invoice: INVOICE, paymentHash: PAYMENT_HASH, amount: AMOUNT },
+        },
+        log,
+      }),
+    });
+    expect(outcome.status).toBe('claimed');
+    if (outcome.status === 'claimed') expect(outcome.pubkey).toBe(id.pubkey);
+    // The NIP-98 Authorization header must have been signed by the signer key.
+    const post = log.find((c) => c.init?.method === 'POST');
+    const decoded = JSON.parse(atob(post!.init!.headers!.Authorization.slice('Nostr '.length)));
+    expect(decoded.pubkey).toBe(id.pubkey);
   });
 });

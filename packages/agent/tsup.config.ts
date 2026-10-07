@@ -10,6 +10,7 @@ export default defineConfig({
     "services/drive/index": "src/services/drive/index.ts",
     "services/polls/index": "src/services/polls/index.ts",
     "services/profile/index": "src/services/profile/index.ts",
+    "services/mail/index": "src/services/mail/index.ts",
     "tools/index": "src/tools/index.ts",
   },
   format: ["esm", "cjs"],

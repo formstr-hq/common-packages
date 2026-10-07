@@ -1,6 +1,7 @@
-import { finalizeEvent, type Event } from "nostr-tools";
+import { finalizeEvent, type Event, type EventTemplate } from "nostr-tools";
 import { bytesToHex } from "nostr-tools/utils";
 import { KIND_NIP98 } from "./constants.js";
+import type { MailSigner } from "./signer.js";
 
 /**
  * NIP-98 HTTP auth events (KIND_NIP98=27235), mirroring nail's `nip98.ts`:
@@ -29,18 +30,8 @@ function utf8ToBase64(s: string): string {
   return btoa(binary);
 }
 
-/**
- * Build the NIP-98 auth event. `body` must be the exact string (e.g. the
- * serialized JSON) that will be sent as the HTTP request body — a mismatch
- * makes servers reject the auth. When `body` is omitted, no `payload` tag is
- * included.
- */
-export async function createNip98Event(
-  secretKey: Uint8Array,
-  url: string,
-  method: string,
-  body?: string,
-): Promise<Event> {
+/** Build the unsigned NIP-98 template (kind-27235 with `u`/`method`/`payload`). */
+async function buildNip98Template(url: string, method: string, body?: string): Promise<EventTemplate> {
   const tags: string[][] = [
     ["u", url],
     ["method", method.toUpperCase()],
@@ -48,15 +39,37 @@ export async function createNip98Event(
   if (body !== undefined) {
     tags.push(["payload", await sha256Hex(body)]);
   }
-  return finalizeEvent(
-    {
-      kind: KIND_NIP98,
-      created_at: Math.floor(Date.now() / 1000),
-      tags,
-      content: "",
-    },
-    secretKey,
-  );
+  return {
+    kind: KIND_NIP98,
+    created_at: Math.floor(Date.now() / 1000),
+    tags,
+    content: "",
+  };
+}
+
+/**
+ * Build the NIP-98 auth event with a raw secret key. `body` must be the exact
+ * string (e.g. the serialized JSON) that will be sent as the HTTP request body
+ * — a mismatch makes servers reject the auth. When `body` is omitted, no
+ * `payload` tag is included.
+ */
+export async function createNip98Event(
+  secretKey: Uint8Array,
+  url: string,
+  method: string,
+  body?: string,
+): Promise<Event> {
+  return finalizeEvent(await buildNip98Template(url, method, body), secretKey);
+}
+
+/** Build the NIP-98 auth event through a {@link MailSigner} (NIP-07/NIP-46/MCP). */
+export async function createNip98EventWith(
+  signer: MailSigner,
+  url: string,
+  method: string,
+  body?: string,
+): Promise<Event> {
+  return signer.signEvent(await buildNip98Template(url, method, body));
 }
 
 /**
@@ -70,5 +83,16 @@ export async function signNip98(
   body?: string,
 ): Promise<string> {
   const event = await createNip98Event(secretKey, url, method, body);
+  return `Nostr ${utf8ToBase64(JSON.stringify(event))}`;
+}
+
+/** `Authorization` header for NIP-98 through a {@link MailSigner}. */
+export async function signNip98With(
+  signer: MailSigner,
+  url: string,
+  method: string,
+  body?: string,
+): Promise<string> {
+  const event = await createNip98EventWith(signer, url, method, body);
   return `Nostr ${utf8ToBase64(JSON.stringify(event))}`;
 }

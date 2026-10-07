@@ -113,6 +113,9 @@ importers:
       '@formstr/core':
         specifier: workspace:^
         version: link:../core
+      '@formstr/mailstr-sdk':
+        specifier: workspace:^
+        version: link:../mailstr-sdk
       '@noble/hashes':
         specifier: ^1.8.0
         version: 1.8.0

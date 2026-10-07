@@ -6,6 +6,7 @@ import {
   nip44,
   SimplePool,
   type Event,
+  type EventTemplate,
 } from "nostr-tools";
 import { bytesToMessageString } from "./bytes.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./constants.js";
 import { DEFAULT_MAIL_DOMAIN } from "./claim.js";
 import { DEFAULT_INBOX_RELAYS } from "./inbox.js";
+import type { MailSigner } from "./signer.js";
 import type { PublishResult } from "./setup.js";
 
 /**
@@ -225,13 +227,21 @@ const randomHex = (bytes: number): string => {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-export async function sendMail(
-  secretKey: Uint8Array,
+/** Sign the kind-13 seal around a serialized rumor, encrypted to `recipient`. */
+type SignSeal = (recipient: string, rumorJson: string) => Promise<Event>;
+
+/**
+ * Shared body of the two send variants. `senderPubkey` and `signSeal` are the
+ * only points where a raw secret key and a host signer differ; every wire
+ * detail (tags, byte-string content, wrap key, publish fan-out) is identical.
+ */
+async function send(
+  senderPubkey: string,
   opts: SendMailOptions,
+  signSeal: SignSeal,
 ): Promise<SendResult> {
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const dest = resolveDestination(opts.to);
-  const senderPubkey = getPublicKey(secretKey);
   const senderNpub = nip19.npubEncode(senderPubkey);
 
   if (opts.raw === undefined && opts.text === undefined) {
@@ -291,15 +301,7 @@ export async function sendMail(
   rumor.id = getEventHash(rumor as unknown as Event);
 
   // 2. seal: signed by the sender, encrypted to the recipient.
-  const seal = finalizeEvent(
-    {
-      kind: KIND_SEAL,
-      created_at: now,
-      tags: [],
-      content: nip44.v2.encrypt(JSON.stringify(rumor), nip44.v2.utils.getConversationKey(secretKey, recipient)),
-    },
-    secretKey,
-  );
+  const seal = await signSeal(recipient, JSON.stringify(rumor));
 
   // 3. gift wrap: signed by the ephemeral key, encrypted to the recipient.
   const wrap = finalizeEvent(
@@ -325,4 +327,49 @@ export async function sendMail(
   if (!opts.pool) (pool as SimplePool).close?.(relays);
 
   return { recipient, wrap, results };
+}
+
+/** Send mail with a raw secret key (the dedicated-mail-identity path). */
+export async function sendMail(
+  secretKey: Uint8Array,
+  opts: SendMailOptions,
+): Promise<SendResult> {
+  const senderPubkey = getPublicKey(secretKey);
+  return send(senderPubkey, opts, async (recipient, rumorJson) =>
+    finalizeEvent(
+      {
+        kind: KIND_SEAL,
+        created_at: opts.now ?? Math.floor(Date.now() / 1000),
+        tags: [],
+        content: nip44.v2.encrypt(
+          rumorJson,
+          nip44.v2.utils.getConversationKey(secretKey, recipient),
+        ),
+      },
+      secretKey,
+    ),
+  );
+}
+
+/**
+ * Send mail through a {@link MailSigner} — the NIP-07/NIP-46/MCP path. The seal
+ * is signed and encrypted by the host signer, so the private key never enters
+ * this process; the outer wrap is still authored by a local throwaway key (its
+ * pubkey is what the recipient later uses for NIP-09 deletion).
+ */
+export async function sendMailWith(
+  signer: MailSigner,
+  opts: SendMailOptions,
+): Promise<SendResult> {
+  const senderPubkey = await signer.getPublicKey();
+  const now = opts.now ?? Math.floor(Date.now() / 1000);
+  return send(senderPubkey, opts, async (recipient, rumorJson) => {
+    const template: EventTemplate = {
+      kind: KIND_SEAL,
+      created_at: now,
+      tags: [],
+      content: await signer.nip44Encrypt(recipient, rumorJson),
+    };
+    return signer.signEvent(template);
+  });
 }

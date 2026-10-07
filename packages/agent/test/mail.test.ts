@@ -7,6 +7,8 @@ vi.mock("../src/services", () => ({
     requestMailbox: vi.fn(),
     publishMailSetup: vi.fn(),
     mailIdentity: vi.fn(),
+    listAliases: vi.fn(),
+    defaultSenderAddress: vi.fn(),
   },
 }));
 
@@ -46,11 +48,12 @@ describe("mail tools", () => {
     const readOnly = register({ allowWrites: false });
     expect([...readOnly.keys()].sort()).toEqual([
       "list_mail",
+      "list_mail_aliases",
       "read_mail",
       "who_is_my_mail_address",
     ]);
     const withWrite = register({ allowWrites: true });
-    expect(withWrite.size).toBe(6);
+    expect(withWrite.size).toBe(7);
     expect(withWrite.has("send_mail")).toBe(true);
   });
 
@@ -79,15 +82,29 @@ describe("mail tools", () => {
     expect(missing.errorCode).toBe("NOT_FOUND");
   });
 
-  it("who_is_my_mail_address reports the bound nip05", async () => {
+  it("who_is_my_mail_address reports the identity, default and aliases", async () => {
     (mail.mailIdentity as any).mockResolvedValue({
       pubkey: "pk",
       npub: "npub1x",
       nip05: "irona@mailstr.app",
     });
+    (mail.listAliases as any).mockResolvedValue(["irona@mailstr.app", "irona@work.dev"]);
+    (mail.defaultSenderAddress as any).mockResolvedValue("irona@mailstr.app");
     const tools = register({ allowWrites: false });
     const res = await tools.get("who_is_my_mail_address")!.handler({});
-    expect(res.text).toContain("irona@mailstr.app");
+    expect(res.text).toContain("Sending as irona@mailstr.app");
+    expect(res.text).toContain("irona@work.dev");
+    expect(res.data.aliases).toEqual(["irona@mailstr.app", "irona@work.dev"]);
+  });
+
+  it("list_mail_aliases marks the default", async () => {
+    (mail.listAliases as any).mockResolvedValue(["irona@mailstr.app", "irona@work.dev"]);
+    (mail.defaultSenderAddress as any).mockResolvedValue("irona@work.dev");
+    const tools = register({ allowWrites: false });
+    const res = await tools.get("list_mail_aliases")!.handler({});
+    expect(res.ok).toBe(true);
+    expect(res.text).toContain("default is irona@work.dev");
+    expect(res.data.aliases).toHaveLength(2);
   });
 
   it("send_mail requires confirm, then reports per-relay delivery", async () => {
@@ -119,11 +136,50 @@ describe("mail tools", () => {
   });
 
   it("send_mail rejects without text or raw", async () => {
+    (mail.mailIdentity as any).mockResolvedValue({ pubkey: "pk", npub: "npub1x", nip05: null });
+    (mail.listAliases as any).mockResolvedValue([]);
     const tools = register({ allowWrites: true });
     const res = await tools.get("send_mail")!.handler({ to: "npub1x", confirm: true });
     expect(res.ok).toBe(false);
     expect(res.errorCode).toBe("BAD_INPUT");
     expect(mail.sendMail).not.toHaveBeenCalled();
+  });
+
+  it("send_mail rejects a From the key does not own, naming valid senders", async () => {
+    (mail.mailIdentity as any).mockResolvedValue({ pubkey: "pk", npub: "npub1x", nip05: null });
+    (mail.listAliases as any).mockResolvedValue(["irona@mailstr.app"]);
+    const tools = register({ allowWrites: true });
+    const res = await tools.get("send_mail")!.handler({
+      to: "someone@example.com",
+      text: "hi",
+      from: "stranger@mailstr.app",
+      confirm: true,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.errorCode).toBe("BAD_SENDER");
+    expect(res.text).toContain("irona@mailstr.app");
+    expect(mail.sendMail).not.toHaveBeenCalled();
+  });
+
+  it("send_mail accepts an owned alias as From", async () => {
+    (mail.mailIdentity as any).mockResolvedValue({ pubkey: "pk", npub: "npub1x", nip05: null });
+    (mail.listAliases as any).mockResolvedValue(["irona@mailstr.app", "irona@work.dev"]);
+    (mail.sendMail as any).mockResolvedValue({
+      recipient: "pk",
+      wrap: { id: "w1" },
+      results: [{ relay: "a", ok: true, detail: "" }],
+    });
+    const tools = register({ allowWrites: true });
+    const res = await tools.get("send_mail")!.handler({
+      to: "npub1y",
+      text: "hi",
+      from: "irona@work.dev",
+      confirm: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(mail.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ from: "irona@work.dev" }),
+    );
   });
 
   it("claim_mailbox returns a bolt11 invoice and never pays it", async () => {

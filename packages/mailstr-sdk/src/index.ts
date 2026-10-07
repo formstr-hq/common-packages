@@ -30,6 +30,14 @@ export type {
   PaymentWatcher,
   WebSocketFactory,
 } from "./claim.js";
+export {
+  OWNED_ADDRESSES_PATH,
+  defaultFromAddress,
+  fetchOwnedAddresses,
+  fetchOwnedAddressesWith,
+  normalizeOwnedAddresses,
+} from "./addresses.js";
+export type { AddressesFetch, FetchJsonResult, OwnedAddressesOptions } from "./addresses.js";
 export { createIdentity, identityFromSecretKey } from "./identity.js";
 export { DEFAULT_INBOX_RELAYS, readInbox, readInboxWith } from "./inbox.js";
 export type { ReadInboxOptions } from "./inbox.js";

@@ -6,6 +6,8 @@ import {
   sendMailWith,
   publishSetupWith,
   requestMailboxInvoiceWith,
+  fetchOwnedAddressesWith,
+  defaultFromAddress,
   DEFAULT_MAIL_DOMAIN,
   type MailSigner,
   type MailMessage,
@@ -22,10 +24,11 @@ import * as profileService from "../profile/service";
  * account's signer and the module's relays.
  *
  * The active identity IS the mail identity — mailstr's bridge authorizes a
- * sender by binding the seal pubkey to the NIP-05 record of the From address,
- * so the account that logged into this host must be the account its
- * `name@mailstr.app` address is registered to. No private key leaves the
- * signer: mailstr-sdk is handed the `MailSigner` surface, never a secret.
+ * sender by binding the seal pubkey to the NIP-05 record of the From address.
+ * One key can own several NIP-05 **aliases** (all sharing this one key and
+ * inbox); `sendMail`'s `from` selects which appears in the `From:` header. No
+ * private key leaves the signer: mailstr-sdk is handed the `MailSigner`
+ * surface, never a secret.
  */
 
 /** Relays to read the inbox from — the mail module's defaults. */
@@ -59,6 +62,26 @@ export async function mailIdentity(): Promise<MailIdentity> {
   return { pubkey, npub: nip19.npubEncode(pubkey), nip05: profile?.nip05 ?? null };
 }
 
+/**
+ * Every NIP-05 alias the active key owns. Empty when the key owns none, the
+ * address lookup is unavailable, or the endpoint errors — a listing failure
+ * must never block reading or sending mail.
+ */
+export async function listAliases(): Promise<string[]> {
+  const signer = await mailSigner();
+  return fetchOwnedAddressesWith(signer).catch(() => []);
+}
+
+/**
+ * The `From:` address a send will use: an owned registered alias (the bridge
+ * only accepts one for external email), else the key's npub mailbox.
+ */
+export async function defaultSenderAddress(): Promise<string> {
+  const signer = await signerManager.getSigner();
+  const pubkey = await signer.getPublicKey();
+  return defaultFromAddress(pubkey, await listAliases());
+}
+
 /** Read the inbox: every decodable mail message, plus per-wrap failures. */
 export async function readMail(opts: { limit?: number } = {}): Promise<MailInboxResult> {
   const signer = await mailSigner();
@@ -76,19 +99,24 @@ export interface SendMailParams {
   text?: string;
   /** A fully-formed RFC 2822 message, instead of subject/text. */
   raw?: string;
-  /** RFC 2822 From header; defaults to `<npub>@mailstr.app`. */
+  /**
+   * Which alias to send as (the `From:` header). Omit to use the default: an
+   * owned registered alias, else the npub mailbox. A `from` on a domain the
+   * bridge serves must be an alias bound to this key or the bridge bounces it.
+   */
   from?: string;
 }
 
 /** Send mail from the active identity. Returns the wrap and per-relay results. */
 export async function sendMail(params: SendMailParams): Promise<SendResult> {
   const signer = await mailSigner();
+  const from = params.from ?? (await defaultSenderAddress());
   return sendMailWith(signer, {
     to: params.to,
     ...(params.subject !== undefined ? { subject: params.subject } : {}),
     ...(params.text !== undefined ? { text: params.text } : {}),
     ...(params.raw !== undefined ? { raw: params.raw } : {}),
-    ...(params.from !== undefined ? { from: params.from } : {}),
+    from,
     relays: relayManager.getRelaysForModule("mail"),
   });
 }

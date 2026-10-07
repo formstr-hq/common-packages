@@ -50,6 +50,26 @@ authorizes a sender by matching the seal's pubkey against the NIP-05 record for
 the From address, so the account you sign with must be the account its
 `name@domain` address is bound to.
 
+### Aliases: one key, many addresses
+
+A mail identity is one Nostr key; an **alias** is a NIP-05 name bound to that
+key. An account can own several aliases (`you@mailstr.app`, plus
+`you@yourdomain.com` on a managed workspace) — all sharing that one key and one
+inbox, since mail is encrypted to the key and which alias it was addressed to is
+only a header. When sending, `from` selects which alias appears in the `From:`.
+
+```ts
+import { fetchOwnedAddressesWith, defaultFromAddress, sendMailWith } from "@formstr/mailstr-sdk";
+
+const aliases = await fetchOwnedAddressesWith(signer); // ["irona@mailstr.app", …]
+const from = defaultFromAddress(await signer.getPublicKey(), aliases);
+await sendMailWith(signer, { to: "npub1…", from, subject: "Hi", text: "…" });
+```
+
+`defaultFromAddress` prefers an owned registered alias over the npub mailbox,
+because the bridge (external email) only accepts a registered alias while an
+alias also works for Nostr-native recipients.
+
 ## Usage
 
 ### Identity (no persistence — your app owns storage)

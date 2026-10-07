@@ -236,16 +236,25 @@ Email through mailstr, using the same identity you logged in with (the account t
 
 - `list_mail` — your inbox: sender, subject, date per message (kind-1059 gift-wrapped mail).
 - `read_mail` — the full body of one message by its id.
-- `who_is_my_mail_address` — the account's mail address (NIP-05) and pubkey.
+- `list_mail_aliases` — every address (NIP-05 alias) this account can send as, and the default.
+- `who_is_my_mail_address` — the signed-in identity, its default `From:`, and its aliases.
 
 **Gated (require `--allow-writes` + `confirm: true`)**
 
 - `send_mail` — send email to an npub/hex key, or an external address via the domain's SMTP bridge.
+  Pass `from` to choose which alias to send as (one of your own addresses); omit it to send from
+  an owned alias, or the npub mailbox when you have none. A `from` you do not own is rejected with
+  the list of valid senders.
 - `claim_mailbox` — start claiming `you@mailstr.app`. Returns a **Lightning invoice to pay in
   your own wallet** — the server holds no wallet, so it cannot pay it. Mail works once NIP-05
   propagates.
 - `publish_mail_setup` — publish your profile (with the NIP-05 address) and the kind-10050
   delivery-relay list senders read.
+
+**Aliases.** A mail identity is one Nostr key; an *alias* is a NIP-05 name bound to that key.
+All of an account's aliases share one key and one inbox — mail is encrypted to the key, so which
+alias a message was addressed to is only a header. `send_mail`'s `from` picks which alias appears
+in the `From:`; `list_mail_aliases` shows the choices.
 
 ## Safety model
 

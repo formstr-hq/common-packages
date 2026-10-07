@@ -10,7 +10,7 @@ Shared packages used across Formstr / Nostr ecosystem apps.
 | `@formstr/kanban-sdk` | [![npm](https://img.shields.io/npm/v/@formstr/kanban-sdk)](https://www.npmjs.com/package/@formstr/kanban-sdk) | Headless SDK for Nostr Kanban boards (public + NIP-100E private). |
 | `@formstr/mailstr-sdk` | [![npm](https://img.shields.io/npm/v/@formstr/mailstr-sdk)](https://www.npmjs.com/package/@formstr/mailstr-sdk) | Headless SDK for Mailstr — Nostr-native email (claim, inbox, send). |
 | `@formstr/core` | [![npm](https://img.shields.io/npm/v/@formstr/core)](https://www.npmjs.com/package/@formstr/core) | Nostr primitives: signers, relay/runtime plumbing, crypto, Blossom, linking. |
-| `@formstr/agent` | [![npm](https://img.shields.io/npm/v/@formstr/agent)](https://www.npmjs.com/package/@formstr/agent) | The modules' service layer plus the shared 59-tool registry (DOM-free). |
+| `@formstr/agent` | [![npm](https://img.shields.io/npm/v/@formstr/agent)](https://www.npmjs.com/package/@formstr/agent) | The modules' service layer plus the shared 60-tool registry (DOM-free). |
 | `@formstr/mcp` | [![npm](https://img.shields.io/npm/v/@formstr/mcp)](https://www.npmjs.com/package/@formstr/mcp) | Model Context Protocol server exposing the Formstr super-app to MCP hosts. |
 
 ## Layout

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ok, fail } from "../result";
 import { requireConfirm } from "../safety";
 import { mail } from "../services";
+import { DEFAULT_MAIL_DOMAIN } from "@formstr/mailstr-sdk";
 
 import type { ToolDef } from "./types";
 
@@ -99,16 +100,40 @@ function buildMailTools(): ToolDef[] {
     "who_is_my_mail_address",
     {
       description:
-        "Show the mail address (NIP-05) and pubkey of the account currently signed in to this server.",
+        "Show the account signed in to this server, its default mail address, and every alias " +
+        "it can send as.",
       inputSchema: {},
     },
     async () => {
       const who = await mail.mailIdentity();
+      const aliases = await mail.listAliases();
+      const defaultFrom = await mail.defaultSenderAddress();
       return ok(
-        who.nip05
-          ? `Your mail address is ${who.nip05}.`
-          : `Signed in as ${who.npub}. No mailstr address is bound to this key yet — claim one with claim_mailbox.`,
-        who,
+        `Signed in as ${who.npub}. Sending as ${defaultFrom}.` +
+          (aliases.length
+            ? ` Aliases: ${aliases.join(", ")}.`
+            : " No registered alias yet — claim one with claim_mailbox."),
+        { ...who, aliases, defaultFrom },
+      );
+    },
+  );
+
+  server.registerTool(
+    "list_mail_aliases",
+    {
+      description:
+        "List every mail address (NIP-05 alias) this account can send as, and which is the " +
+        "default. All aliases share one inbox.",
+      inputSchema: {},
+    },
+    async () => {
+      const aliases = await mail.listAliases();
+      const defaultFrom = await mail.defaultSenderAddress();
+      return ok(
+        aliases.length
+          ? `You can send as ${aliases.length} address(es); default is ${defaultFrom}.`
+          : `No aliases yet — sending uses ${defaultFrom}. Claim an address with claim_mailbox.`,
+        { aliases, defaultFrom },
       );
     },
   );
@@ -143,6 +168,21 @@ function buildMailTools(): ToolDef[] {
       if (blocked) return blocked;
       if (args.text === undefined && args.raw === undefined) {
         return fail("send_mail needs either `text` or `raw`.", "BAD_INPUT");
+      }
+      // If a From is given, it must be one this key can actually send as. The
+      // bridge binds the seal pubkey to the From's NIP-05 record, so a typo or a
+      // stranger's alias would bounce; name the valid choices instead.
+      if (args.from !== undefined) {
+        const identity = await mail.mailIdentity();
+        const aliases = await mail.listAliases();
+        const npubAddress = `${identity.npub}@${DEFAULT_MAIL_DOMAIN}`;
+        const validSenders = [npubAddress, ...aliases];
+        if (!validSenders.map((a) => a.toLowerCase()).includes(args.from.toLowerCase())) {
+          return fail(
+            `You cannot send as "${args.from}". Use one of: ${validSenders.join(", ")}.`,
+            "BAD_SENDER",
+          );
+        }
       }
       try {
         const result = await mail.sendMail({

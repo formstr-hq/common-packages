@@ -1,9 +1,9 @@
 import { generateSecretKey } from "nostr-tools";
 import { describe, it, expect } from "vitest";
 
-import { LocalSigner } from "../signer/LocalSigner";
+import { LocalSigner } from "../signer/LocalSigner.js";
 
-import { unwrapEvent, wrapEvent, wrapManyEvents } from "./nip59";
+import { unwrapEvent, wrapEvent, wrapManyEvents } from "./nip59.js";
 
 describe("nip59 wrapEvent", () => {
   it("round-trips a rumor through wrap → unwrap", async () => {

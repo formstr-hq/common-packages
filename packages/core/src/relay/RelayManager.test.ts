@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { RelayManager } from "./RelayManager";
+import { RelayManager } from "./RelayManager.js";
 
 describe("RelayManager", () => {
   let mgr: RelayManager;

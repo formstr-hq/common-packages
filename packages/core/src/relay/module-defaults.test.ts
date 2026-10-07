@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MODULE_DEFAULT_RELAYS } from "./module-defaults";
+import { MODULE_DEFAULT_RELAYS } from "./module-defaults.js";
 
 const normalize = (url: string) => url.replace(/\/+$/, "");
 

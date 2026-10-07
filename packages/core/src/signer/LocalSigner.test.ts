@@ -1,7 +1,7 @@
 import { generateSecretKey, verifyEvent } from "nostr-tools";
 import { describe, it, expect } from "vitest";
 
-import { LocalSigner } from "./LocalSigner";
+import { LocalSigner } from "./LocalSigner.js";
 
 describe("LocalSigner", () => {
   it("signs an event verifiably", async () => {

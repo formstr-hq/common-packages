@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
-import type { NostrSigner } from "./types";
+import type { NostrSigner } from "./types.js";
 
 /**
  * NIP-07 signer — delegates to window.nostr browser extension.

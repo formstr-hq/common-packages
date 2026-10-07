@@ -1,8 +1,8 @@
 import type { Event, Filter } from "nostr-tools";
 
-import type { NostrRuntimeContract, SubscribeOptions } from "./contract";
-import { defaultNostrRuntime } from "./NostrRuntime";
-import type { SubscriptionHandle } from "./SubscriptionManager";
+import type { NostrRuntimeContract, SubscribeOptions } from "./contract.js";
+import { defaultNostrRuntime } from "./NostrRuntime.js";
+import type { SubscriptionHandle } from "./SubscriptionManager.js";
 
 let installed: NostrRuntimeContract = defaultNostrRuntime;
 

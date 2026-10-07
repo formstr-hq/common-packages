@@ -7,8 +7,8 @@ import {
   decryptFileWithKey,
   encryptFileWithExistingKey,
   encryptFileWithKey,
-} from "./aesGcm";
-import { hexToBytes } from "./hex";
+} from "./aesGcm.js";
+import { hexToBytes } from "./hex.js";
 
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);

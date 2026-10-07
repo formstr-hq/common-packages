@@ -5,13 +5,13 @@ export type {
   SignerObserver,
   Nip46Connection,
   Nip46Builder,
-} from "./types";
-export { LocalSigner } from "./LocalSigner";
-export { NIP07Signer } from "./NIP07Signer";
-export { NIP46Signer, type BunkerLike } from "./NIP46Signer";
-export { DeferredSigner } from "./DeferredSigner";
-export { SignerManager, signerManager } from "./SignerManager";
-export { createDriveSignerAdapter } from "./DriveSignerAdapter";
-export { SignerUnavailableError } from "./errors";
-export type { DriveSignerAdapter } from "./DriveSignerAdapter";
-export { signerPool } from "./signerPool";
+} from "./types.js";
+export { LocalSigner } from "./LocalSigner.js";
+export { NIP07Signer } from "./NIP07Signer.js";
+export { NIP46Signer, type BunkerLike } from "./NIP46Signer.js";
+export { DeferredSigner } from "./DeferredSigner.js";
+export { SignerManager, signerManager } from "./SignerManager.js";
+export { createDriveSignerAdapter } from "./DriveSignerAdapter.js";
+export { SignerUnavailableError } from "./errors.js";
+export type { DriveSignerAdapter } from "./DriveSignerAdapter.js";
+export { signerPool } from "./signerPool.js";

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { decodeNKeys, encodeNKeys } from "./nkeys";
+import { decodeNKeys, encodeNKeys } from "./nkeys.js";
 
 /**
  * Golden vectors produced by running the standalone apps' nkeys algorithm

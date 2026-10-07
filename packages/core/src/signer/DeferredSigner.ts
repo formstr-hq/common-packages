@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
-import type { NostrSigner } from "./types";
+import type { NostrSigner } from "./types.js";
 
 type QueuedOperation<T> = {
   execute: (signer: NostrSigner) => Promise<T>;

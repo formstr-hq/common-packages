@@ -1,8 +1,8 @@
 import { generateSecretKey } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
-import { DeferredSigner } from "./DeferredSigner";
-import { LocalSigner } from "./LocalSigner";
+import { DeferredSigner } from "./DeferredSigner.js";
+import { LocalSigner } from "./LocalSigner.js";
 
 describe("DeferredSigner", () => {
   it("returns cached pubkey instantly before real signer resolves", async () => {

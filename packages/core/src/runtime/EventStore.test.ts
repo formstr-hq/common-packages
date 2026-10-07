@@ -1,7 +1,7 @@
 import type { Event } from "nostr-tools";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { EventStore } from "./EventStore";
+import { EventStore } from "./EventStore.js";
 
 function mkEvent(overrides: Partial<Event> = {}): Event {
   return {

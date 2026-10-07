@@ -2,8 +2,8 @@ import { generateSecretKey } from "nostr-tools";
 import { nsecEncode } from "nostr-tools/nip19";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SignerUnavailableError } from "./errors";
-import { SignerManager } from "./SignerManager";
+import { SignerUnavailableError } from "./errors.js";
+import { SignerManager } from "./SignerManager.js";
 
 describe("SignerManager", () => {
   beforeEach(() => {

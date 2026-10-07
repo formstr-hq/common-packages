@@ -11,7 +11,7 @@ export {
   createDriveSignerAdapter,
   SignerUnavailableError,
   signerPool,
-} from "./signer";
+} from "./signer/index.js";
 export type {
   NostrSigner,
   SignerMethod,
@@ -21,7 +21,7 @@ export type {
   Nip46Builder,
   BunkerLike,
   DriveSignerAdapter,
-} from "./signer";
+} from "./signer/index.js";
 
 // Runtime
 export {
@@ -33,8 +33,8 @@ export {
   resetNostrRuntime,
   EventStore,
   SubscriptionManager,
-} from "./runtime";
-export type { SubscriptionHandle, NostrRuntimeContract, SubscribeOptions } from "./runtime";
+} from "./runtime/index.js";
+export type { SubscriptionHandle, NostrRuntimeContract, SubscribeOptions } from "./runtime/index.js";
 
 // Relay
 export {
@@ -43,12 +43,12 @@ export {
   OutboxService,
   outboxService,
   MODULE_DEFAULT_RELAYS,
-} from "./relay";
-export type { RelayConfig } from "./relay";
+} from "./relay/index.js";
+export type { RelayConfig } from "./relay/index.js";
 
 // Blossom
-export { BlossomClient, createBlossomAuthEvent } from "./blossom";
-export type { BlossomUploadResult } from "./blossom";
+export { BlossomClient, createBlossomAuthEvent } from "./blossom/index.js";
+export type { BlossomUploadResult } from "./blossom/index.js";
 
 // Crypto
 export {
@@ -69,7 +69,7 @@ export {
   encryptFileWithKey,
   encryptFileWithExistingKey,
   decryptFileWithKey,
-} from "./crypto";
+} from "./crypto/index.js";
 
 // Linking
 export {
@@ -79,8 +79,8 @@ export {
   createTagRef,
   parseTagRef,
   MODULE_ROUTES,
-} from "./linking";
-export type { ModuleRef, ModuleType } from "./linking";
+} from "./linking.js";
+export type { ModuleRef, ModuleType } from "./linking.js";
 
 // Types
 export type {
@@ -93,4 +93,4 @@ export type {
   Tag,
   EventAddress,
   UserProfile,
-} from "./types";
+} from "./types.js";

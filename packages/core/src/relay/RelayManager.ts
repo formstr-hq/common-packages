@@ -1,8 +1,8 @@
 import type { Event, Filter } from "nostr-tools";
 
-import { nostrRuntime } from "../runtime/installed";
+import { nostrRuntime } from "../runtime/installed.js";
 
-import { MODULE_DEFAULT_RELAYS, type ModuleName } from "./module-defaults";
+import { MODULE_DEFAULT_RELAYS, type ModuleName } from "./module-defaults.js";
 
 export interface RelayConfig {
   url: string;

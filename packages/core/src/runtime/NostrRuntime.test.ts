@@ -1,7 +1,7 @@
 import type { Event } from "nostr-tools";
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-import { NostrRuntime } from "./NostrRuntime";
+import { NostrRuntime } from "./NostrRuntime.js";
 
 const event: Event = {
   id: "e1",

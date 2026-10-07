@@ -1,6 +1,6 @@
 {
   "name": "@formstr/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Nostr primitives for Formstr: signers, relay/runtime plumbing, crypto, Blossom, cross-module linking",
   "license": "MIT",
   "publishConfig": {
@@ -54,7 +54,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 
-import { NIP46Signer, type BunkerLike } from "./NIP46Signer";
+import { NIP46Signer, type BunkerLike } from "./NIP46Signer.js";
 
 function makeBunker(): BunkerLike {
   return {

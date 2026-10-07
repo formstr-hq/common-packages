@@ -8,7 +8,7 @@ import {
   parseRef,
   parseTagRef,
   resolveRef,
-} from "./linking";
+} from "./linking.js";
 
 describe("linking parseRef", () => {
   it("parses a forms naddr", () => {

@@ -1,9 +1,9 @@
 import { generateSecretKey } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
-import { LocalSigner } from "../signer/LocalSigner";
+import { LocalSigner } from "../signer/LocalSigner.js";
 
-import { nip44Decrypt, nip44Encrypt, nip44SelfDecrypt, nip44SelfEncrypt } from "./nip44";
+import { nip44Decrypt, nip44Encrypt, nip44SelfDecrypt, nip44SelfEncrypt } from "./nip44.js";
 
 describe("nip44", () => {
   it("self-encrypts and decrypts a string", async () => {

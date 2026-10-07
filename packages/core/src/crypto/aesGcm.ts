@@ -11,7 +11,7 @@
 
 import { generateSecretKey, getPublicKey, nip44 } from "nostr-tools";
 
-import { bytesToHex, hexToBytes } from "./hex";
+import { bytesToHex, hexToBytes } from "./hex.js";
 
 // ── base64 helpers (chunked, large-payload safe) ───────────
 

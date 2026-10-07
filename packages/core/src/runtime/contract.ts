@@ -1,6 +1,6 @@
 import type { Event, Filter } from "nostr-tools";
 
-import type { SubscriptionHandle } from "./SubscriptionManager";
+import type { SubscriptionHandle } from "./SubscriptionManager.js";
 
 export interface SubscribeOptions {
   onEvent?: (event: Event) => void;

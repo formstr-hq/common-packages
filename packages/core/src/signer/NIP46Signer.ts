@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
-import type { NostrSigner } from "./types";
+import type { NostrSigner } from "./types.js";
 
 /**
  * Minimal structural type of the part of nostr-tools' `BunkerSigner` we depend on.

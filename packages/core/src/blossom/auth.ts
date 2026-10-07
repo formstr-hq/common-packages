@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
-import type { NostrSigner } from "../signer/types";
+import type { NostrSigner } from "../signer/types.js";
 
 /**
  * Create kind 24242 Blossom auth event.

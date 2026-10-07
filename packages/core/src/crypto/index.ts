@@ -1,4 +1,4 @@
-export { nip44Encrypt, nip44Decrypt, nip44SelfEncrypt, nip44SelfDecrypt } from "./nip44";
+export { nip44Encrypt, nip44Decrypt, nip44SelfEncrypt, nip44SelfDecrypt } from "./nip44.js";
 export {
   createRumor,
   createSeal,
@@ -6,12 +6,12 @@ export {
   wrapEvent,
   wrapManyEvents,
   unwrapEvent,
-} from "./nip59";
-export { encodeNKeys, decodeNKeys } from "./nkeys";
+} from "./nip59.js";
+export { encodeNKeys, decodeNKeys } from "./nkeys.js";
 export {
   aesGcmEncrypt,
   aesGcmDecrypt,
   encryptFileWithKey,
   encryptFileWithExistingKey,
   decryptFileWithKey,
-} from "./aesGcm";
+} from "./aesGcm.js";

@@ -45,9 +45,9 @@
     "@napi-rs/keyring": "^1.1.6"
   },
   "devDependencies": {
-    "@formstr/agent": "workspace:*",
-    "@formstr/core": "workspace:*",
-    "@formstr/signer": "workspace:*",
+    "@formstr/agent": "workspace:^",
+    "@formstr/core": "workspace:^",
+    "@formstr/signer": "workspace:^",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.6.0",
     "@types/qrcode": "^1.5.5",

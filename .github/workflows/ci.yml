@@ -25,11 +25,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Build before typecheck/test: @formstr/agent (and @formstr/mcp) consume
+      # @formstr/core and @formstr/calendar-sdk as workspace packages, and those
+      # resolve to the *published* dist/. On a clean checkout dist/ does not
+      # exist yet, so typecheck and the agent tests fail until the workspace is
+      # built. pnpm -r build is topologically ordered.
+      - name: Build
+        run: pnpm -r build
+
       - name: Typecheck
         run: pnpm -r typecheck
 
       - name: Test with coverage
         run: pnpm -r --if-present test:coverage
-
-      - name: Build
-        run: pnpm -r build

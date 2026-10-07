@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import * as core from "./index";
+import * as core from "./index.js";
 
 describe("@formstr/core exports", () => {
   it("exports SignerManager", () => {

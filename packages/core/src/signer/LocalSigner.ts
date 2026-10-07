@@ -3,7 +3,7 @@ import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 import * as nip04 from "nostr-tools/nip04";
 import * as nip44 from "nostr-tools/nip44";
 
-import type { NostrSigner } from "./types";
+import type { NostrSigner } from "./types.js";
 
 /**
  * Local signer using an in-memory secret key.

@@ -1,8 +1,8 @@
 import type { Filter } from "nostr-tools";
 
-import { nostrRuntime } from "../runtime/installed";
+import { nostrRuntime } from "../runtime/installed.js";
 
-import { relayManager } from "./RelayManager";
+import { relayManager } from "./RelayManager.js";
 
 interface RelayCache {
   outbox: string[];

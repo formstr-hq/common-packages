@@ -1,8 +1,8 @@
 import { SimplePool } from "nostr-tools";
 import type { Event, Filter } from "nostr-tools";
 
-import { EventStore } from "./EventStore";
-import { SubscriptionManager, type SubscriptionHandle } from "./SubscriptionManager";
+import { EventStore } from "./EventStore.js";
+import { SubscriptionManager, type SubscriptionHandle } from "./SubscriptionManager.js";
 
 /**
  * NostrRuntime — shared pool + EventStore + SubscriptionManager.

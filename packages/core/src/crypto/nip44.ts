@@ -1,4 +1,4 @@
-import type { NostrSigner } from "../signer/types";
+import type { NostrSigner } from "../signer/types.js";
 
 /**
  * NIP-44 v2 encryption wrappers.

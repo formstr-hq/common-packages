@@ -1,11 +1,11 @@
 import { decode as decodeNsec } from "nostr-tools/nip19";
 
-import { bytesToHex, hexToBytes } from "../crypto/hex";
+import { bytesToHex, hexToBytes } from "../crypto/hex.js";
 
-import { DeferredSigner } from "./DeferredSigner";
-import { SignerUnavailableError } from "./errors";
-import { LocalSigner } from "./LocalSigner";
-import { NIP07Signer } from "./NIP07Signer";
+import { DeferredSigner } from "./DeferredSigner.js";
+import { SignerUnavailableError } from "./errors.js";
+import { LocalSigner } from "./LocalSigner.js";
+import { NIP07Signer } from "./NIP07Signer.js";
 import type {
   NostrSigner,
   SignerMethod,
@@ -13,7 +13,7 @@ import type {
   SignerObserver,
   Nip46Connection,
   Nip46Builder,
-} from "./types";
+} from "./types.js";
 
 const STORAGE_PREFIX = "formstr:";
 const KEY_METHOD = `${STORAGE_PREFIX}signer-method`;

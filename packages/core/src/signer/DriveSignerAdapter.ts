@@ -1,6 +1,6 @@
 import type { EventTemplate, VerifiedEvent } from "nostr-tools";
 
-import { signerManager } from "./SignerManager";
+import { signerManager } from "./SignerManager.js";
 
 /**
  * Adapter that replaces all `window.nostr` calls in Drive's codebase

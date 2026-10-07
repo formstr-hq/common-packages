@@ -1,8 +1,8 @@
 import type { Event, Filter } from "nostr-tools";
 import { describe, it, expect, afterEach } from "vitest";
 
-import type { NostrRuntimeContract } from "./contract";
-import { nostrRuntime, setNostrRuntime, resetNostrRuntime } from "./installed";
+import type { NostrRuntimeContract } from "./contract.js";
+import { nostrRuntime, setNostrRuntime, resetNostrRuntime } from "./installed.js";
 
 /** A contract implementation that records what it was asked to do. */
 function recorder() {

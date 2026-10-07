@@ -105,6 +105,34 @@ importers:
         specifier: ^5.4.0
         version: 5.4.21(@types/node@20.19.42)
 
+  packages/calendar-sdk:
+    dependencies:
+      '@noble/hashes':
+        specifier: ^1.8.0
+        version: 1.8.0
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.5(typescript@5.9.3)
+      rrule:
+        specifier: ^2.8.1
+        version: 2.8.1
+    devDependencies:
+      '@formstr/local-relay':
+        specifier: workspace:*
+        version: 0.6.4(typescript@5.9.3)
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@20.19.42)(happy-dom@15.11.7))
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@20.19.42)(happy-dom@15.11.7)
+
   packages/drive-sdk:
     dependencies:
       '@sinclair/typebox':
@@ -126,33 +154,6 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
-  packages/calendar-sdk:
-    dependencies:
-      '@noble/hashes':
-        specifier: ^1.8.0
-        version: 1.8.0
-      nostr-tools:
-        specifier: ^2.23.3
-        version: 2.23.5(typescript@5.9.3)
-      rrule:
-        specifier: ^2.8.1
-        version: 2.8.1
-    devDependencies:
-      '@formstr/local-relay':
-        specifier: workspace:*
-        version: link:../local-relay
-      '@vitest/coverage-v8':
-        specifier: ^3.2.4
-        version: 3.2.7(vitest@3.2.7(@types/node@20.19.42)(happy-dom@15.11.7))
-      tsup:
-        specifier: ^8.5.0
-        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.6.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/node@20.19.42)(happy-dom@15.11.7)
 
   packages/kanban-sdk:
     dependencies:
@@ -194,6 +195,28 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@20.19.42)(happy-dom@15.11.7)
+
+  packages/mailstr-sdk:
+    dependencies:
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.5(typescript@5.9.3)
+      postal-mime:
+        specifier: ^4.0.4
+        version: 4.0.4
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@20.19.42)(happy-dom@15.11.7))
+      tsup:
+        specifier: ^8.5.0
+        version: 8.5.1(postcss@8.5.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@20.19.42)(happy-dom@15.11.7)
 
   packages/signer:
     dependencies:
@@ -650,6 +673,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@formstr/local-relay@0.6.4':
+    resolution: {integrity: sha512-Mc+nUOEyVMCFjs3tz026LeQvQtbmAUX4gsWV4N+uE7H+u3VWfTXby2mmg8OFTnsPu85GOWzd7t39Oqnj+azr2w==}
 
   '@ionic/cli-framework-output@2.2.8':
     resolution: {integrity: sha512-TshtaFQsovB4NWRBydbNFawql6yul7d5bMiW1WYYf17hd99V6xdDdk3vtF51bw6sLkxON3bDQpWsnUc9/hVo3g==}
@@ -1532,6 +1558,10 @@ packages:
     resolution: {integrity: sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==}
     engines: {node: '>=10.13.0'}
 
+  postal-mime@4.0.4:
+    resolution: {integrity: sha512-LC9FypbNof/NfF07rHg5ev2zx6KwmqfcaGQPhSSdwJSnp04MImO+7ByCPh+3bkILupgMG5fn2WrThRy4WDqHoA==}
+    engines: {node: '>=20'}
+
   postcss-load-config@6.0.1:
     resolution: {integrity: sha512-oPtTM4oerL+UXmx+93ytZVN82RrlY/wPUV8IeDxFrzIjXOLF1pN+EmKPLbubvKHT2HC20xXsCAH2Z+CKV6Oz/g==}
     engines: {node: '>= 18'}
@@ -2296,6 +2326,12 @@ snapshots:
 
   '@esbuild/win32-x64@0.27.7':
     optional: true
+
+  '@formstr/local-relay@0.6.4(typescript@5.9.3)':
+    dependencies:
+      nostr-tools: 2.23.5(typescript@5.9.3)
+    transitivePeerDependencies:
+      - typescript
 
   '@ionic/cli-framework-output@2.2.8':
     dependencies:
@@ -3208,6 +3244,8 @@ snapshots:
       xmlbuilder: 15.1.1
 
   pngjs@5.0.0: {}
+
+  postal-mime@4.0.4: {}
 
   postcss-load-config@6.0.1(postcss@8.5.15):
     dependencies:

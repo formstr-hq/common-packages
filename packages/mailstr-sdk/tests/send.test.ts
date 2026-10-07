@@ -6,7 +6,7 @@ import {
   messageStringToBytes,
   WRAP_KEY_TAG,
 } from "../src/index.js";
-import { resolveRecipient, sendMail } from "../src/send.js";
+import { resolveDestination, resolveRecipient, sendMail } from "../src/send.js";
 import { unwrapMail } from "../src/unwrap.js";
 import type { SimplePool } from "nostr-tools";
 
@@ -130,5 +130,69 @@ describe("resolveRecipient", () => {
     const hex = "a".repeat(64);
     expect(resolveRecipient(hex)).toBe(hex);
     expect(resolveRecipient(nip19.npubEncode(hex))).toBe(hex);
+  });
+
+  it("refuses non-key forms", () => {
+    expect(() => resolveRecipient("friend@example.com")).toThrow(/destination/);
+  });
+});
+
+describe("resolveDestination", () => {
+  it("classifies keys, npubs, and email addresses", () => {
+    const hex = "b".repeat(64);
+    expect(resolveDestination(hex)).toEqual({ type: "nostr", pubkey: hex });
+    expect(resolveDestination(nip19.npubEncode(hex))).toEqual({ type: "nostr", pubkey: hex });
+    expect(resolveDestination("Person@Example.COM")).toEqual({
+      type: "email",
+      // Localpart preserved as written (the bridge hands the original target
+      // to postfix — address.ts splitAddress); domain normalized.
+      address: "Person@example.com",
+    });
+  });
+
+  it("refuses email-form mailstr-local recipients and garbage", () => {
+    // The bridge refuses local domains (outbound.ts §6B) and a bare localpart
+    // has no key — local recipients must be addressed by npub/hex.
+    expect(() => resolveDestination("someone@mailstr.app")).toThrow(/mailstr\.app/);
+    expect(() => resolveDestination("garbage")).toThrow(/destination/);
+  });
+});
+
+describe("sendMail — email bridge", () => {
+  it("wraps to the bridge key, carries deliver tags, publishes on bridge relays", async () => {
+    const sender = keypair();
+    const bridge = keypair();
+    const published: { relays: string[]; kinds: number[] }[] = [];
+    const fakePool = {
+      publish: (relays: string[], ev: { kind: number }) => {
+        published.push({ relays, kinds: [ev.kind] });
+        return relays.map(() => Promise.resolve(""));
+      },
+    } as unknown as Pick<SimplePool, "publish">;
+
+    const result = await sendMail(sender.secretKey, {
+      to: "friend@outside.example",
+      subject: "email bridge test",
+      text: "hello over SMTP",
+      from: "irona@mailstr.app",
+      bridge: { pubkey: bridge.pubkey, relays: ["wss://br1", "wss://br2"] },
+      pool: fakePool,
+    });
+
+    // Sealed and wrapped to the bridge key, not to a Nostr recipient.
+    expect(result.recipient).toBe(bridge.pubkey);
+    expect(result.wrap.tags[0]).toEqual(["p", bridge.pubkey]);
+    expect(published).toHaveLength(1);
+    expect(published[0].relays).toEqual(["wss://br1", "wss://br2"]);
+    expect(published[0].kinds).toEqual([KIND_GIFTWRAP]);
+
+    // The bridge unwraps with the same rules and reads deliver targets.
+    const unwrapped = unwrapMail(result.wrap, bridge.secretKey);
+    expect(unwrapped.ok).toBe(true);
+    if (!unwrapped.ok) return;
+    expect(unwrapped.rumor.tags).toContainEqual(["deliver", "friend@outside.example"]);
+    const raw = new TextDecoder().decode(messageStringToBytes(unwrapped.rumor.content));
+    expect(raw).toContain("To: friend@outside.example");
+    expect(raw).toContain("Subject: email bridge test");
   });
 });

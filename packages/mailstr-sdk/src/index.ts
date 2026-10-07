@@ -29,8 +29,13 @@ export { createIdentity, identityFromSecretKey } from "./identity.js";
 export { DEFAULT_INBOX_RELAYS, readInbox } from "./inbox.js";
 export type { ReadInboxOptions } from "./inbox.js";
 export { createNip98Event, signNip98 } from "./nip98.js";
-export { sendMail } from "./send.js";
-export type { SendMailOptions, SendResult } from "./send.js";
+export {
+  resolveBridge,
+  resolveDestination,
+  resolveRecipient,
+  sendMail,
+} from "./send.js";
+export type { BridgeIdentity, Destination, SendMailOptions, SendResult } from "./send.js";
 export { DEFAULT_SETUP_RELAYS, publishSetup } from "./setup.js";
 export type { PublishResult, PublishSetupOptions, SetupEventOutcome } from "./setup.js";
 export { unwrapMail } from "./unwrap.js";

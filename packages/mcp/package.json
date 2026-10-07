@@ -1,6 +1,6 @@
 {
   "name": "@formstr/mcp",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Model Context Protocol server for the Formstr super-app — drive Nostr forms (and more) from any MCP host, with secure keychain/NIP-46 login.",
   "keywords": [
     "mcp",
@@ -26,7 +26,8 @@
   "main": "./dist/index.js",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "AGENTS.md"
   ],
   "publishConfig": {
     "access": "public"

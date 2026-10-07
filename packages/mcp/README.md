@@ -12,6 +12,10 @@ the same login engine the Formstr web app uses. Local keys are stored **NIP-49 e
 (`ncryptsec`)** inside an OS-keychain (or encrypted-file) keystore; a raw nsec is never
 persisted. Remote keys stay in your NIP-46 signer.
 
+> **Driving this from an AI agent?** Read [`AGENTS.md`](./AGENTS.md) — a task-oriented guide to
+> every tool, the `confirm` gate, id/coordinate formats, and worked recipes. This README is the
+> operator's setup guide.
+
 ## Quick start
 
 ```bash

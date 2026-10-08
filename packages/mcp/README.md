@@ -13,8 +13,10 @@ the same login engine the Formstr web app uses. Local keys are stored **NIP-49 e
 persisted. Remote keys stay in your NIP-46 signer.
 
 > **Driving this from an AI agent?** Read [`AGENTS.md`](./AGENTS.md) — a task-oriented guide to
-> every tool, the `confirm` gate, id/coordinate formats, and worked recipes. This README is the
-> operator's setup guide.
+> every tool, the `confirm` gate, id/coordinate formats, and worked recipes. It is
+> self-contained (setup included), so you can point a model straight at the raw file:
+> `https://raw.githubusercontent.com/formstr-hq/common-packages/main/packages/mcp/AGENTS.md`.
+> This README is the operator's setup guide.
 
 ## Quick start
 

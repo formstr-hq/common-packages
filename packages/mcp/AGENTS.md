@@ -10,6 +10,52 @@ first write. Then jump to the module you need.
 
 ---
 
+## Before you can do anything
+
+You almost certainly cannot change this yourself — it is a one-time, human, out-of-band step.
+But you should know what it is so you can tell the user exactly what's wrong if a tool is
+missing or a command fails.
+
+**1. A human signs in once** (interactive terminal; never in the chat):
+
+```bash
+npx -y @formstr/mcp login
+```
+
+They pick **Bunker URI (NIP-46)** for the best setup — the private key stays in their signer
+app (Amber, nsec.app), only a session is stored, and no passphrase is ever needed in a config
+file. The alternative, an `ncryptsec` key, unlocks with a passphrase supplied via the
+`FORMSTR_MCP_NCRYPTSEC_PASSPHRASE` env var in the host config. Either way **the key never
+reaches you**.
+
+**2. The host starts the server.** The user adds an entry to their MCP host config
+(`claude_desktop_config.json`, Cursor's `~/.cursor/mcp.json`, Goose, …):
+
+```json
+{
+  "mcpServers": {
+    "formstr": {
+      "command": "npx",
+      "args": ["-y", "@formstr/mcp", "--allow-writes"]
+    }
+  }
+}
+```
+
+- **`--allow-writes` is what registers the gated tools.** Without it, tools like `send_mail`,
+  `delete_form`, `update_page`, `share_form` are **absent from your tool list entirely** — not
+  disabled, just not there. If a write tool the user expects is missing, this is why: tell them
+  to add the flag and restart the host.
+- The flag does **not** make anything automatic — every gated tool still requires you to pass
+  `confirm: true`, and you should only do that after the user agrees (see
+  [the confirm gate](#the-confirm-gate)).
+- Add `"--relays", "wss://a,wss://b"` to override the relay set if the user asks.
+
+That's the whole setup. If the tools are present and `list_*` calls work, you're good — the
+sections below are everything else.
+
+---
+
 ## Golden rules
 
 1. **Never invent an id.** Every tool that acts on existing data takes an id, pubkey, or
@@ -292,9 +338,18 @@ read_mail { mailId: "<id from list>" }
 
 ---
 
-## For the operator (setup, not for the agent)
+## Pointing other agents here
 
-See [`README.md`](./README.md) for installation, `formstr-mcp login`, host configuration
-(`claude_desktop_config.json`, Cursor, Goose/Ollama), the passphrase env var, and the full
-environment-variable and CLI-flag reference. In short: `npx -y @formstr/mcp`; add
-`"--allow-writes"` to enable gated tools.
+This guide is the single entry point. Canonical source is the ngit repository; GitHub is a
+read-only mirror.
+
+- **Agent-readable (raw Markdown — what you want to feed a model):**
+  `https://raw.githubusercontent.com/formstr-hq/common-packages/main/packages/mcp/AGENTS.md`
+- **Human-readable (rendered):**
+  `https://github.com/formstr-hq/common-packages/blob/main/packages/mcp/AGENTS.md`
+- **Shipped in the package too:** `AGENTS.md` is included in the `@formstr/mcp` npm tarball, so
+  `node_modules/@formstr/mcp/AGENTS.md` exists after any install.
+
+For deeper operator detail — keystore internals, the full environment-variable and CLI-flag
+reference, Ollama/Goose setup, troubleshooting — see [`README.md`](./README.md).
+

@@ -43,8 +43,12 @@ const DEFAULT_MAX_GOSSIP_RELAYS = 64;
  * NIP-17 gift-wrap kind. An author-less interest scoped purely to these kinds is
  * a DM read: it targets the user's DM inbox relays (kind 10050), NOT the general
  * read/gossip relays — and general feed reads never touch the DM inbox relays.
+ *
+ * Kind 21059 is NIP-59's ephemeral gift wrap (same seal->wrap structure as 1059);
+ * relays MUST NOT store it, so it carries real-time pings (typing / presence)
+ * without persisting. It routes like a DM on both sides.
  */
-const DM_KINDS = new Set<number>([1059]);
+const DM_KINDS = new Set<number>([1059, 21059]);
 
 /**
  * NIP-17 DM inbox relay list (kind 10050). A recipient receives gift wraps here,

@@ -247,8 +247,8 @@ types: `short`, `paragraph`, `choice`, `dropdown`, `number`, `date`, `time`, `gr
 
 | Tool | Required args | Notes |
 | --- | --- | --- |
-| `list_mail` | — | Inbox, newest first: `id`, sender, subject, date. |
-| `read_mail` | `mailId` | Full body of one message. |
+| `list_mail` | — | A page of the inbox, newest first. Page with `until`. |
+| `read_mail` | `mailId` | Full body of one message (fetched by id). |
 | `who_is_my_mail_address` | — | Signed-in identity, default `From:`, and aliases. |
 | `list_mail_aliases` | — | Every address the account can send as, and the default. |
 | `send_mail` ⚠ | `to` | `to` = npub/hex **or** external email. Gated. |
@@ -261,6 +261,12 @@ choose which alias appears in the `From:`; call `list_mail_aliases` first to see
 `from` the account doesn't own is rejected with the valid list. `send_mail` needs `text` or
 `raw`. For external email, the `From:` must be a registered alias (not the bare npub) or the
 bridge bounces it.
+
+**Paging a large inbox.** `list_mail` returns a bounded **page** (default 50, newest first) —
+it does not scan the whole mailbox. When the page is full the result includes `oldestReceivedAt`
+and `hasMore: true`; to read further back, call again with `until` set to that value. `since`
+and `until` are unix seconds. If you only need one message you already have the id for, call
+`read_mail` — it fetches that exact wrap and never depends on the page window.
 
 > **Claiming is two-step and human-driven.** `claim_mailbox` returns a bolt11 invoice. The
 > user pays it in their own wallet. Then the address starts working once NIP-05 propagates.

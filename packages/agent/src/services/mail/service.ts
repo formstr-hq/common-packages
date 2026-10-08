@@ -45,6 +45,10 @@ export interface MailInboxResult {
   mail: MailMessage[];
   /** Wraps that failed to decode, with a reason — never aborts the pass. */
   failures: { wrapId: string; reason: string }[];
+  /** Unix seconds of the oldest message in this page — pass as `until` to fetch the next page. */
+  oldestReceivedAt?: number;
+  /** True when the page was full, i.e. there are probably older messages. */
+  hasMore: boolean;
 }
 
 export interface MailIdentity {
@@ -82,14 +86,43 @@ export async function defaultSenderAddress(): Promise<string> {
   return defaultFromAddress(pubkey, await listAliases());
 }
 
-/** Read the inbox: every decodable mail message, plus per-wrap failures. */
-export async function readMail(opts: { limit?: number } = {}): Promise<MailInboxResult> {
+/**
+ * Read a page of the inbox. `limit` bounds the page (default 50); `until`
+ * (unix seconds) pages back — pass the `oldestReceivedAt` from a previous call.
+ * `since` can bound the other end. A page is returned newest-first with an
+ * `oldestReceivedAt` cursor and `hasMore`, so a large mailbox is read in bounded
+ * chunks rather than one giant scan.
+ */
+export async function readMail(
+  opts: { limit?: number; since?: number; until?: number } = {},
+): Promise<MailInboxResult> {
   const signer = await mailSigner();
+  const limit = opts.limit ?? 50;
   const { mail, failures } = await readInboxWith(signer, {
     relays: inboxRelays(),
-    ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+    limit,
+    ...(opts.since !== undefined ? { since: opts.since } : {}),
+    ...(opts.until !== undefined ? { until: opts.until } : {}),
   });
-  return { mail, failures };
+  mail.sort((a, b) => b.receivedAt - a.receivedAt);
+  return {
+    mail,
+    failures,
+    oldestReceivedAt: mail.length ? mail[mail.length - 1].receivedAt : undefined,
+    // A full page means there are probably older messages to page to. We cannot
+    // know for certain without a second query; this is a cheap, honest hint.
+    hasMore: mail.length >= limit,
+  };
+}
+
+/**
+ * Read one message by its exact wrap id. Fetches that wrap directly (no page
+ * scan, no time window), so it works no matter how far back the message is.
+ */
+export async function readMailById(mailId: string): Promise<MailMessage | null> {
+  const signer = await mailSigner();
+  const { mail } = await readInboxWith(signer, { relays: inboxRelays(), ids: [mailId] });
+  return mail[0] ?? null;
 }
 
 export interface SendMailParams {

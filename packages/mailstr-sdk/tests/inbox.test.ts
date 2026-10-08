@@ -244,3 +244,52 @@ describe('readInboxWith — the signer path', () => {
     expect(out.mail[0].raw).toBe(rumor.content);
   });
 });
+
+describe('inbox staleness — a mailbox is not a bridge', () => {
+  // A message older than the bridge's MAX_RUMOR_AGE_SECONDS (300s) still renders.
+  // The bridge guards against re-relaying a replay; rendering an inbox must not,
+  // or every inbox would appear to contain only the last five minutes of mail.
+  const OLD = Math.floor(Date.now() / 1000) - 90 * 24 * 60 * 60; // 90 days ago
+
+  it('readInbox renders an old message instead of failing it as expired', async () => {
+    const recipient = createIdentity();
+    const sender = makeKeypair();
+    const { wrap } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey, content: RFC822, createdAt: OLD },
+      { recipientSk: recipient.secretKey },
+    );
+    const out = await readInbox(recipient.secretKey, { queryWraps: async () => [wrap] });
+    expect(out.failures).toEqual([]);
+    expect(out.mail).toHaveLength(1);
+    expect(out.mail[0].subject).toBe('Weekly update');
+  });
+
+  it('readInboxWith renders an old message too', async () => {
+    const recipient = createIdentity();
+    const sender = makeKeypair();
+    const { wrap } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey, content: RFC822, createdAt: OLD },
+      { recipientSk: recipient.secretKey },
+    );
+    const out = await readInboxWith(makeMailSigner(recipient.secretKey), {
+      queryWraps: async () => [wrap],
+    });
+    expect(out.failures).toEqual([]);
+    expect(out.mail).toHaveLength(1);
+  });
+
+  it('still honors an explicit finite maxAgeSeconds when the caller asks', async () => {
+    const recipient = createIdentity();
+    const sender = makeKeypair();
+    const { wrap } = wrapChain(
+      { senderSk: sender.secretKey, recipientPk: recipient.pubkey, createdAt: OLD },
+      { recipientSk: recipient.secretKey },
+    );
+    const out = await readInbox(recipient.secretKey, {
+      queryWraps: async () => [wrap],
+      maxAgeSeconds: 300,
+    });
+    expect(out.mail).toHaveLength(0);
+    expect(out.failures).toEqual([{ wrapId: wrap.id, reason: 'expired' }]);
+  });
+});

@@ -27,9 +27,36 @@ export const DEFAULT_INBOX_RELAYS = [
 export interface ReadInboxOptions {
   /** Relay pool to query; defaults to {@link DEFAULT_INBOX_RELAYS}. */
   relays?: string[];
-  /** Max wraps requested per query (default 100). */
+  /**
+   * Max wraps requested per query (default 100). Relays return newest-first, so
+   * this is a cap on the newest mail, not a hard scan; page further back with
+   * `until` (see below).
+   */
   limit?: number;
-  /** Passed through to the unwrap path. */
+  /**
+   * Fetch specific wraps by id, ignoring the time window. This is how a single
+   * message is read precisely (`read_mail`), without scanning a page for it.
+   */
+  ids?: string[];
+  /**
+   * Only wraps created on/after this unix-seconds instant. Undefined = no lower
+   * bound, so old mail is never hidden by default. Use with `until` to page.
+   */
+  since?: number;
+  /**
+   * Only wraps created strictly before this unix-seconds instant. Page back by
+   * passing the oldest `receivedAt` from a previous page. Undefined = newest.
+   */
+  until?: number;
+  /**
+   * Rumor staleness bound (unix seconds). **Default: `Infinity`** — a mailbox
+   * legitimately holds mail from months ago, and the replay concern does not
+   * apply to rendering it (nail's client reads with `maxAgeSeconds: Infinity`).
+   * The 300s `MAX_RUMOR_AGE_SECONDS` default belongs to the *bridge*, which
+   * re-relays mail and must reject replays; applying it here would hide all but
+   * the last five minutes of an inbox. Set a finite value only to impose your
+   * own window.
+   */
   maxAgeSeconds?: number;
   /** Passed through to the unwrap path. Defaults to mailstr mail only. */
   acceptKinds?: number[];
@@ -56,6 +83,13 @@ async function collectInbox(
     kinds: [KIND_GIFTWRAP],
     "#p": [recipient],
     limit: opts.limit ?? 100,
+    // Time-window paging. Both optional: absent `until` means "newest", absent
+    // `since` means "all the way back". Together they turn a potentially huge
+    // inbox scan into bounded pages (oldest receivedAt → next `until`).
+    ...(opts.since !== undefined ? { since: opts.since } : {}),
+    ...(opts.until !== undefined ? { until: opts.until } : {}),
+    // Exact lookup by id — no time window, for reading one known message.
+    ...(opts.ids !== undefined ? { ids: opts.ids } : {}),
   };
   const wraps = opts.queryWraps
     ? await opts.queryWraps(filter)
@@ -119,7 +153,9 @@ export function readInbox(
 ): Promise<InboxResult> {
   return collectInbox(getPublicKey(secretKey), opts, (wrap) =>
     unwrapMail(wrap, secretKey, {
-      maxAgeSeconds: opts.maxAgeSeconds,
+      // Inbox reads are not bridge re-relays: default to no staleness bound so
+      // months-old mail still renders. Only a caller-supplied window applies.
+      maxAgeSeconds: opts.maxAgeSeconds ?? Infinity,
       acceptKinds: opts.acceptKinds,
       now: opts.now,
     }),
@@ -138,7 +174,8 @@ export async function readInboxWith(
   const recipient = await signer.getPublicKey();
   return collectInbox(recipient, opts, (wrap) =>
     unwrapMailWith(wrap, signer, {
-      maxAgeSeconds: opts.maxAgeSeconds,
+      // See readInbox: the inbox has no staleness bound by default.
+      maxAgeSeconds: opts.maxAgeSeconds ?? Infinity,
       acceptKinds: opts.acceptKinds,
       now: opts.now,
     }),

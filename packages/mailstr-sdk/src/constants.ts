@@ -29,9 +29,13 @@ export const KIND_NIP98 = 27235;
 export const WRAP_KEY_TAG = "wrapkey";
 
 /**
- * Default staleness limit applied to unwrapped rumors, matching
- * `MAX_RUMOR_AGE_SECONDS` in nail's protocol constants (overridable via
- * `unwrapMail`/`readInbox` options). NIP-59 itself randomizes outer wrap/seal
- * timestamps into a 2-day window — that window is not the rumor age limit.
+ * Default staleness limit for the **bridge** path, matching
+ * `MAX_RUMOR_AGE_SECONDS` in nail's protocol constants. The bridge re-relays
+ * mail and must reject replays, so it is strict.
+ *
+ * This is deliberately NOT the inbox default: {@link readInbox} reads with no
+ * bound (a mailbox legitimately holds months of mail, and rendering is not a
+ * replay vector — nail's client uses `maxAgeSeconds: Infinity`). Apply this
+ * value only where re-delivery is the risk.
  */
 export const MAX_RUMOR_AGE_SECONDS = 300;

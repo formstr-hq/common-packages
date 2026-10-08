@@ -145,8 +145,10 @@ relays that reject (auth, rate limits) show up in `results` as
 ```ts
 import { readInbox } from "@formstr/mailstr-sdk";
 
+// Newest-first, single bounded query (limit default 100, no age cutoff).
 const { mail, failures } = await readInbox(identity.secretKey, {
   relays: ["wss://relay.formstr.app"], // default: bootstrap relay set
+  limit: 50,
   // pass acceptKinds: [1301, 14] to also surface NIP-17 DMs
 });
 for (const m of mail) {
@@ -158,6 +160,27 @@ Each `mail` entry carries `wrapId`, the verified `seal` and `rumor`, the
 decoded `raw` RFC 2822 content and the postal-mime fields
 (`from`, `to`, `subject`, `messageId`, `text`). Wraps that fail verification
 are reported in `failures` with a reason — they never abort the pass.
+
+`readInbox` reads **newest-first with no staleness bound** (an inbox legitimately
+holds old mail; see the staleness note below). It is a single bounded query —
+`limit` (default 100) caps it. To page through a large mailbox, walk `until`
+backwards:
+
+```ts
+let until: number | undefined;
+for (let page = 0; page < 5; page++) {
+  const { mail } = await readInbox(identity.secretKey, { limit: 50, until });
+  if (!mail.length) break;
+  // …use mail…
+  until = Math.min(...mail.map((m) => m.receivedAt)); // next page excludes these
+}
+```
+
+Or fetch one known message directly, regardless of age, with `ids`:
+
+```ts
+const { mail } = await readInbox(identity.secretKey, { ids: [wrapId] });
+```
 
 Single-wrap use:
 
@@ -222,8 +245,11 @@ and per-relay `results`.
   the mailstr server's `unwrapAndVerify`, including the author-mismatch
   spoof check that nostr-tools' own `unwrapEvent` lacks, and the
   `wrapkey` deletion-capability check.
-- **Rumor staleness:** defaults to the server constant (300 seconds);
-  override with `maxAgeSeconds`/`now` for inbox archaeology. NIP-59's
+- **Rumor staleness:** `unwrapMail` defaults to the bridge constant (300s), so
+  a low-level unwrap rejects stale replays. **`readInbox`/`readInboxWith` default
+  to no bound (`Infinity`)** — an inbox legitimately holds mail from months ago,
+  and rendering is not a replay vector (`nail`'s client does the same). Pass a
+  finite `maxAgeSeconds` to `readInbox` to impose your own window. NIP-59's
   randomized 2-day outer timestamp window is unrelated.
 - **`WRAP_KEY_TAG` ("wrapkey")**: when present, `unwrapMail` validates it
   against the actual wrap author and returns it — the key lets you author a

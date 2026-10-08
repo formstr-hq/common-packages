@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../src/services", () => ({
   mail: {
     readMail: vi.fn(),
+    readMailById: vi.fn(),
     sendMail: vi.fn(),
     requestMailbox: vi.fn(),
     publishMailSetup: vi.fn(),
@@ -57,25 +58,42 @@ describe("mail tools", () => {
     expect(withWrite.has("send_mail")).toBe(true);
   });
 
-  it("list_mail sorts newest-first and reports counts", async () => {
+  it("list_mail pages: reports the cursor and points at the next page", async () => {
     (mail.readMail as any).mockResolvedValue({
-      mail: [{ ...MSG, wrapId: "old", receivedAt: 1 }, { ...MSG, wrapId: "new", receivedAt: 2 }],
+      mail: [{ ...MSG, wrapId: "new", receivedAt: 2 }, { ...MSG, wrapId: "old", receivedAt: 1 }],
       failures: [],
+      oldestReceivedAt: 1,
+      hasMore: true,
     });
     const tools = register({ allowWrites: false });
     const res = await tools.get("list_mail")!.handler({});
     expect(res.ok).toBe(true);
     expect(res.data.mail.map((m: any) => m.id)).toEqual(["new", "old"]);
     expect(res.data.count).toBe(2);
+    expect(res.data.oldestReceivedAt).toBe(1);
+    expect(res.data.hasMore).toBe(true);
+    expect(res.text).toContain("until: 1");
+    // The page window is forwarded to the service.
+    expect(mail.readMail).toHaveBeenCalledWith({});
   });
 
-  it("read_mail returns the body, and a NOT_FOUND for an unknown id", async () => {
-    (mail.readMail as any).mockResolvedValue({ mail: [MSG], failures: [] });
+  it("list_mail forwards since/until/limit to the window", async () => {
+    (mail.readMail as any).mockResolvedValue({ mail: [], failures: [], hasMore: false });
+    const tools = register({ allowWrites: false });
+    await tools.get("list_mail")!.handler({ since: 100, until: 500, limit: 10 });
+    expect(mail.readMail).toHaveBeenCalledWith({ since: 100, until: 500, limit: 10 });
+  });
+
+  it("read_mail fetches the exact wrap by id, and NOT_FOUND for an unknown id", async () => {
+    (mail.readMailById as any).mockImplementation(async (id: string) =>
+      id === "wrap1" ? MSG : null,
+    );
     const tools = register({ allowWrites: false });
     const found = await tools.get("read_mail")!.handler({ mailId: "wrap1" });
     expect(found.ok).toBe(true);
     expect(found.text).toContain("the body");
     expect(found.text).toContain("Subject: Hi");
+    expect(mail.readMailById).toHaveBeenCalledWith("wrap1");
 
     const missing = await tools.get("read_mail")!.handler({ mailId: "nope" });
     expect(missing.ok).toBe(false);

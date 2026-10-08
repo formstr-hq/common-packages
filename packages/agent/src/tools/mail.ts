@@ -36,26 +36,38 @@ function buildMailTools(): ToolDef[] {
     "list_mail",
     {
       description:
-        "List the mail in your mailstr inbox (kind-1059 gift-wrapped email). Returns each " +
-        "message's id, sender, subject and date, newest first.",
-      inputSchema: { limit: z.number().optional() },
+        "List a page of the mailstr inbox (kind-1059 gift-wrapped email), newest first. " +
+        "Returns each message's id, sender, subject and date. Pages are bounded (default 50); " +
+        "when the page is full the result carries `oldestReceivedAt` — pass it back as `until` " +
+        "to page further back. `since`/`until` are unix seconds; omitted `until` means newest.",
+      inputSchema: {
+        limit: z.number().optional(),
+        since: z.number().optional(),
+        until: z.number().optional(),
+      },
     },
-    async ({ limit }: { limit?: number }) => {
-      const { mail: messages, failures } = await mail.readMail(
-        limit !== undefined ? { limit } : {},
-      );
-      messages.sort((a, b) => b.receivedAt - a.receivedAt);
+    async ({ limit, since, until }: { limit?: number; since?: number; until?: number }) => {
+      const { mail: messages, failures, oldestReceivedAt, hasMore } = await mail.readMail({
+        ...(limit !== undefined ? { limit } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(until !== undefined ? { until } : {}),
+      });
       const rows = messages.map((m) => ({
         id: m.wrapId,
         from: m.from,
         subject: m.subject,
         date: new Date(m.receivedAt * 1000).toISOString(),
       }));
-      let text = `${messages.length} message(s) in your inbox.`;
+      let text = `${messages.length} message(s) in this page of your inbox.`;
+      if (hasMore && oldestReceivedAt !== undefined) {
+        text += ` Older mail may exist — call list_mail again with until: ${oldestReceivedAt}.`;
+      }
       if (failures.length > 0) text += ` ${failures.length} wrap(s) could not be decoded.`;
       return ok(text, {
         mail: rows,
         count: messages.length,
+        oldestReceivedAt,
+        hasMore,
         failures,
       });
     },
@@ -69,8 +81,7 @@ function buildMailTools(): ToolDef[] {
       inputSchema: { mailId: z.string() },
     },
     async ({ mailId }: { mailId: string }) => {
-      const { mail: messages } = await mail.readMail();
-      const msg = messages.find((m) => m.wrapId === mailId);
+      const msg = await mail.readMailById(mailId);
       if (!msg) {
         return fail(
           `No message with id "${mailId}". Use list_mail to see the ids in your inbox.`,

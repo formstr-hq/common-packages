@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.5
+
+### Fixed
+- **NIP-59 ephemeral gift wraps (`kind:21059`) route as DMs.** The current NIP-59
+  defines kind 21059 as the ephemeral gift wrap: the same seal→wrap structure as
+  1059, but ephemeral (relays MUST NOT store it), intended for real-time pings
+  (typing / presence) that should not persist anywhere. `DM_KINDS` held only
+  `1059`, so a 21059 event was misrouted on both sides — a publish went through
+  the generic outbox instead of the recipient's kind-10050 inbox relays, and a
+  `{ kinds: [21059] }` read routed to the general read relays, missing the inbox
+  routing. `21059` now routes like `1059` on both paths; `1059` routing is
+  unchanged.
+
 ## 0.6.4
 
 ### Fixed

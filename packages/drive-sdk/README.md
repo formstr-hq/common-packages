@@ -19,25 +19,41 @@ pnpm add @formstr/drive-sdk
 
 ## What you inject
 
-```ts
-import type { FileEventStore, IdentitySigner, BlossomTransport } from "@formstr/drive-sdk";
-import { createFetchBlossomTransport } from "@formstr/drive-sdk";
+The SDK opens no sockets, stores no keys and has no UI. You hand it three things:
 
-const store: FileEventStore = dataLayer;               // structural: see below
-const signer: IdentitySigner = /* getPublicKey, signEvent, nip44Encrypt, nip44Decrypt */;
-const transport: BlossomTransport = createFetchBlossomTransport();
-```
-
-`FileEventStore` is the slice of [`@formstr/local-relay`](../local-relay) `DataLayer` (>= 0.6) this package
-uses: `observe(filters, handlers, { localOnly?, relays? })`, `publishEvent(event, { relays? })`, and
-optionally `seenOn(id)`. `relays` are per-call hints — nothing here mutates the host's global routing.
-`@formstr/drive-sdk/local-relay` (optional peer) type-checks that hand-off and keeps a class-based
-DataLayer's `this`:
+| Name | What it is |
+|---|---|
+| `store` | how the SDK reads and publishes Nostr events — a `FileEventStore` (below) |
+| `signer` | the user's **identity** signer: `getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt` (a NIP-07 / NIP-46 / `@formstr/signer` signer, wrapped to this shape) |
+| `transport` | how the SDK talks to Blossom servers; `createFetchBlossomTransport()` is the default |
 
 ```ts
+import { dataLayer } from "@formstr/local-relay";
+import { createFetchBlossomTransport, type IdentitySigner } from "@formstr/drive-sdk";
 import { localRelayStore } from "@formstr/drive-sdk/local-relay";
+
 const store = localRelayStore(dataLayer);
+const signer: IdentitySigner = /* your identity signer */;
+const transport = createFetchBlossomTransport();
 ```
+
+**What is `dataLayer`?** It is the `DataLayer` from [`@formstr/local-relay`](../local-relay) (>= 0.6): the one
+object an app uses to read from and publish to Nostr relays. It owns the relay connections, a persistent
+event cache and delivery retry, so the SDK never has to. `import { dataLayer } from "@formstr/local-relay"` is
+the shared instance once your app has set local-relay up; you can also construct your own with
+`new DataLayer({ client, sign })` — see local-relay's README for setup.
+
+**`FileEventStore`** is the small slice of it this package uses, so you are not tied to local-relay:
+`observe(filters, handlers, { localOnly?, relays? })`, `publishEvent(event, { relays? })`, and optionally
+`seenOn(id)`. `relays` are per-call hints — nothing here mutates the host's global routing. If you do not use
+local-relay, implement those methods over any Nostr client and pass the object as `store`.
+`localRelayStore(dataLayer)` (from the optional `@formstr/drive-sdk/local-relay` entry) only type-checks that
+hand-off and keeps a class-based DataLayer's `this`.
+
+**Other names in the examples below.** `keyring` is the Drive Key keyring, taken from a `ready`
+`resolveDriveKeyStatus` result (`status.keyring`); `relays` and `configuredRelays` are lists of `wss://` URLs
+(read hints, and the full relay set your lookups fan out to); `entry` / `entries` are `FileEntry` values from
+`fetchFiles`.
 
 **Who signs what.** Metadata, shares and share bookkeeping are encrypted and signed with the **Drive
 Key** — no signer prompt. The **identity** signer is used only for the Drive Key event itself and for

@@ -33,13 +33,31 @@ agree on the bytes on the wire; they do not have to share any of that.
 - **Transfer queues and native upload drivers.** Retry policy above a single call, progress UI,
   background uploads.
 - **A persistent file index.** The host owns its cache. The SDK's helpers take a list.
-- **A durable publish outbox.** local-relay's `DeliveryOutbox` already owns retry; the SDK
-  publishes through the store it is given.
+- **A durable publish outbox.** The SDK publishes through the store it is given and reports
+  what each relay said. The built-in pool store keeps nothing across restarts: an event no relay
+  accepted is not retried after the process exits. A host that needs durable delivery plugs in
+  one that has it (local-relay's `DeliveryOutbox` does) or checks `publishResult.ok` and retries.
 - **Preview generation and encryption.** `previewHash` is carried through metadata and deleted
   with the file; producing or fetching a preview is the host's.
 - **BUD-03 server discovery.** A reasonable follow-up. It predates #69–#72 and is not part of
   this parity pass.
 - **Key delivery UI.** How a share link or a Drive Key reaches another person or device.
+
+## Self-contained: no local-relay, no browser APIs
+
+The SDK must run wherever `nostr-tools` does — a browser, a Node server (nail's bridge, an MCP tool, an
+agent) — because the mail attachment code that uses it runs identically on both sides. `@formstr/local-relay`
+cannot be a requirement: it is a Web Worker backed by IndexedDB, so nothing that needed it could run on Node.
+
+So the core depends on `nostr-tools` and nothing else Nostr-shaped, and ships `createRelayPoolStore`, a
+`FileEventStore` over plain websockets. `FileEventStore` stays a three-method structural contract, so a host
+that already owns a relay layer can still inject it; `@formstr/drive-sdk/local-relay` is a small optional
+adapter for that case and imports nothing from local-relay (no package dependency, not even an optional peer).
+
+Consequences worth knowing: a plain pool has no persistent cache, so its end-of-stored-events means "the
+relays answered", not "a local replay finished" — the SDK's settle windows already assume the slower case.
+Node 20 has no global `WebSocket`, so the store accepts one (`webSocket`, e.g. the `ws` package); Node 22+
+and browsers need nothing.
 
 ## The host's responsibilities, stated plainly
 

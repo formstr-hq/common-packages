@@ -201,9 +201,6 @@ importers:
         specifier: ^2.23.5
         version: 2.23.5(typescript@5.9.3)
     devDependencies:
-      '@formstr/local-relay':
-        specifier: workspace:*
-        version: link:../local-relay
       '@vitest/coverage-v8':
         specifier: ^2.0.0
         version: 2.1.9(vitest@2.1.9(@types/node@25.9.9)(happy-dom@15.11.7))

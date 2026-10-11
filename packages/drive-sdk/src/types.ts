@@ -59,6 +59,11 @@ export interface FileEventStore {
   publishEvent(event: Event, options?: { relays?: string[] }): Promise<FilePublishResult>;
   /** Relays an event was observed on. Only needed to prove relay coverage (see docs/adr/0003). */
   seenOn?(eventId: string): Promise<string[]>;
+  /**
+   * The relay set this store fans lookups out to, if it knows one. The Drive Key coverage proof uses it
+   * as `configuredRelays` when the host does not pass its own. The built-in pool store sets it.
+   */
+  readonly relays?: readonly string[];
 }
 
 export interface FileProgress {

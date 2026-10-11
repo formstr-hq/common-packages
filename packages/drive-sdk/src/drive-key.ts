@@ -51,7 +51,9 @@ export interface DriveKeyContext {
    * The relay set the host's lookups fan out to. Required, together with
    * `store.seenOn`, for `empty-confirmed` to ever be emitted: the proof is that
    * EVERY one of these relays answered a control query. Without both, a lookup
-   * that finds nothing is `unresolved`.
+   * that finds nothing is `unresolved`. Defaults to `store.relays` when the store
+   * exposes it (the built-in pool store does), since then the store itself knows
+   * exactly which relays it queries.
    */
   configuredRelays?: string[];
   /** Cache-only lookup. Never yields `empty-confirmed` — a cache proves nothing about relays. */
@@ -222,9 +224,15 @@ function fetchDriveKeyEvents(context: DriveKeyContext, pubkey: string): Promise<
   });
 }
 
+/** The relays coverage must be proven for: the host's explicit list, else what the store says it queries. */
+function configuredRelaysOf(context: DriveKeyContext): readonly string[] | undefined {
+  return context.configuredRelays ?? context.store.relays;
+}
+
 /** Positive per-relay proof that the configured relays answered a control query just now. */
 async function proveRelayCoverage(context: DriveKeyContext): Promise<boolean> {
-  const { store, configuredRelays } = context;
+  const { store } = context;
+  const configuredRelays = configuredRelaysOf(context);
   if (!store.seenOn || !configuredRelays || configuredRelays.length === 0) return false;
   const seenOn = store.seenOn.bind(store);
 
@@ -394,7 +402,7 @@ export async function resolveDriveKeyStatus(context: DriveKeyContext): Promise<D
   if (history === "new") return { kind: "empty-confirmed" };
   return {
     kind: "unresolved",
-    reason: context.store.seenOn && context.configuredRelays?.length
+    reason: context.store.seenOn && configuredRelaysOf(context)?.length
       ? "Not every configured relay answered, so the absence of a Drive Key is not proven"
       : "Relay coverage cannot be proven (no store.seenOn or configuredRelays); the host must decide",
   };

@@ -5,8 +5,9 @@ encrypted single blobs on Blossom, and ephemeral-key file sharing — byte-compa
 [formstr-drive](https://github.com/formstr-hq/formstr-drive) at
 [`0064bff`](docs/adr/0001-protocol-source-of-truth.md).
 
-No UI, no relay connection, no key storage. The host injects an event store, an identity signer and a
-Blossom transport.
+Self-contained: it runs on plain Node (>= 20) and in browsers with nothing but `nostr-tools` underneath — no
+Web Worker, no IndexedDB, no `@formstr/local-relay`. No UI and no key storage either: you bring an identity
+signer, and relays and Blossom servers are plain URLs.
 
 ```sh
 pnpm add @formstr/drive-sdk
@@ -19,41 +20,40 @@ pnpm add @formstr/drive-sdk
 
 ## What you inject
 
-The SDK opens no sockets, stores no keys and has no UI. You hand it three things:
+You hand the SDK three things:
 
 | Name | What it is |
 |---|---|
-| `store` | how the SDK reads and publishes Nostr events — a `FileEventStore` (below) |
+| `store` | how the SDK reads and publishes Nostr events — a `FileEventStore` (below). `createRelayPoolStore` is the built-in one |
 | `signer` | the user's **identity** signer: `getPublicKey`, `signEvent`, `nip44Encrypt`, `nip44Decrypt` (a NIP-07 / NIP-46 / `@formstr/signer` signer, wrapped to this shape) |
 | `transport` | how the SDK talks to Blossom servers; `createFetchBlossomTransport()` is the default |
 
 ```ts
-import { dataLayer } from "@formstr/local-relay";
-import { createFetchBlossomTransport, type IdentitySigner } from "@formstr/drive-sdk";
-import { localRelayStore } from "@formstr/drive-sdk/local-relay";
+import { createFetchBlossomTransport, createRelayPoolStore, type IdentitySigner } from "@formstr/drive-sdk";
 
-const store = localRelayStore(dataLayer);
+const store = createRelayPoolStore({ relays: ["wss://relay.damus.io", "wss://nos.lol"] });
 const signer: IdentitySigner = /* your identity signer */;
 const transport = createFetchBlossomTransport();
 ```
 
-**What is `dataLayer`?** It is the `DataLayer` from [`@formstr/local-relay`](../local-relay) (>= 0.6): the one
-object an app uses to read from and publish to Nostr relays. It owns the relay connections, a persistent
-event cache and delivery retry, so the SDK never has to. `import { dataLayer } from "@formstr/local-relay"` is
-the shared instance once your app has set local-relay up; you can also construct your own with
-`new DataLayer({ client, sign })` — see local-relay's README for setup.
+That is the whole setup; nothing else is required. `createRelayPoolStore` is plain websockets over
+`nostr-tools`' `SimplePool`: reads and publishes go to your `relays` (a per-call `relays` hint is added, never
+substituted), publishes report each relay's answer, and a small in-memory cache serves `localOnly` reads and
+makes a write visible to the next read.
 
-**`FileEventStore`** is the small slice of it this package uses, so you are not tied to local-relay:
-`observe(filters, handlers, { localOnly?, relays? })`, `publishEvent(event, { relays? })`, and optionally
-`seenOn(id)`. `relays` are per-call hints — nothing here mutates the host's global routing. If you do not use
-local-relay, implement those methods over any Nostr client and pass the object as `store`.
-`localRelayStore(dataLayer)` (from the optional `@formstr/drive-sdk/local-relay` entry) only type-checks that
-hand-off and keeps a class-based DataLayer's `this`.
+**On Node 20** there is no global `WebSocket`, so pass one: `createRelayPoolStore({ relays, webSocket: WebSocket })`
+with the [`ws`](https://www.npmjs.com/package/ws) package (Node 22+ and browsers need nothing). Note that
+`nostr-tools` keeps that choice process-wide.
+
+**`FileEventStore`** is just three methods, so you can swap it for your own: `observe(filters, handlers,
+{ localOnly?, relays? })`, `publishEvent(event, { relays? })`, and optionally `seenOn(id)` and a `relays` list.
+That is what lets a host that already owns a relay layer plug it in — for example an app running
+[`@formstr/local-relay`](../local-relay) can pass its `dataLayer` (or wrap it with `localRelayStore` from
+`@formstr/drive-sdk/local-relay`, which imports nothing from local-relay). The SDK does not depend on it.
 
 **Other names in the examples below.** `keyring` is the Drive Key keyring, taken from a `ready`
-`resolveDriveKeyStatus` result (`status.keyring`); `relays` and `configuredRelays` are lists of `wss://` URLs
-(read hints, and the full relay set your lookups fan out to); `entry` / `entries` are `FileEntry` values from
-`fetchFiles`.
+`resolveDriveKeyStatus` result (`status.keyring`); `relays` is a list of `wss://` URLs (extra read hints for one
+call); `entry` / `entries` are `FileEntry` values from `fetchFiles`.
 
 **Who signs what.** Metadata, shares and share bookkeeping are encrypted and signed with the **Drive
 Key** — no signer prompt. The **identity** signer is used only for the Drive Key event itself and for
@@ -67,7 +67,7 @@ The Drive Key is a secp256k1 secret in the user's own replaceable event at `d=0:
 ```ts
 import { resolveDriveKeyStatus, mintDriveKey, rotateDriveKey } from "@formstr/drive-sdk";
 
-const status = await resolveDriveKeyStatus({ store, signer, relays, configuredRelays });
+const status = await resolveDriveKeyStatus({ store, signer });
 switch (status.kind) {
   case "ready":           // status.keyring.active / .previous
   case "empty-confirmed": // proven: no key exists. The only status that permits mintDriveKey.
@@ -91,8 +91,10 @@ key on that verdict.
 - `healDriveKey(ctx)` — republishes the union when a relay's newest event is narrower than the keys you hold.
 - `createDriveKeyStatusCache(ctx)` — `ready` cached, `empty-confirmed` for 30 s, `unresolved` never.
 
-`empty-confirmed` requires `configuredRelays` **and** a store with `seenOn`. Without both it is never
-emitted and the host decides what a first-time user is.
+`empty-confirmed` needs two things: a store with `seenOn`, and the list of relays that must all have answered
+(`configuredRelays`). The built-in `createRelayPoolStore` provides both — its own `relays` list is used when you
+don't pass `configuredRelays`. With a custom store that has neither, it is never emitted and the host decides
+what a first-time user is.
 
 ## List, upload, download
 

@@ -1,12 +1,11 @@
 /**
- * `@formstr/drive-sdk/local-relay` — the optional `@formstr/local-relay` adapter.
+ * `@formstr/drive-sdk/local-relay` — a tiny adapter for hosts that already run `@formstr/local-relay`.
  *
- * The core API is the structural `FileEventStore` contract, so nothing here is required: a host that
- * already holds a local-relay `dataLayer` can hand it to any function taking a `store`. This entry
- * exists so that hand-off is type-checked against local-relay >=0.6 (per-observe `relays`,
- * `publishEvent(event, { relays })`, `seenOn`), and so a class-based DataLayer keeps its `this`.
- * Kept out of the main entry so importing the SDK never pulls in the optional peer; it imports no
- * runtime code from local-relay either.
+ * Not needed to use the SDK: `createRelayPoolStore` (main entry) is the self-contained default and works
+ * on plain Node and in browsers with no worker. This entry only helps a host that already owns a local-relay
+ * `dataLayer` hand it over, type-checked against its (>=0.6) shape, and keeps a class-based DataLayer's
+ * `this`. It imports nothing from local-relay — the types below are structural — so there is no package
+ * dependency, optional or otherwise.
  *
  * ```ts
  * import { dataLayer } from "@formstr/local-relay";

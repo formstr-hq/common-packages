@@ -1,3 +1,5 @@
+export { createRelayPoolStore } from "./pool-store.js";
+export type { RelayPoolLike, RelayPoolStore, RelayPoolStoreOptions } from "./pool-store.js";
 export { createBlossomAuthorization, createFetchBlossomTransport, DEFINITIVE_REFUSAL_STATUSES } from "./blossom.js";
 export type { FetchTransportOptions } from "./blossom.js";
 export { BLOSSOM_AUTH_KIND, DEFAULT_CHUNK_SIZE, DRIVE_SDK_CLIENT, METADATA_KIND } from "./constants.js";

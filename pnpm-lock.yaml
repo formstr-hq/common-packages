@@ -12,6 +12,37 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  apps/drive-tester:
+    dependencies:
+      '@formstr/drive-sdk':
+        specifier: workspace:*
+        version: link:../../packages/drive-sdk
+      nostr-tools:
+        specifier: ^2.23.5
+        version: 2.23.5(typescript@5.9.3)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.31
+      '@types/react-dom':
+        specifier: ^18.3.1
+        version: 18.3.7(@types/react@18.3.31)
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@5.4.21(@types/node@25.9.9))
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.0
+        version: 5.4.21(@types/node@25.9.9)
+
   apps/kanban-tester:
     dependencies:
       '@dnd-kit/core':
@@ -213,6 +244,9 @@ importers:
       vitest:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.0
 
   packages/kanban-sdk:
     dependencies:

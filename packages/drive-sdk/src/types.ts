@@ -57,7 +57,7 @@ export interface FileEventStore {
     options?: { localOnly?: boolean; relays?: string[] },
   ): { unobserve(): void };
   publishEvent(event: Event, options?: { relays?: string[] }): Promise<FilePublishResult>;
-  /** Relays an event was observed on. Only needed to prove relay coverage (see docs/adr/0003). */
+  /** Relays an event was observed on. Only needed to prove relay coverage (see docs/protocol.md §2.3). */
   seenOn?(eventId: string): Promise<string[]>;
   /**
    * The relay set this store fans lookups out to, if it knows one. The Drive Key coverage proof uses it

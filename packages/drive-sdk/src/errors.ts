@@ -69,7 +69,7 @@ export class DriveKeyDroppedError extends DriveSdkError {}
 
 /**
  * The file predates the NIP-FS single-blob layout: one Blossom blob per chunk (`chunks`, no
- * `blobHash`). It parses and lists, but the SDK cannot decrypt it — see docs/adr/0002.
+ * `blobHash`). It parses and lists, but the SDK cannot decrypt it — see docs/protocol.md §10.1.
  */
 export class LegacyChunkedFileError extends DriveSdkError {
   constructor(readonly fileId?: string) {

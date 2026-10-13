@@ -23,7 +23,7 @@ const stockKey = (secretHex: string) => {
   return nip44.v2.utils.getConversationKey(secret, getPublicKey(secret));
 };
 
-/** A file as the formstr-drive app writes it: folder path, id, server (see docs/adr/0002). */
+/** A file as the formstr-drive app writes it: folder path, id, server (see docs/protocol.md §3). */
 const appShapedFile = {
   id: "abcd1234", name: "report.txt", size: 40, type: "text/plain", folder: "/docs/reports",
   uploadedAt: 1_700_000_000_000, server: "https://blossom.one", servers: ["https://blossom.one"],

@@ -16,7 +16,7 @@ import type { FileEventStore, FilePublishResult, IdentitySigner } from "./types.
 // (file metadata, shares) is signed and encrypted with it. There is ONE such
 // event per identity: publishing a second one does not coexist with the first,
 // it replaces it on every relay that accepts it. That is the whole hazard this
-// module is built around — see docs/adr/0003-drive-key-mint-hazard.md.
+// module is built around — see docs/protocol.md §2.3.
 
 /** A decrypted Drive Key: the secret, its pubkey, and the NIP-44 self conversation key. */
 export interface DriveKeyEntry {
@@ -88,7 +88,7 @@ export interface PublishedDriveKey {
   publishResult: FilePublishResult;
 }
 
-/** `empty-confirmed` is a proof about a moment, not the identity — see the TTL rationale in the ADR. */
+/** `empty-confirmed` is a proof about a moment, not the identity — see docs/protocol.md §2.3 (rule 4). */
 export const EMPTY_CONFIRMED_TTL_MS = 30_000;
 
 const DEFAULT_SETTLE_MS = 3_000;

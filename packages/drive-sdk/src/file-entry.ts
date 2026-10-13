@@ -1,7 +1,7 @@
 import { InvalidFileMetadataError, LegacyChunkedFileError } from "./errors.js";
 import { isValidEncryptionKey, type File } from "./schema.js";
 
-// Reading is lenient, writing is strict (docs/adr/0002-deliberate-parity.md).
+// Reading is lenient, writing is strict (docs/protocol.md §3, §10).
 //
 // The SDK WRITES the NIP-FS spec shape (`parent` id, `servers[]`). The formstr-drive app writes a
 // different shape today (`folder` = a path string, `id`, `server`, `deleted`), and a drive is shared

@@ -3,7 +3,7 @@
 Headless TypeScript SDK for the Formstr Drive protocol (NIP-FS): encrypted file metadata on Nostr,
 encrypted single blobs on Blossom, and ephemeral-key file sharing — byte-compatible with
 [formstr-drive](https://github.com/formstr-hq/formstr-drive) at
-[`0064bff`](docs/adr/0001-protocol-source-of-truth.md).
+[`0064bff`](docs/protocol.md#11-provenance-verification-and-keeping-in-sync).
 
 Self-contained: it runs on plain Node (>= 20) and in browsers with nothing but `nostr-tools` underneath — no
 Web Worker, no IndexedDB, no `@formstr/local-relay`. No UI and no key storage either: you bring an identity
@@ -15,8 +15,7 @@ pnpm add @formstr/drive-sdk
 
 | | |
 |---|---|
-| [`docs/protocol.md`](docs/protocol.md) | the wire format, as implemented |
-| [`docs/adr/`](docs/adr) | why it is the way it is — read before changing behaviour |
+| [`docs/protocol.md`](docs/protocol.md) | the one protocol reference: wire format, scope, deliberate differences from the app, verification |
 
 ## What you inject
 
@@ -83,7 +82,7 @@ key on that verdict.
 > does not sit beside the first, it replaces it on every relay that accepts it, orphaning every file under
 > the original key. Do not write `current ?? await mintDriveKey(…)` — a missing answer is not evidence that
 > no key exists. `mintDriveKey` re-resolves uncached and throws `DriveKeyMintRefusedError` unless the
-> verdict is `empty-confirmed`. See [ADR 0003](docs/adr/0003-drive-key-mint-hazard.md).
+> verdict is `empty-confirmed`. See [the protocol doc, §2.3](docs/protocol.md#23-the-mint-hazard-and-the-rules-that-contain-it).
 
 - `mintDriveKey(ctx)` — first key only; optional durable `marker` refuses a second mint for an identity.
 - `rotateDriveKey(ctx, { encryptionKey? })` — needs a `ready` keyring; the old active key moves into
@@ -115,7 +114,7 @@ uploaded.upload.failures;   // every server that did not, and why (refused vs fa
 const blob = await downloadFile(entry, { transport, signer });
 ```
 
-`fetchFiles` reads the spec shape **and** the app's shape (see [ADR 0002](docs/adr/0002-deliberate-parity.md)):
+`fetchFiles` reads the spec shape **and** the app's shape (see [protocol §3](docs/protocol.md#3-file-metadata--typesmetadatats-servicesfileindexts) and [§10](docs/protocol.md#10-where-the-sdk-deliberately-differs-from-the-app)):
 `folder` surfaces as `folderPath` (a path, not a parent id), `server` becomes `servers`, `deleted` is a
 tombstone and is hidden. Legacy per-chunk files list but `downloadFile` throws `LegacyChunkedFileError`.
 
@@ -202,6 +201,24 @@ Folders use spec `parent` ids (the app has no folder events yet).
 
 Every addressable publish goes through `nextCreatedAt()`: strictly increasing within a burst, clamped to
 `now + 60 s`. Past 61 stamps in one second it holds at the clamp rather than running ahead of the clock.
+
+## Try it against real relays
+
+`scripts/smoke.mjs` runs the whole product once against **live** relays and a **live** Blossom server, using the
+built package: drive key (mint only if absence is proven), upload, list, buffered / streamed / ranged download,
+rename, share, resolve from a fresh store, revoke, delete. Every cross-network check re-reads through a fresh
+connection, so a pass means the relays and servers really hold the data, not that a local cache does.
+
+```sh
+pnpm build
+pnpm smoke --yes
+DRIVE_SMOKE_RELAYS=wss://a.example,wss://b.example DRIVE_SMOKE_BLOSSOM=https://blossom.example pnpm smoke --yes
+```
+
+It publishes a few small **encrypted** events and uploads one ~6 KB **encrypted** blob under a brand-new throwaway
+key, then deletes the blob and tombstones the file. It prints the servers first and refuses to run without `--yes`.
+Things that depend on the server (Range support, honoring DELETE, whether every relay answers) are reported as
+warnings, not failures. The same flow runs against in-memory fakes in `test/smoke.test.ts`.
 
 ## Upgrading from 0.1
 

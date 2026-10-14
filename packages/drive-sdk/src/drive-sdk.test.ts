@@ -252,7 +252,7 @@ describe("file metadata schema and events", () => {
 
   it.each([
     ["name", ""], ["unencryptedFileHash", "bad"], ["size", -1], ["size", 1.5], ["type", ""],
-    ["uploadedAt", -1], ["servers", []], ["servers", ["ftp://invalid"]], ["servers", ["https://same", "https://same"]],
+    ["uploadedAt", -1], ["servers", []], ["servers", ["ftp://invalid"]], ["servers", ["https://same", "https://same"]], ["server", "ftp://invalid"],
     ["encryptionKey", "bad"], ["encryptionAlgorithm", "cbc"], ["previewHash", "bad"], ["blobHash", "bad"], ["chunkSize", 0],
   ])("rejects invalid %s", async (property, value) => {
     const { file } = await encryptedFixture();

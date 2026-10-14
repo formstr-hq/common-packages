@@ -136,10 +136,16 @@ identity always waits the full `timeoutMs` for "any history?", because absence c
   "name": "…", "unencryptedFileHash": "<64 hex>", "size": 0, "type": "text/plain",
   "parent": "<folder id, or empty for root>", "uploadedAt": 1700000000000,
   "servers": ["https://…"],              // where the blob actually landed
+  "server": "https://…",                 // = servers[0]; the app downloads from this and ignores `servers`
   "encryptionKey": "<64 hex>", "encryptionAlgorithm": "aes-gcm",
   "blobHash": "<64 hex>", "chunkSize": 65536, "previewHash": "<64 hex>?"
 }
 ```
+
+`server` is not in the NIP-FS shape but is written anyway: the app reads the blob location from `file.server`
+everywhere (`services/downloadFile.ts`) and never reads `servers`, and its own writer always sets both
+(`server` = `servers[0]`). Without it a note the SDK wrote lists fine in the app but cannot be downloaded. It is
+the first server that actually took the blob, not the first one tried.
 
 A tombstone is the same object plus `"deleted": true`, republished at the same `d`.
 
@@ -215,7 +221,8 @@ naddr of another kind. A full URL containing the fragment is accepted.
 
 **Create** (`createFileShare`): generate an ephemeral secret; publish `t=shared-file`, `d=s-<8 hex>`,
 payload = the file's own decrypted JSON (`raw`, so an app-shaped file stays app-shaped and a spec-shaped one
-stays spec-shaped), encrypted to the ephemeral key, signed by the Drive Key. Relay hints in the link are the
+stays spec-shaped) with `server` (= `servers[0]`) added to the shared copy if the note lacks it, because the app's
+share page downloads from `server` (§3), encrypted to the ephemeral key, signed by the Drive Key. Relay hints in the link are the
 relays in the publish result whose status is `accepted` — never an assumed default set. Then write the
 bookkeeping event; if that fails the link still works, so the failure is reported (`infoWritten: false`), not
 thrown.
@@ -358,10 +365,13 @@ folder id, and no mapping between them avoids inventing data.
 
 ### 10.3 Known gaps
 
-- **Share viewer interop.** The app's shared-file viewer downloads from `file.server`. A share of a
-  **spec-shaped** file has `servers[]` and no `server`, so the app may not be able to open it until it
-  dual-reads. This follows directly from "write the spec shape", is an app-side fix, and is out of scope here.
-  Shares of app-written files are unaffected.
+- **The app ignores `servers`.** The app downloads from `file.server` only, for files and for shares. The SDK
+  therefore writes `server` next to `servers` (§3) and adds it to every shared copy that lacks it (§6), so new
+  uploads and every new share download in the app. Two things remain: **notes the SDK wrote before it wrote
+  `server`** still lack it and will not download in the app until they are shared (the shared copy is fixed) or
+  rewritten, and the proper fix is for the app to fall back to `servers[0]` when `server` is missing (an app-side
+  change, outside this repo). Found on a live run: a share link from the tester opened on drive.formstr.app, showed the
+  file's name and size, and failed on Download.
 - **The app's own timestamps.** The app stamps its metadata events with the plain wall clock, not a monotonic one,
   so two edits inside one second tie and relays keep the lower id. The SDK's `nextCreatedAt` avoids this for what
   it writes; it cannot fix what the app writes.

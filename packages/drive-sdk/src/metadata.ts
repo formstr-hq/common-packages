@@ -24,7 +24,9 @@ export function signingMaterial(keyring: DriveKeyring): { conversationKey: Uint8
 
 export function createFileMetadata(inputs: FileMetadataInputs): CreatedFileMetadata {
   const { keyring, d, createdAt, client, uploadedAt = Date.now(), ...values } = inputs;
-  const file: File = { ...values, uploadedAt, encryptionAlgorithm: "aes-gcm" };
+  // `server` mirrors `servers[0]`: the app downloads from it and never reads `servers` (docs/protocol.md section 3).
+  const primary = values.servers[0];
+  const file: File = { ...values, uploadedAt, encryptionAlgorithm: "aes-gcm", ...(primary !== undefined ? { server: primary } : {}) };
   assertFile(file);
   const id = d ?? randomDTag();
   const event = buildEvent({

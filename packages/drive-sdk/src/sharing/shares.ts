@@ -165,6 +165,18 @@ export async function listShares(context: ShareContext): Promise<SharedByMeEntry
 // Creating
 // -----------------------------------------------------------------------------
 
+/**
+ * The file's own decrypted JSON, plus `server` (= `servers[0]`) when it is missing. The app's share page downloads
+ * from `server` and ignores `servers`, so a share of a note that only has `servers` opens but cannot download.
+ * Only the shared copy gains the field; the original note is untouched. This also covers files written before the
+ * SDK wrote `server` itself (docs/protocol.md section 3).
+ */
+function shareablePayload(file: FileEntry): Record<string, unknown> {
+  const primary = file.servers[0];
+  if (file.raw.server !== undefined || primary === undefined) return file.raw;
+  return { ...file.raw, server: primary };
+}
+
 /** Always publishes a new share. Prefer {@link ensureFileShare}, which will not duplicate one. */
 export async function createFileShare(file: FileEntry, context: ShareContext): Promise<ShareResult> {
   if (file.deleted) throw new Error("Cannot share a deleted file");
@@ -180,7 +192,7 @@ export async function createFileShare(file: FileEntry, context: ShareContext): P
   const event = buildEvent({
     subtype: "shared-file",
     d,
-    payload: file.raw,
+    payload: shareablePayload(file),
     conversationKey: ephemeral.conversationKey,
     signingKey: hexToBytes(active.secretKeyHex),
     ...(context.client ? { client: context.client } : {}),

@@ -149,10 +149,33 @@ describe("createFileShare", () => {
     expect(pointer.type === "naddr" && pointer.data.relays).toEqual([RELAY_A, RELAY_B]);
     const secret = hexToBytes(k!);
     const plaintext = nip44.v2.decrypt(shareEvent!.content, nip44.v2.utils.getConversationKey(secret, getPublicKey(secret)));
-    expect(JSON.parse(plaintext)).toEqual(specFile);
+    // The file's own note, plus `server`: the app's share page downloads from it (next test).
+    expect(JSON.parse(plaintext)).toEqual({ ...specFile, server: "https://one.example" });
 
     expect(infoEvent!.tags[0]![1]).toMatch(/^si-[0-9a-f]{8}$/);
     expect(result).toMatchObject({ reused: false, infoWritten: true });
+  });
+
+  const sharedPayload = (relay: FakeRelay, result: { url: string }) => {
+    const secret = hexToBytes(/&k=(.+)$/.exec(result.url)![1]!);
+    return JSON.parse(nip44.v2.decrypt(relay.publishedEvents[0]!.content, nip44.v2.utils.getConversationKey(secret, getPublicKey(secret))));
+  };
+
+  it("gives the shared copy a `server` the app can download from, without touching the original", async () => {
+    // The app reads the blob location from `server` and ignores `servers`; a share without it opens, then cannot download.
+    const entry = fileEntry();
+    expect("server" in entry.raw).toBe(false);
+    const relay = new FakeRelay({ publishResult: okResult(RELAY_A) });
+    const result = await createFileShare(entry, ctx(relay));
+    expect(sharedPayload(relay, result).server).toBe("https://one.example");
+    expect("server" in entry.raw).toBe(false); // only the shared copy gained the field
+  });
+
+  it("leaves an existing `server` alone (an app-written note)", async () => {
+    const entry = fileEntry("app1", { ...specFile, server: "https://app.example", servers: ["https://one.example"] });
+    const relay = new FakeRelay({ publishResult: okResult(RELAY_A) });
+    const result = await createFileShare(entry, ctx(relay));
+    expect(sharedPayload(relay, result).server).toBe("https://app.example");
   });
 
   it("takes relay hints from the publish result — accepted relays only, never assumed", async () => {

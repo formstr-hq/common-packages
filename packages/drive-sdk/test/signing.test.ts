@@ -373,6 +373,15 @@ describe("signing and authorship", () => {
     expect(uploaded[0]!.authorization).toMatch(/^Nostr /);
   });
 
+  it("createFileMetadata writes `server` (= servers[0]) because the app downloads from it and ignores `servers`", () => {
+    const keyring = ring();
+    const servers = ["https://one.example", "https://two.example"];
+    const { file, event } = createFileMetadata({ ...specFile, servers, keyring, d: "x", createdAt: 5 });
+    expect(file.server).toBe("https://one.example");
+    expect(file.servers).toEqual(servers);
+    expect(JSON.parse(nip44.v2.decrypt(event.content, keyring.active.conversationKey)).server).toBe("https://one.example");
+  });
+
   it("createFileMetadata authors with the ACTIVE key even when previous keys exist", () => {
     const keyring = ring();
     const { event } = createFileMetadata({ ...specFile, keyring, d: "x", createdAt: 5 });

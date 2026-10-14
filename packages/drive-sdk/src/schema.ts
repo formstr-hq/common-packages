@@ -14,6 +14,9 @@ export const fileSchema = Type.Object({
   parent: Type.String(),
   uploadedAt: Type.Integer({ minimum: 0, maximum: MAX_SAFE_INTEGER }),
   servers: Type.Array(Type.String({ pattern: HTTP_URL }), { minItems: 1, uniqueItems: true }),
+  // The app reads the blob location from `server` (singular) everywhere and ignores `servers`, so a note without it
+  // cannot be downloaded by the app. Always `servers[0]`, exactly as the app writes it. See docs/protocol.md section 3.
+  server: Type.Optional(Type.String({ pattern: HTTP_URL })),
   encryptionKey: Type.String({ pattern: SHA256_HEX }),
   encryptionAlgorithm: Type.Literal("aes-gcm"),
   previewHash: Type.Optional(Type.String({ pattern: SHA256_HEX })),

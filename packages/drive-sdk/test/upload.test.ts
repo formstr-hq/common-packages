@@ -330,6 +330,9 @@ describe("uploadFile records where the blob actually landed", () => {
     expect(result.upload.failures.map((f) => f.server)).toEqual([A]);
     const plaintext = JSON.parse(nip44.v2.decrypt(result.event.content, keyring.active.conversationKey));
     expect(plaintext.servers).toEqual([B]);
+    // `server` is what the app downloads from; it must be a server that really has the blob, not the first one tried.
+    expect(plaintext.server).toBe(B);
+    expect(result.metadata.file.server).toBe(B);
     expect(result.event.tags[0]).toEqual(["d", "fixed1"]);
     expect(verifyEvent(result.event)).toBe(true);
   });

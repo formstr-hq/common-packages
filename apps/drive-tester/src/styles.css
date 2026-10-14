@@ -32,3 +32,7 @@ pre { white-space: pre-wrap; word-break: break-all; margin: .2rem 0; }
 .detail { padding: 0 .5rem .5rem 1rem; }
 .detail h4 { margin: .4rem 0 0; font-size: .75rem; text-transform: uppercase; opacity: .6; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } .inspector { border-left: 0; border-top: 1px solid var(--line); } }
+.checks { list-style: none; padding: 0; margin: .4rem 0 0; font-size: .85rem; }
+.checks li { padding: .15rem 0; }
+.checks .ok strong { color: #2e9d5a; }
+.checks .bad strong { color: #d44020; }

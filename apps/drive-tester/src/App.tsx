@@ -36,6 +36,64 @@ function loadIdentity(fresh = false): IdentitySigner & { secretHex: string } {
   } as IdentitySigner & { secretHex: string };
 }
 
+interface Check {
+  kind: "relay" | "file server";
+  url: string;
+  ok: boolean;
+  ms: number;
+  note: string;
+}
+
+const PROBE_TIMEOUT_MS = 6000;
+
+/** Opens a websocket to the relay and closes it again. Proves the relay is reachable from this browser. */
+function probeRelay(url: string, trace: Trace): Promise<Check> {
+  const done = trace.begin("relay", "WebSocket connect (check)", { url });
+  const started = Date.now();
+  return new Promise((resolve) => {
+    let socket: WebSocket | undefined;
+    const finish = (ok: boolean, note: string) => {
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+        /* already closed */
+      }
+      if (ok) done({ result: "connected" });
+      else done({ error: note });
+      resolve({ kind: "relay", url, ok, ms: Date.now() - started, note });
+    };
+    const timer = setTimeout(() => finish(false, `no answer after ${PROBE_TIMEOUT_MS / 1000} s`), PROBE_TIMEOUT_MS);
+    try {
+      socket = new WebSocket(url);
+      socket.onopen = () => finish(true, "connected");
+      socket.onerror = () => finish(false, "connection failed");
+    } catch (error) {
+      finish(false, message(error));
+    }
+  });
+}
+
+/** Any HTTP answer at all means the server is reachable. A network error usually means down, offline or blocked by CORS. */
+async function probeServer(url: string, trace: Trace): Promise<Check> {
+  const target = `${url.replace(/\/+$/, "")}/upload`;
+  const done = trace.begin("blossom", "HEAD /upload (check)", { server: url });
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(target, { method: "HEAD", signal: controller.signal });
+    done({ result: `HTTP ${response.status}` });
+    return { kind: "file server", url, ok: true, ms: Date.now() - started, note: `answered (HTTP ${response.status})` };
+  } catch {
+    const note = controller.signal.aborted ? `no answer after ${PROBE_TIMEOUT_MS / 1000} s` : "unreachable, or blocked by the browser (CORS)";
+    done({ error: note });
+    return { kind: "file server", url, ok: false, ms: Date.now() - started, note };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
 const message = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
@@ -55,6 +113,8 @@ export function App() {
   const [resolved, setResolved] = useState<ResolvedShare | null>(null);
   const [resolveInput, setResolveInput] = useState(() => (location.hash.startsWith("#shared=") ? location.href : ""));
   const [status, setStatus] = useState("");
+  const [checks, setChecks] = useState<Check[] | null>(null);
+  const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState("");
   const handle = useRef<{ stop(): void } | null>(null);
@@ -89,7 +149,23 @@ export function App() {
     setKeyring(null);
     setFiles([]);
     setShares([]);
-    setStatus(`Connected to ${lines(relayText).length} relay(s) and ${lines(blossomText).length} Blossom server(s). Next: resolve the Drive Key.`);
+    // Creating the store opens no connection by itself, so test every server now and say what happened.
+    const relays = lines(relayText);
+    const servers = lines(blossomText);
+    setChecks(null);
+    setChecking(true);
+    setStatus(`Checking ${relays.length} relay(s) and ${servers.length} file server(s)…`);
+    void Promise.all([...relays.map((url) => probeRelay(url, trace)), ...servers.map((url) => probeServer(url, trace))]).then((results) => {
+      setChecks(results);
+      setChecking(false);
+      const okRelays = results.filter((r) => r.kind === "relay" && r.ok).length;
+      const okServers = results.filter((r) => r.kind === "file server" && r.ok).length;
+      const allOk = okRelays === relays.length && okServers === servers.length;
+      setStatus(
+        `Reached ${okRelays}/${relays.length} relay(s) and ${okServers}/${servers.length} file server(s). ` +
+          (allOk ? "Next: resolve the Drive Key." : okRelays === 0 ? "No relay answered, so nothing will work. Check the URLs or your network." : "Some servers did not answer; see the list under Connect."),
+      );
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayText, blossomText, trace]);
 
@@ -237,10 +313,19 @@ export function App() {
           <label>Relays (one per line)<textarea rows={3} value={relayText} onChange={(e) => setRelayText(e.target.value)} /></label>
           <label>Blossom servers<textarea rows={2} value={blossomText} onChange={(e) => setBlossomText(e.target.value)} /></label>
           <div className="row">
-            <button onClick={connect}>Connect</button>
+            <button disabled={checking} onClick={connect}>{checking ? "Checking…" : "Connect"}</button>
             <button onClick={() => { setIdentity(loadIdentity(true)); connect(); }}>New identity</button>
             <span className="muted mono">you: {pubkey.slice(0, 16)}…</span>
           </div>
+          {checks && (
+            <ul className="checks">
+              {checks.map((c) => (
+                <li key={`${c.kind}:${c.url}`} className={c.ok ? "ok" : "bad"}>
+                  <strong>{c.ok ? "✓" : "✗"}</strong> {c.kind} <span className="mono">{c.url}</span> <span className="muted">{c.note} · {c.ms} ms</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section>

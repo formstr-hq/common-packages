@@ -7,6 +7,7 @@ export * as drive from "./drive/service";
 export * as polls from "./polls/service";
 export * as profile from "./profile/service";
 export * as mail from "./mail/service";
+export * as kanban from "./kanban/service";
 
 export * from "./forms/types";
 export * from "./pages/types";

@@ -28,6 +28,12 @@ export const GATED_TOOLS = [
   "send_mail",
   "claim_mailbox",
   "publish_mail_setup",
+  "update_kanban_card",
+  "move_kanban_card",
+  "add_kanban_comment",
+  "delete_kanban_card",
+  "delete_kanban_board",
+  "claim_kanban_card",
 ] as const;
 
 export type GatedTool = (typeof GATED_TOOLS)[number];

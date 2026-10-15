@@ -113,6 +113,9 @@ importers:
       '@formstr/core':
         specifier: workspace:^
         version: link:../core
+      '@formstr/kanban-sdk':
+        specifier: workspace:^
+        version: link:../kanban-sdk
       '@formstr/mailstr-sdk':
         specifier: workspace:^
         version: link:../mailstr-sdk

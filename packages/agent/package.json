@@ -68,6 +68,11 @@
       "import": "./dist/services/mail/index.js",
       "require": "./dist/services/mail/index.cjs"
     },
+    "./services/kanban": {
+      "types": "./dist/services/kanban/index.d.ts",
+      "import": "./dist/services/kanban/index.js",
+      "require": "./dist/services/kanban/index.cjs"
+    },
     "./services/*": {
       "types": "./dist/services/*.d.ts",
       "import": "./dist/services/*.js",
@@ -91,6 +96,7 @@
   "dependencies": {
     "@formstr/calendar-sdk": "workspace:^",
     "@formstr/core": "workspace:^",
+    "@formstr/kanban-sdk": "workspace:^",
     "@formstr/mailstr-sdk": "workspace:^",
     "@noble/hashes": "^1.8.0",
     "nostr-tools": "^2.23.3",

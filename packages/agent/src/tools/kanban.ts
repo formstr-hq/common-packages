@@ -143,13 +143,17 @@ function buildKanbanTools(): ToolDef[] {
     "create_kanban_board",
     {
       description:
-        "Create a kanban board. Omit `columns` for the default To Do / In Progress / Done. " +
-        "Set `private: true` for an encrypted board.",
+        "Create a kanban board. Private by default — encrypted under a fresh view key and linked " +
+        "into a board list so it (and its comments) stay readable. Pass `private: false` for a " +
+        "public board. Omit `columns` for the default To Do / In Progress / Done.",
       inputSchema: {
         title: z.string(),
         description: z.string().optional(),
         columns: z.array(z.string()).optional().describe("column names, left to right"),
-        private: z.boolean().optional(),
+        private: z
+          .boolean()
+          .optional()
+          .describe("defaults to true (private); set false for a public board"),
       },
     },
     async ({
@@ -167,7 +171,7 @@ function buildKanbanTools(): ToolDef[] {
         title,
         description,
         columns: columns?.length ? kanban.columnsFromNames(columns) : kanban.DEFAULT_COLUMNS,
-        private: isPrivate,
+        private: isPrivate ?? true,
       });
       const summary = kanban.summarizeBoard(board);
       return ok(`Created board "${board.title}" with columns ${summary.columns.join(", ")}.`, {

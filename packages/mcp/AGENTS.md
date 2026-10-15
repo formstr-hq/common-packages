@@ -287,7 +287,7 @@ replaceable event addressed by `coordinate` = `kind:pubkey:d` — public (`30301
 | `list_kanban_cards` | `board` | All cards on one board (by coordinate). |
 | `list_my_kanban_cards` | — | Cards assigned to the user across every board. |
 | `list_kanban_inbox` | — | Assigned cards still in the first column — the **pick-up queue**. Optional `board` to scope it. |
-| `create_kanban_board` | `title` | Always on. Optional `columns`, `description`, `private:true`. |
+| `create_kanban_board` | `title` | Always on. **Private by default** — pass `private:false` for a public board. Optional `columns`, `description`. |
 | `create_kanban_card` | `board`, `title` | Always on. Optional `status`, `description`, `assignees`, `labels`. |
 | `claim_kanban_card` ⚠ | `board`, `cardId` | Move an **assigned** card out of the first column. Idempotent. Gated. |
 | `update_kanban_card` ⚠ | `board`, `cardId` | Change title/description/assignees/labels. Gated. |
@@ -300,6 +300,10 @@ replaceable event addressed by `coordinate` = `kind:pubkey:d` — public (`30301
 
 - **`board` is always a coordinate** (`30301:<pk>:<d>` or `32301:<pk>:<d>`) from a list tool.
   Never invent one. `create_kanban_board` returns the new one; the app route is `/kanban`.
+- **Boards are private by default.** `create_kanban_board` mints a fresh view key, encrypts the
+  board under it, and links it into a board list so the list/card/comment tools can recover the
+  key later — this is why the default is safe. Pass `private:false` only when the user asks for a
+  public board (public is readable by anyone; private needs the key).
 - **Columns.** Default `To Do / In Progress / Done`. `status` accepts a column **name or id** and
   the tool maps it to the wire value (public boards use the column *name*, private boards the
   *id* — you never deal with that). Moving to an unknown column returns `BAD_INPUT` with the
@@ -370,7 +374,7 @@ read_mail { mailId: "<id from list>" }
 ### "Give me a board and add a task"
 
 ```
-create_kanban_board { title: "Launch", columns: ["To Do", "Doing", "Done"] }
+create_kanban_board { title: "Launch", columns: ["To Do", "Doing", "Done"] }   # private by default
 → board = <coordinate>
 
 create_kanban_card { board: board, title: "Write the announcement",

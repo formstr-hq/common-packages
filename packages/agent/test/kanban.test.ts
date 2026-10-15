@@ -86,13 +86,21 @@ describe("kanban tools", () => {
     expect(kanbanTools.filter((t) => t.write)).toHaveLength(6);
   });
 
-  it("create_kanban_board defaults the columns and returns a coordinate", async () => {
+  it("create_kanban_board defaults the columns and is private by default", async () => {
     kanban.createBoard.mockResolvedValue({ ...board, coordinate: BOARD });
     const res = await register(ctx).get("create_kanban_board")!.handler({ title: "Sprint" });
     expect(res.ok).toBe(true);
     expect(res.data.coordinate).toBe(BOARD);
     expect(kanban.createBoard).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Sprint", columns: kanban.DEFAULT_COLUMNS }),
+      expect.objectContaining({ title: "Sprint", columns: kanban.DEFAULT_COLUMNS, private: true }),
+    );
+  });
+
+  it("create_kanban_board honors private:false for a public board", async () => {
+    kanban.createBoard.mockResolvedValue({ ...board, coordinate: BOARD });
+    await register(ctx).get("create_kanban_board")!.handler({ title: "Open", private: false });
+    expect(kanban.createBoard).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Open", private: false }),
     );
   });
 

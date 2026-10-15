@@ -1,9 +1,9 @@
 # Formstr MCP — Agent Guide
 
 You are connected to `@formstr/mcp`, a Model Context Protocol server that gives you tools to
-manage a person's **Formstr** account: forms, calendar, pages, drive, polls, and Mailstr email.
-Everything is stored on Nostr relays under the user's own identity. There is no backend you can
-query for help — **this document is the contract**.
+manage a person's **Formstr** account: forms, calendar, pages, drive, polls, Mailstr email, and
+**kanban boards**. Everything is stored on Nostr relays under the user's own identity. There is no
+backend you can query for help — **this document is the contract**.
 
 Read the [Golden rules](#golden-rules) and the [confirm gate](#the-confirm-gate) before your
 first write. Then jump to the module you need.
@@ -105,15 +105,16 @@ outward actions (send mail, share) or deletions, always surface the effect to th
 
 ### What is gated
 
-Gated (`confirm: true` required) — 27 of 60 tools:
+Gated (`confirm: true` required) — 33 of 72 tools:
 `update_form`, `share_form`, `delete_form`, `submit_form_response`,
 `delete_calendar_event`, `update_calendar_event`, `attach_form_to_event`, `update_calendar`,
 `delete_calendar`, `add_event_to_calendar`, `remove_event_from_calendar`, `approve_booking`,
 `decline_booking`, `rsvp_event`, `delete_page`, `update_page`, `share_page`, `add_page_comment`,
 `delete_poll`, `clear_my_vote`, `submit_poll_response`, `delete_file`, `rename_file`, `move_file`,
-`send_mail`, `claim_mailbox`, `publish_mail_setup`.
+`send_mail`, `claim_mailbox`, `publish_mail_setup`, `claim_kanban_card`, `update_kanban_card`,
+`move_kanban_card`, `delete_kanban_card`, `delete_kanban_board`, `add_kanban_comment`.
 
-The other 33 are always on. **"Always on" still means it publishes to the user's identity** —
+The other 39 are always on. **"Always on" still means it publishes to the user's identity** —
 `create_*`, `save_private_note`, `import_form_from_naddr`, and `submit_*` are real writes even
 though they don't need `confirm`.
 
@@ -133,6 +134,8 @@ though they don't need `confirm`.
 | Page / doc | `docId` (d-tag) + author `pubkey`, or an `address` | — | `list_pages`, `create_page` |
 | Poll | `pollEventId` | `ab12…` | `list_polls`, `create_poll` |
 | Drive file | `name` (+ optional `folder`) | `report.pdf` | `browse_files` |
+| Kanban board | `coordinate` = `kind:pubkey:d` (`30301` public / `32301` private) | `30301:<pk>:<d>` | `list_kanban_boards`, `create_kanban_board` |
+| Kanban card | its `id` (d-tag) + the board `coordinate` | `<d>` / `30301:<pk>:<d>` | `list_kanban_cards`, `create_kanban_card` |
 | Mail message | `mailId` (the wrap id) | `ef56…` | `list_mail` |
 
 **Private/encrypted things need a view key.** Forms, pages, and private calendar events can be
@@ -272,6 +275,51 @@ and `until` are unix seconds. If you only need one message you already have the 
 > user pays it in their own wallet. Then the address starts working once NIP-05 propagates.
 > You **cannot** complete payment from here.
 
+### Kanban (12)
+
+Boards are interoperable with [kanbanstr.com](https://kanbanstr.com). A board is a
+replaceable event addressed by `coordinate` = `kind:pubkey:d` — public (`30301`) or encrypted
+(`32301`). Cards live inside a board; each card's `status` names the column it sits in.
+
+| Tool | Required args | Notes |
+| --- | --- | --- |
+| `list_kanban_boards` | — | Boards the user owns, administers, or holds a key for. **Start here.** |
+| `list_kanban_cards` | `board` | All cards on one board (by coordinate). |
+| `list_my_kanban_cards` | — | Cards assigned to the user across every board. |
+| `list_kanban_inbox` | — | Assigned cards still in the first column — the **pick-up queue**. Optional `board` to scope it. |
+| `create_kanban_board` | `title` | Always on. Optional `columns`, `description`, `private:true`. |
+| `create_kanban_card` | `board`, `title` | Always on. Optional `status`, `description`, `assignees`, `labels`. |
+| `claim_kanban_card` ⚠ | `board`, `cardId` | Move an **assigned** card out of the first column. Idempotent. Gated. |
+| `update_kanban_card` ⚠ | `board`, `cardId` | Change title/description/assignees/labels. Gated. |
+| `move_kanban_card` ⚠ | `board`, `cardId`, `status` | Move to a column. Gated. |
+| `delete_kanban_card` ⚠ | `board`, `cardId` | Only the card's author may delete it. Gated. |
+| `delete_kanban_board` ⚠ | `board` | Only the board owner. Gated. |
+| `add_kanban_comment` ⚠ | `board`, `cardId`, `content` | **Private boards only** (see note). Gated. |
+
+**Rules that matter.**
+
+- **`board` is always a coordinate** (`30301:<pk>:<d>` or `32301:<pk>:<d>`) from a list tool.
+  Never invent one. `create_kanban_board` returns the new one; the app route is `/kanban`.
+- **Columns.** Default `To Do / In Progress / Done`. `status` accepts a column **name or id** and
+  the tool maps it to the wire value (public boards use the column *name*, private boards the
+  *id* — you never deal with that). Moving to an unknown column returns `BAD_INPUT` with the
+  valid names.
+- **Assignments drive everything.** `assignees` are hex pubkeys. A card assigned to someone (or
+  to an agent) is how work is handed off; on a public board each assignee is tagged `["p", …]`,
+  so a watcher can subscribe to `{ kinds:[30302], "#p":[agent] }` and see new work without
+  knowing the boards.
+- **The pick-up loop.** To do assigned work: `list_kanban_inbox` → for each card
+  `claim_kanban_card` (takes it off `To Do`) → do the work → `move_kanban_card` to `Done`
+  (and/or `update_kanban_card` the description). It is **idempotent**: claiming a card that
+  already moved returns `claimed:false` and changes nothing, so a repeated or racing pick-up is
+  safe.
+- **Comments are private-board-only** right now — the bundled SDK's comment codec always uses
+  the private kind and needs the board view key. On a public board, `add_kanban_comment` returns
+  `BAD_INPUT`; use `update_kanban_card` (e.g. append to `description`) to report progress
+  instead.
+- **Private boards** are read through a board list that carries the view key; the list/card
+  tools resolve it for you. Key material is never returned — never echo it if you ever see it.
+
 ---
 
 ## Recipes
@@ -319,12 +367,39 @@ list_mail                # newest first
 read_mail { mailId: "<id from list>" }
 ```
 
+### "Give me a board and add a task"
+
+```
+create_kanban_board { title: "Launch", columns: ["To Do", "Doing", "Done"] }
+→ board = <coordinate>
+
+create_kanban_card { board: board, title: "Write the announcement",
+                     status: "To Do", labels: ["docs"] }
+# assign it to a person (hex pubkey) or to an agent:
+create_kanban_card { board: board, title: "Review copy", assignees: ["<hex pubkey>"] }
+```
+
+### "What's assigned to me / pick up my work"
+
+```
+list_kanban_inbox                       # assigned cards still in "To Do"
+# for each: take it, do the work, close it out
+claim_kanban_card { board: "<coord>", cardId: "<id>", confirm: true }   # -> "In Progress"
+move_kanban_card  { board: "<coord>", cardId: "<id>", status: "Done", confirm: true }
+```
+
+> An agent that watches for hand-offs polls `list_kanban_inbox` (optionally with a `board`
+> scope), or subscribes to kind `30302` with `#p` = its own pubkey, then `claim_kanban_card`s
+> whatever is assigned to it.
+
 ---
 
 ## Errors and edge cases
 
 - **`"Confirmation required…"`** — expected. Re-call with `confirm: true` after the user agrees.
 - **`NOT_FOUND`** — the id/name doesn't exist. Re-run the relevant `list_*`; don't retry blindly.
+- **`NOT_ASSIGNED`** — `claim_kanban_card` was called on a card not assigned to you. Only pick
+  up cards that name your pubkey in `assignees`.
 - **`CALENDAR_REQUIRED`** — `create_calendar_event` needs a `calendarId`. The message lists the
   available calendars; ask the user, then re-run.
 - **`BAD_INPUT`** — a parameter is missing, unknown, or invalid (this includes a `from` address
@@ -346,15 +421,22 @@ read_mail { mailId: "<id from list>" }
 
 ## Pointing other agents here
 
-This guide is the single entry point. Canonical source is the ngit repository; GitHub is a
-read-only mirror.
+This guide is the single entry point. Canonical source is the **ngit** (Nostr Git) repository;
+GitHub is a read-only mirror. Browse it on [gitworkshop.dev](https://gitworkshop.dev):
 
+- **Canonical repo — gitworkshop.dev:**
+  `https://gitworkshop.dev/npub1cgd35mxmy37vhkfcmjckk9dylguz6q8l67cj6h9m45tj5rx569cql9kfex/relay.ngit.dev/common-packages`
+- **This guide — gitworkshop.dev:**
+  `https://gitworkshop.dev/npub1cgd35mxmy37vhkfcmjckk9dylguz6q8l67cj6h9m45tj5rx569cql9kfex/relay.ngit.dev/common-packages/tree/main/packages/mcp/AGENTS.md`
+- **Clone with ngit (native git):**
+  `git clone nostr://npub1cgd35mxmy37vhkfcmjckk9dylguz6q8l67cj6h9m45tj5rx569cql9kfex/relay.ngit.dev/common-packages`
 - **Agent-readable (raw Markdown — what you want to feed a model):**
   `https://raw.githubusercontent.com/formstr-hq/common-packages/main/packages/mcp/AGENTS.md`
-- **Human-readable (rendered):**
-  `https://github.com/formstr-hq/common-packages/blob/main/packages/mcp/AGENTS.md`
 - **Shipped in the package too:** `AGENTS.md` is included in the `@formstr/mcp` npm tarball, so
   `node_modules/@formstr/mcp/AGENTS.md` exists after any install.
+
+PRs and issues for this repo live on the same gitworkshop.dev page (Nostr Git) — not on the GitHub
+mirror.
 
 For deeper operator detail — keystore internals, the full environment-variable and CLI-flag
 reference, Ollama/Goose setup, troubleshooting — see [`README.md`](./README.md).

@@ -1,11 +1,13 @@
 # @formstr/mcp
 
 A standalone [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that
-exposes the **Formstr** super-app (forms, calendar, pages, drive, polls) to any MCP host —
-Claude Code/Desktop, Cursor, and others. It builds on `@formstr/agent` (the shared service
-layer + tool registry) and `@formstr/core` (Nostr primitives), and talks to Nostr relays
-directly. Transport: **stdio**. Source lives in
-[`formstr-hq/common-packages`](https://github.com/formstr-hq/common-packages/tree/main/packages/mcp).
+exposes the **Formstr** super-app (forms, calendar, pages, drive, polls, kanban boards, Mailstr
+email) to any MCP host — Claude Code/Desktop, Cursor, and others. It builds on `@formstr/agent`
+(the shared service layer + tool registry) and `@formstr/core` (Nostr primitives), and talks to
+Nostr relays directly. Transport: **stdio**. Source is canonical on ngit (Nostr Git) — browse it
+at
+[gitworkshop.dev](https://gitworkshop.dev/npub1cgd35mxmy37vhkfcmjckk9dylguz6q8l67cj6h9m45tj5rx569cql9kfex/relay.ngit.dev/common-packages/tree/main/packages/mcp)
+(GitHub is a read-only mirror).
 
 Identity is powered by [`@formstr/signer`](https://www.npmjs.com/package/@formstr/signer) —
 the same login engine the Formstr web app uses. Local keys are stored **NIP-49 encrypted
@@ -230,8 +232,9 @@ service supports (more than the super-app builder UI currently exposes).
 - `delete_form` — publish a NIP-09 deletion.
 - `submit_form_response` — submit a response on your identity.
 
-Other modules (calendar, pages, polls, drive) expose the v1 read/create tools and gated
-actions; see the source under `src/tools/`.
+Other modules (calendar, pages, polls, drive, kanban) expose read/create tools and gated
+actions; see the source under `src/tools/`. Kanban adds an assignment inbox for agents
+(`list_kanban_inbox` + `claim_kanban_card`) — see [`AGENTS.md`](./AGENTS.md#kanban-12).
 
 ## Mail tools
 

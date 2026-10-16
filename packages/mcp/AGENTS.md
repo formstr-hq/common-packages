@@ -105,16 +105,17 @@ outward actions (send mail, share) or deletions, always surface the effect to th
 
 ### What is gated
 
-Gated (`confirm: true` required) — 33 of 72 tools:
+Gated (`confirm: true` required) — 36 of 76 tools:
 `update_form`, `share_form`, `delete_form`, `submit_form_response`,
 `delete_calendar_event`, `update_calendar_event`, `attach_form_to_event`, `update_calendar`,
 `delete_calendar`, `add_event_to_calendar`, `remove_event_from_calendar`, `approve_booking`,
 `decline_booking`, `rsvp_event`, `delete_page`, `update_page`, `share_page`, `add_page_comment`,
 `delete_poll`, `clear_my_vote`, `submit_poll_response`, `delete_file`, `rename_file`, `move_file`,
 `send_mail`, `claim_mailbox`, `publish_mail_setup`, `claim_kanban_card`, `update_kanban_card`,
-`move_kanban_card`, `delete_kanban_card`, `delete_kanban_board`, `add_kanban_comment`.
+`move_kanban_card`, `delete_kanban_card`, `delete_kanban_board`, `add_kanban_comment`,
+`invite_kanban_member`, `accept_kanban_invitation`, `dismiss_kanban_invitation`.
 
-The other 39 are always on. **"Always on" still means it publishes to the user's identity** —
+The other 40 are always on. **"Always on" still means it publishes to the user's identity** —
 `create_*`, `save_private_note`, `import_form_from_naddr`, and `submit_*` are real writes even
 though they don't need `confirm`.
 

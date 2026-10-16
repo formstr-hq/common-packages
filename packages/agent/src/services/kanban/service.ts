@@ -1,5 +1,5 @@
 import { signerManager } from "@formstr/core";
-import { KANBAN_KINDS, type CardDraft, type Column, type KanbanBoard, type KanbanCard } from "@formstr/kanban-sdk";
+import { KANBAN_KINDS, type BoardInvitation, type CardDraft, type Column, type KanbanBoard, type KanbanCard } from "@formstr/kanban-sdk";
 
 import { getKanbanSdk } from "./sdk";
 
@@ -306,4 +306,85 @@ export function cardDraft(
   if (input.assignees) draft.assignees = input.assignees;
   if (input.labels) draft.labels = input.labels;
   return draft;
+}
+
+// ── Invitations (sharing) ─────────────────────────────
+
+/** An invitation as a tool may surface it — never the view key or wrap key. */
+export interface InvitationSummary {
+  coordinate: string;
+  role: string;
+  inviter: string;
+  message: string;
+  wrapId: string;
+  createdAt: number;
+}
+
+/** Trim an invitation to tool-visible fields — its key stays inside the SDK. */
+export function summarizeInvitation(inv: BoardInvitation): InvitationSummary {
+  return {
+    coordinate: inv.coordinate,
+    role: inv.role,
+    inviter: inv.inviterPubkey,
+    message: inv.message,
+    wrapId: inv.wrapId,
+    createdAt: inv.createdAt,
+  };
+}
+
+/** Resolve a wrap id, possibly a prefix, to exactly one pending invitation. */
+async function resolvePending(wrapId: string): Promise<BoardInvitation> {
+  const invites = await (await getKanbanSdk()).fetchInvitations();
+  const exact = invites.find((i) => i.wrapId === wrapId);
+  if (exact) return exact;
+  const matches = invites.filter((i) => i.wrapId.startsWith(wrapId));
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    throw new Error(`No pending kanban invitation matches wrap id ${wrapId}.`);
+  }
+  throw new Error(
+    `Wrap id ${wrapId} matches ${matches.length} pending invitations; pass a longer prefix.`,
+  );
+}
+
+/** Pending private-board invitations addressed to us, minus anything accepted or dismissed. */
+export async function listInvitations(): Promise<InvitationSummary[]> {
+  return (await (await getKanbanSdk()).fetchInvitations()).map(summarizeInvitation);
+}
+
+/**
+ * Accept: the SDK proves the offered key actually opens the board, then links
+ * it into our board list. Returns the joined board — a caller goes straight to
+ * `list_kanban_cards` from here.
+ */
+export async function acceptInvitation(wrapId: string, listId?: string): Promise<BoardSummary> {
+  const sdk = await getKanbanSdk();
+  const invitation = await resolvePending(wrapId);
+  await sdk.acceptInvitation(invitation, listId ? { listId } : {});
+  const board = await sdk.fetchBoardByCoordinate(invitation.coordinate, invitation.viewKey);
+  if (!board) {
+    throw new Error(`The board at ${invitation.coordinate} did not resolve after accepting.`);
+  }
+  return summarizeBoard(board);
+}
+
+/** Decline: NIP-09-delete the wrap via its ephemeral key when possible, else file an opt-out. */
+export async function dismissInvitation(wrapId: string): Promise<void> {
+  const sdk = await getKanbanSdk();
+  await sdk.dismissInvitation(await resolvePending(wrapId));
+}
+
+/**
+ * Invite pubkeys to a board we administer: republishes the roster and sends
+ * each invitee the view key as a NIP-59 gift wrap to THEIR inbox relays.
+ */
+export async function inviteMembers(
+  coordinate: string,
+  invitees: { pubkey: string; role: "admin" | "participant" }[],
+  message?: string,
+): Promise<BoardSummary> {
+  const board = await resolveBoard(coordinate);
+  if (!board) throw new Error(`No kanban board at ${coordinate}.`);
+  const updated = await (await getKanbanSdk()).invite(board, invitees, message);
+  return summarizeBoard(updated);
 }

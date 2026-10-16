@@ -44,6 +44,10 @@ const kanban = vi.hoisted(() => ({
   deleteBoard: vi.fn(),
   columnFor: vi.fn(),
   statusFor: vi.fn((_b: unknown, c: any) => c.name),
+  listInvitations: vi.fn(),
+  acceptInvitation: vi.fn(),
+  dismissInvitation: vi.fn(),
+  inviteMembers: vi.fn(),
 }));
 
 vi.mock("../src/services", () => ({ kanban }));
@@ -81,9 +85,9 @@ beforeEach(() => {
 });
 
 describe("kanban tools", () => {
-  it("exposes 12 tools, 6 of them gated", () => {
-    expect(kanbanTools).toHaveLength(12);
-    expect(kanbanTools.filter((t) => t.write)).toHaveLength(6);
+  it("exposes 16 tools, 9 of them gated", () => {
+    expect(kanbanTools).toHaveLength(16);
+    expect(kanbanTools.filter((t) => t.write)).toHaveLength(9);
   });
 
   it("create_kanban_board defaults the columns and is private by default", async () => {
@@ -188,5 +192,71 @@ describe("kanban tools", () => {
       .handler({ board: BOARD, cardId: "c1", confirm: true });
     expect(res.ok).toBe(true);
     expect(res.data.claimed).toBe(true);
+  });
+
+  it("list_kanban_invitations lists invites without leaking view keys", async () => {
+    kanban.listInvitations.mockResolvedValue([
+      {
+        coordinate: "32301:" + "b".repeat(64) + ":board1",
+        role: "admin",
+        inviter: "c".repeat(64),
+        message: "welcome aboard",
+        wrapId: "w".repeat(64),
+        createdAt: 0,
+      },
+    ]);
+    const res = await register(ctx).get("list_kanban_invitations")!.handler({});
+    expect(res.ok).toBe(true);
+    expect(res.data.invitations).toHaveLength(1);
+    expect(JSON.stringify(res.data)).not.toContain("viewKey");
+  });
+
+  it("invite_kanban_member is gated and defaults roles to participant", async () => {
+    const refused = await register(ctx)
+      .get("invite_kanban_member")!
+      .handler({ board: BOARD, invitees: [{ pubkey: "c".repeat(64) }] });
+    expect(refused.ok).toBe(false);
+    expect(refused.text.startsWith(CONFIRM_REQUIRED_PREFIX)).toBe(true);
+    kanban.inviteMembers.mockResolvedValue({ coordinate: BOARD, title: "Sprint" });
+    const res = await register(ctx)
+      .get("invite_kanban_member")!
+      .handler({ board: BOARD, confirm: true, invitees: [{ pubkey: "c".repeat(64) }] });
+    expect(res.ok).toBe(true);
+    expect(kanban.inviteMembers).toHaveBeenCalledWith(
+      BOARD,
+      [{ pubkey: "c".repeat(64), role: "participant" }],
+      undefined,
+    );
+  });
+
+  it("accept_kanban_invitation requires confirm, then joins", async () => {
+    const refused = await register(ctx).get("accept_kanban_invitation")!.handler({ wrapId: "w1" });
+    expect(refused.ok).toBe(false);
+    kanban.acceptInvitation.mockResolvedValue({ coordinate: BOARD, title: "Sprint" });
+    const res = await register(ctx)
+      .get("accept_kanban_invitation")!
+      .handler({ wrapId: "w1", confirm: true });
+    expect(res.ok).toBe(true);
+    expect(kanban.acceptInvitation).toHaveBeenCalledWith("w1", undefined);
+  });
+
+  it("accept_kanban_invitation files the board under listId when given", async () => {
+    kanban.acceptInvitation.mockResolvedValue({ coordinate: BOARD, title: "Sprint" });
+    const res = await register(ctx)
+      .get("accept_kanban_invitation")!
+      .handler({ wrapId: "w1", listId: "list1", confirm: true });
+    expect(kanban.acceptInvitation).toHaveBeenCalledWith("w1", "list1");
+    expect(res.ok).toBe(true);
+  });
+
+  it("dismiss_kanban_invitation is gated and delegates", async () => {
+    const refused = await register(ctx).get("dismiss_kanban_invitation")!.handler({ wrapId: "w1" });
+    expect(refused.ok).toBe(false);
+    kanban.dismissInvitation.mockResolvedValue(undefined);
+    const res = await register(ctx)
+      .get("dismiss_kanban_invitation")!
+      .handler({ wrapId: "w1", confirm: true });
+    expect(res.ok).toBe(true);
+    expect(kanban.dismissInvitation).toHaveBeenCalledWith("w1");
   });
 });

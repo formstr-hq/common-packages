@@ -34,6 +34,9 @@ export const GATED_TOOLS = [
   "delete_kanban_card",
   "delete_kanban_board",
   "claim_kanban_card",
+  "invite_kanban_member",
+  "accept_kanban_invitation",
+  "dismiss_kanban_invitation",
 ] as const;
 
 export type GatedTool = (typeof GATED_TOOLS)[number];

@@ -138,6 +138,36 @@ function buildKanbanTools(): ToolDef[] {
     },
   );
 
+  // ── Invitations ───────────────────────────────────────
+  server.registerTool(
+    "list_kanban_invitations",
+    {
+      description:
+        "List the private-board invitations addressed to you — one per board, with the offered " +
+        "role, the inviter, and the wrap id needed to accept or dismiss it. The view key is " +
+        "applied for you on accept; it is never shown.",
+      inputSchema: {},
+    },
+    async () => {
+      const invites = await kanban.listInvitations();
+      return ok(
+        invites.length
+          ? `${invites.length} pending invitation(s):\n\n${table(
+              invites.map((i) => ({
+                wrapId: i.wrapId,
+                board: i.coordinate,
+                role: i.role,
+                inviter: i.inviter,
+                message: i.message ?? "",
+              })),
+              ["wrapId", "board", "role", "inviter", "message"],
+            )}`
+          : "No pending kanban invitations.",
+        { invitations: invites },
+      );
+    },
+  );
+
   // ── Constructive ──────────────────────────────────────
   server.registerTool(
     "create_kanban_board",
@@ -409,6 +439,106 @@ function buildKanbanTools(): ToolDef[] {
       if (!board) return fail(`No kanban board at ${args.board}.`, "NOT_FOUND");
       await kanban.deleteBoard(board);
       return ok(`Deleted board ${args.board}.`);
+    },
+  );
+
+  server.registerTool(
+    "invite_kanban_member",
+    {
+      description:
+        "Invite members to a kanban board you administer. Each invitee receives the private " +
+        "board's view key as a NIP-59 gift wrap addressed to their own inbox relays — they " +
+        "accept via `accept_kanban_invitation` (or in a formstr kanban app). Requires confirm:true.",
+      inputSchema: {
+        board: z.string().describe("board coordinate, kind:pubkey:d"),
+        invitees: z
+          .array(
+            z.object({
+              pubkey: z.string().describe("invitee's hex pubkey (npub1... must be decoded first)"),
+              role: z.enum(["admin", "participant"]).optional().describe("defaults to participant"),
+            }),
+          )
+          .min(1)
+          .describe("people to invite, pubkey + role each"),
+        message: z.string().optional().describe("note carried inside the invitation"),
+        confirm: z.boolean().optional(),
+      },
+    },
+    async (args: {
+      board: string;
+      invitees: { pubkey: string; role?: "admin" | "participant" }[];
+      message?: string;
+      confirm?: boolean;
+    }) => {
+      const names = args.invitees.map((i) => i.pubkey.slice(0, 8)).join(", ");
+      const blocked = requireConfirm(
+        "invite_kanban_member",
+        args,
+        `gift-wraps the board's view key to ${names}`,
+      );
+      if (blocked) return blocked;
+      const invitees = args.invitees.map((i) => ({ pubkey: i.pubkey, role: i.role ?? "participant" }));
+      const board = await kanban.inviteMembers(args.board, invitees, args.message);
+      return ok(`Invited ${invitees.length} member(s) to "${board.title}".`, {
+        board,
+        invitees,
+      });
+    },
+  );
+
+  server.registerTool(
+    "accept_kanban_invitation",
+    {
+      description:
+        "Accept a pending private-board invitation (from `list_kanban_invitations`). The offered " +
+        "view key is verified against the live board and only then filed into your board list — " +
+        "an invitation whose key opens nothing is refused. Requires confirm:true.",
+      inputSchema: {
+        wrapId: z
+          .string()
+          .describe("invitation wrap id (or its unique prefix) from list_kanban_invitations"),
+        listId: z
+          .string()
+          .optional()
+          .describe("board list to file the accepted board under; defaults to your invites list"),
+        confirm: z.boolean().optional(),
+      },
+    },
+    async (args: { wrapId: string; listId?: string; confirm?: boolean }) => {
+      const blocked = requireConfirm(
+        "accept_kanban_invitation",
+        args,
+        `links board ${args.wrapId.slice(0, 10)}… into your lists as a member`,
+      );
+      if (blocked) return blocked;
+      const board = await kanban.acceptInvitation(args.wrapId, args.listId);
+      return ok(`Joined board "${board.title}".`, { board });
+    },
+  );
+
+  server.registerTool(
+    "dismiss_kanban_invitation",
+    {
+      description:
+        "Decline a pending invitation without joining. When the wrap carries its signing key " +
+        "this NIP-09-deletes the wrap (anonymous); otherwise it files a kind-84 opt-out for " +
+        "the board. Requires confirm:true.",
+      inputSchema: {
+        wrapId: z
+          .string()
+          .describe("invitation wrap id (or its unique prefix) from list_kanban_invitations"),
+        confirm: z.boolean().optional(),
+      },
+    },
+    async (args: { wrapId: string; confirm?: boolean }) => {
+      const blocked = requireConfirm(
+        "dismiss_kanban_invitation",
+        args,
+        `declines invitation ${args.wrapId.slice(0, 10)}…`,
+      );
+      if (blocked) return blocked;
+      await kanban.dismissInvitation(args.wrapId);
+      return ok(`Dismissed invitation ${args.wrapId.slice(0, 10)}….`, { dismissed: args.wrapId });
     },
   );
 

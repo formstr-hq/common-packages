@@ -10,10 +10,33 @@ vi.mock("../src/services", () => ({
     fetchSharedPages: vi.fn(),
     setDocTags: vi.fn(),
     fetchDocTags: vi.fn(),
+    fetchRoster: vi.fn(),
+    enableGroupSharing: vi.fn(),
+  },
+  pagesComments: {
+    fetchPageComments: vi.fn(),
+    publishPageComment: vi.fn(),
+  },
+  pagesSharedDoc: {
+    parseRootAddress: vi.fn((address: string) => {
+      const [kind, owner, ...rest] = address.split(":");
+      if (!owner || rest.length === 0) return null;
+      return { kind: Number(kind), owner, d: rest.join(":") };
+    }),
+  },
+  pagesCollab: {
+    openCollabSession: vi.fn(),
+    getCollabSession: vi.fn(),
+    closeCollabSession: vi.fn(),
+    listCollabPeers: vi.fn(() => []),
+    readCollabMarkdown: vi.fn(() => "# T"),
+    appendCollabDocument: vi.fn(),
+    replaceCollabDocument: vi.fn(),
+    publishCollabSnapshot: vi.fn(),
   },
 }));
 
-import { pages } from "../src/services";
+import { pages, pagesCollab } from "../src/services";
 import { pagesTools } from "../src/tools/pages";
 import type { ToolCtx } from "../src/tools/types";
 
@@ -123,6 +146,114 @@ describe("pages tools", () => {
       .handler({ address: "33457:pk:abc", content: "# T", canEdit: false, confirm: true });
     expect(pages.sharePage).toHaveBeenCalledWith(
       expect.objectContaining({ address: "33457:pk:abc", content: "# T", canEdit: false }),
+    );
+    expect(res.data.url).toContain("#nkeys1");
+  });
+
+  it("registers the collab read tools without write access and gates the writers", () => {
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: false });
+    for (const t of ["get_page_roster", "open_page_collab", "get_page_collab", "close_page_collab"]) {
+      expect(tools.has(t)).toBe(true);
+    }
+    expect(tools.has("edit_page_collab")).toBe(false);
+    expect(tools.has("share_page_collab")).toBe(false);
+
+    const withWrites = fakeServer();
+    registerPages(withWrites.server, { allowWrites: true });
+    expect(withWrites.tools.has("edit_page_collab")).toBe(true);
+    expect(withWrites.tools.has("share_page_collab")).toBe(true);
+  });
+
+  it("get_page_roster returns the mode and members", async () => {
+    (pages.fetchRoster as any).mockResolvedValue({
+      v: 2,
+      mode: "restricted",
+      tags: [],
+      members: [{ pubkey: "ed", role: "editor" }],
+    });
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: false });
+    const res = await tools
+      .get("get_page_roster")!
+      .handler({ address: "33457:pk:abc", viewKey: "vk" });
+    expect(pages.fetchRoster).toHaveBeenCalledWith("pk", "abc", "vk");
+    expect(res.data.mode).toBe("restricted");
+    expect(res.data.members).toEqual([{ pubkey: "ed", role: "editor" }]);
+  });
+
+  it("open_page_collab seeds from the doc tip and returns the session", async () => {
+    (pages.fetchPage as any).mockResolvedValue({ content: "# T", isEncrypted: false });
+    (pagesCollab.openCollabSession as any).mockResolvedValue({ id: "33457:pk:abc", room: "room1" });
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: false });
+    const res = await tools
+      .get("open_page_collab")!
+      .handler({ address: "33457:pk:abc", viewKey: "vk" });
+    expect(pagesCollab.openCollabSession).toHaveBeenCalledWith(
+      expect.objectContaining({ address: "33457:pk:abc", viewKey: "vk", seedMarkdown: "# T" }),
+    );
+    expect(res.data.sessionId).toBe("33457:pk:abc");
+  });
+
+  it("edit_page_collab requires confirm, appends, and saves a snapshot", async () => {
+    (pagesCollab.getCollabSession as any).mockReturnValue({ id: "33457:pk:abc" });
+    (pagesCollab.publishCollabSnapshot as any).mockResolvedValue({ id: "ev1" });
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: true });
+    const blocked = await tools
+      .get("edit_page_collab")!
+      .handler({ sessionId: "33457:pk:abc", content: "## New" });
+    expect(blocked.ok).toBe(false);
+    expect(pagesCollab.appendCollabDocument).not.toHaveBeenCalled();
+
+    const res = await tools
+      .get("edit_page_collab")!
+      .handler({ sessionId: "33457:pk:abc", content: "## New", confirm: true });
+    expect(pagesCollab.appendCollabDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "33457:pk:abc" }),
+      "## New",
+    );
+    expect(pagesCollab.publishCollabSnapshot).toHaveBeenCalled();
+    expect(res.data.savedEventId).toBe("ev1");
+  });
+
+  it("edit_page_collab can replace without saving", async () => {
+    (pagesCollab.getCollabSession as any).mockReturnValue({ id: "s" });
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: true });
+    await tools.get("edit_page_collab")!.handler({
+      sessionId: "s",
+      content: "x",
+      mode: "replace",
+      save: false,
+      confirm: true,
+    });
+    expect(pagesCollab.replaceCollabDocument).toHaveBeenCalled();
+    expect(pagesCollab.publishCollabSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("share_page_collab requires confirm before re-publishing", async () => {
+    (pages.enableGroupSharing as any).mockResolvedValue({
+      url: "http://x/pages/naddr1#nkeys1",
+      address: "33457:pk:abc",
+      viewKey: "vk",
+      mode: "restricted",
+      members: [],
+    });
+    const { server, tools } = fakeServer();
+    registerPages(server, { allowWrites: true });
+    const blocked = await tools
+      .get("share_page_collab")!
+      .handler({ address: "33457:pk:abc", content: "# T" });
+    expect(blocked.ok).toBe(false);
+    expect(pages.enableGroupSharing).not.toHaveBeenCalled();
+
+    const res = await tools
+      .get("share_page_collab")!
+      .handler({ address: "33457:pk:abc", content: "# T", mode: "open", confirm: true });
+    expect(pages.enableGroupSharing).toHaveBeenCalledWith(
+      expect.objectContaining({ address: "33457:pk:abc", content: "# T", mode: "open" }),
     );
     expect(res.data.url).toContain("#nkeys1");
   });

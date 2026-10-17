@@ -20,6 +20,8 @@ export const GATED_TOOLS = [
   "update_page",
   "share_page",
   "add_page_comment",
+  "share_page_collab",
+  "edit_page_collab",
   "delete_poll",
   "clear_my_vote",
   "delete_file",

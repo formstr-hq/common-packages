@@ -12,11 +12,23 @@ first write. Then jump to the module you need.
 
 ## Before you can do anything
 
-You almost certainly cannot change this yourself — it is a one-time, human, out-of-band step.
-But you should know what it is so you can tell the user exactly what's wrong if a tool is
-missing or a command fails.
+You cannot sign in as the user — their key is a one-time, human, out-of-band step (it never
+reaches you). You *can*, however, create a brand-new account yourself. Know both paths so you
+can tell the user exactly what's wrong if a tool is missing or a command fails.
 
-**1. A human signs in once** (interactive terminal; never in the chat):
+**1. Sign in.** Either:
+
+- **A new account — you can do this.** Drive the login prompts: send `c` (create), then a
+  passphrase you choose. This mints a **real, persistent identity** — stored as an `ncryptsec`
+  in the keystore, made active, and printed (npub + recovery key) for the user to back up. It
+  is *not* a throwaway: treat it like any account the user will keep. Because *you* chose the
+  passphrase, the key is within your reach on this path — only do this to create an identity
+  the user actually wants, never to stand in for theirs. Pace the two inputs — a bare piped
+  burst can race readline and silently no-op. Set `FORMSTR_MCP_PASSPHRASE` (keystore) and
+  `FORMSTR_MCP_NCRYPTSEC_PASSPHRASE` in the host env so the server can unlock it at boot.
+
+- **The user's own identity — a human does this once**, on an interactive terminal, never in
+  the chat:
 
 ```bash
 npx -y @formstr/mcp login

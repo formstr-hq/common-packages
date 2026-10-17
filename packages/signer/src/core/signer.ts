@@ -62,6 +62,7 @@ export class Signer {
   readonly #defaultAndroidPlugin: AndroidSignerPlugin | undefined;
   readonly #nip55WebTransport: Nip55WebTransport | undefined;
   readonly #appMetadata: { name?: string; url?: string; image?: string };
+  readonly #defaultPerms: string[] | undefined;
   #accounts: StoredAccount[] = [];
   #activePubkey: string | null = null;
   #activeSigner: ActiveSigner | null = null;
@@ -71,12 +72,23 @@ export class Signer {
     this.#storage = config.storage ?? localStorageAdapter(config.storageKeyPrefix);
     this.#defaultAndroidPlugin = config.androidSignerPlugin;
     this.#nip55WebTransport = config.nip55WebTransport;
+    this.#defaultPerms = config.defaultPerms;
     this.#appMetadata = {
       name: config.appName,
       url: config.appUrl,
       image: config.appImage,
     };
     this.#hydrate();
+  }
+
+  /**
+   * The perms to send on a NIP-46 `connect`: the caller's explicit list wins
+   * outright, otherwise the host-configured default. An explicit EMPTY array
+   * is therefore distinct from `undefined` — it means "request nothing",
+   * overriding the default.
+   */
+  #resolvePerms(explicit: string[] | undefined): string[] | undefined {
+    return explicit ?? this.#defaultPerms;
   }
 
   #hydrate(): void {
@@ -220,7 +232,10 @@ export class Signer {
     uri: string,
     options: BunkerLoginOptions = {},
   ): Promise<StoredAccount> {
-    const result = await connectWithBunkerUri(uri, options);
+    const result = await connectWithBunkerUri(uri, {
+      ...options,
+      perms: this.#resolvePerms(options.perms),
+    });
     const npub = nip19.npubEncode(result.pubkey);
     const account: StoredAccount = {
       npub,
@@ -270,7 +285,7 @@ export class Signer {
     const init = initiateNostrConnect({
       relays: options.relays,
       metadata,
-      perms: options.perms,
+      perms: this.#resolvePerms(options.perms),
       pool: options.pool,
       onAuth: options.onAuth,
       signal: options.signal,

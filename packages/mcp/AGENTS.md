@@ -241,6 +241,12 @@ types: `short`, `paragraph`, `choice`, `dropdown`, `number`, `date`, `time`, `gr
 > `"replace"` only to rewrite the whole document. `save: false` skips the durable Markdown
 > snapshot (live-only). Yjs is **ephemeral** — the Markdown snapshot (`save`) is what survives
 > the session, so leave it on unless you are certain a human will save.
+>
+> **Protocol.** The wire format is the draft *Multi-Writer Encrypted Documents* spec —
+> `NIP-multi-writer-documents.md` (raw:
+> https://raw.githubusercontent.com/formstr-hq/nostr-docs/main/NIP-multi-writer-documents.md).
+> Implemented in `@formstr/agent`: `services/pages/sharedDoc.ts` (roster, room, tip selection)
+> and `services/pages/realtime.ts` (Yjs transport).
 
 
 ### Polls (8)

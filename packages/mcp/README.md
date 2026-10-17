@@ -232,9 +232,46 @@ service supports (more than the super-app builder UI currently exposes).
 - `delete_form` — publish a NIP-09 deletion.
 - `submit_form_response` — submit a response on your identity.
 
-Other modules (calendar, pages, polls, drive, kanban) expose read/create tools and gated
+Other modules (calendar, polls, drive, kanban) expose read/create tools and gated
 actions; see the source under `src/tools/`. Kanban adds an assignment inbox for agents
 (`list_kanban_inbox` + `claim_kanban_card`) — see [`AGENTS.md`](./AGENTS.md#kanban-12).
+
+## Pages tools
+
+Pages are encrypted Markdown documents. **v2 adds multi-writer documents with realtime
+collaboration**: a shared doc keeps per-author versions under one `viewKey`, the owner
+publishes a roster of editors, and live edits merge over Nostr via Yjs.
+
+**Read / session (always on)**
+
+- `list_pages` / `get_page` — your documents (pass `viewKey` for a shared one).
+- `list_shared_pages` — docs shared with you; carries the `viewKey`.
+- `get_page_tags` — private labels.
+- `get_page_roster` — v2 access list: write mode (`restricted`/`open`) + members.
+- `list_page_comments` — inline comments/suggestions.
+- `open_page_collab` — start a **live** session on a shared doc; returns `sessionId`, the
+  current text, and present peers.
+- `get_page_collab` / `close_page_collab` — read / end an open session.
+
+**Create (always on)**
+
+- `create_page` / `save_private_note` — encrypted Markdown.
+- `set_page_tags` — set labels.
+
+**Gated (require `--allow-writes` + `confirm: true`)**
+
+- `update_page` / `delete_page` — replace content / NIP-09 delete.
+- `share_page` — legacy edit-key link (`canEdit` for edit access).
+- `share_page_collab` — **v2** multi-writer share (`mode` `restricted`/`open`, `members`);
+  returns the share link.
+- `edit_page_collab` — write Markdown into a live session (`mode` append/replace), merging
+  via Yjs so humans see it live, and saving a snapshot.
+- `add_page_comment` — inline comment.
+
+> Live edits are **ephemeral** (Yjs); the durable state is the Markdown snapshot, which
+> `edit_page_collab` writes by default (`save:false` to skip). The AI writes as the
+> configured account identity. Typical flow: `list_shared_pages` → `open_page_collab` →
+> `edit_page_collab` → `close_page_collab`.
 
 ## Mail tools
 

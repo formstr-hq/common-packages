@@ -105,17 +105,18 @@ outward actions (send mail, share) or deletions, always surface the effect to th
 
 ### What is gated
 
-Gated (`confirm: true` required) — 36 of 76 tools:
+Gated (`confirm: true` required) — 38 of 82 tools:
 `update_form`, `share_form`, `delete_form`, `submit_form_response`,
 `delete_calendar_event`, `update_calendar_event`, `attach_form_to_event`, `update_calendar`,
 `delete_calendar`, `add_event_to_calendar`, `remove_event_from_calendar`, `approve_booking`,
 `decline_booking`, `rsvp_event`, `delete_page`, `update_page`, `share_page`, `add_page_comment`,
+`share_page_collab`, `edit_page_collab`,
 `delete_poll`, `clear_my_vote`, `submit_poll_response`, `delete_file`, `rename_file`, `move_file`,
 `send_mail`, `claim_mailbox`, `publish_mail_setup`, `claim_kanban_card`, `update_kanban_card`,
 `move_kanban_card`, `delete_kanban_card`, `delete_kanban_board`, `add_kanban_comment`,
 `invite_kanban_member`, `accept_kanban_invitation`, `dismiss_kanban_invitation`.
 
-The other 40 are always on. **"Always on" still means it publishes to the user's identity** —
+The other 44 are always on. **"Always on" still means it publishes to the user's identity** —
 `create_*`, `save_private_note`, `import_form_from_naddr`, and `submit_*` are real writes even
 though they don't need `confirm`.
 
@@ -204,7 +205,7 @@ types: `short`, `paragraph`, `choice`, `dropdown`, `number`, `date`, `time`, `gr
 > (npub/hex) receive NIP-59 invitations. To attach a registration form, pass
 > `registrationFormRef` and, for encrypted forms, `registrationFormViewKey`.
 
-### Pages (12)
+### Pages (18)
 
 | Tool | Required args | Notes |
 | --- | --- | --- |
@@ -212,14 +213,35 @@ types: `short`, `paragraph`, `choice`, `dropdown`, `number`, `date`, `time`, `gr
 | `get_page` | `pubkey`, `docId` | Pass `viewKey` if encrypted. |
 | `list_shared_pages` | — | Docs shared with the user (carries `viewKey`). |
 | `get_page_tags` | `address` | Private labels. |
+| `get_page_roster` | `address`, `viewKey` | v2 access list: write mode (`restricted`/`open`) + members. |
 | `list_page_comments` | `address`, `viewKey` | Inline comments/suggestions (kind 1494). |
 | `create_page` | `title`, `content` | Markdown, encrypted. Always on. |
 | `save_private_note` | `title`, `content` | Quick encrypted note. Always on. |
 | `set_page_tags` | `address`, `tags` | Always on. |
+| `open_page_collab` | `address`, `viewKey` | Open a **live** (realtime Yjs) session; returns `sessionId`, current text, peers. |
+| `get_page_collab` | `sessionId` | Live-merged text + present peers of an open session. |
+| `close_page_collab` | `sessionId` | End the session. |
 | `update_page` ⚠ | `docId`, `content` | Replaces content. Gated. |
 | `delete_page` ⚠ | `address` | NIP-09. Gated. |
-| `share_page` ⚠ | `address`, `content` | Re-encrypts under a view key; `canEdit` for edit links. Gated. |
+| `share_page` ⚠ | `address`, `content` | Legacy edit-key link; `canEdit` for edit links. Gated. |
+| `share_page_collab` ⚠ | `address`, `content` | **v2** multi-writer share; `mode` `restricted`/`open`, `members`. Gated. |
+| `edit_page_collab` ⚠ | `sessionId`, `content` | Write into a live session (`mode` append/replace); saves a snapshot. Gated. |
 | `add_page_comment` ⚠ | `address`, `eventId`, `viewKey`, `content` | Gated. |
+
+> **Realtime collaboration (v2).** Pages released multi-writer documents with live
+> co-editing. A shared doc is identified by a **root address** (`33457:<owner>:<d>`) and a
+> `viewKey`; the owner publishes a **roster** (`get_page_roster`) listing editors, and every
+> writer signs their own version. The workflow is: `list_shared_pages` (or the user hands you
+> a share link) → `open_page_collab` → `edit_page_collab` (append/replace Markdown — the
+> human sees it live and it stays merged via Yjs) → `close_page_collab`. `share_page_collab`
+> turns the user's own doc into a v2 doc (`open` = anyone with the link edits; `restricted` =
+> invited editors only) and returns the share link.
+>
+> `edit_page_collab` needs `confirm: true`. Prefer `mode: "append"` to add a section; use
+> `"replace"` only to rewrite the whole document. `save: false` skips the durable Markdown
+> snapshot (live-only). Yjs is **ephemeral** — the Markdown snapshot (`save`) is what survives
+> the session, so leave it on unless you are certain a human will save.
+
 
 ### Polls (8)
 
@@ -371,6 +393,29 @@ send_mail { to: "alice@example.com", subject: "Hi", text: "…",
 list_mail                # newest first
 read_mail { mailId: "<id from list>" }
 ```
+
+### "Edit a shared doc with me, live"
+
+```
+list_shared_pages                                   # find the doc address + viewKey
+get_page_roster { address, viewKey }                # who may write (mode + members)
+open_page_collab { address, viewKey }               # -> sessionId + current Markdown
+edit_page_collab { sessionId, content: "## Notes\n\n…", confirm: true }   # human sees it live
+get_page_collab { sessionId }                       # re-read the merged text
+close_page_collab { sessionId }
+```
+
+### "Start a live editable doc and share it"
+
+```
+share_page_collab { address: "<your doc 33457:…>", content: "<markdown>",
+                    mode: "restricted", members: [{ pubkey: "<hex>", role: "editor" }],
+                    confirm: true }
+# -> url (contains the viewKey) — send it to the collaborators
+```
+
+> `mode: "open"` lets anyone holding the link write (capability model). Prefer
+> `"restricted"` with named editors when you can — it is revocable and routable.
 
 ### "Give me a board and add a task"
 

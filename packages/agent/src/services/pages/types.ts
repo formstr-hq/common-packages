@@ -8,7 +8,14 @@ export const PAGES_KINDS = {
   sharedPagesList: 11234,
   docMetadata: 34579,
   comment: 1494,
+  /** Ephemeral Yjs sync-protocol message (v2 realtime). Base64 Yjs update in a
+   *  viewKey-encrypted `{a, m}` envelope; tag `["a", room]`. */
   crdtOp: 22457,
+  /** Ephemeral Yjs awareness (presence) message (v2 realtime). Same envelope. */
+  presence: 24578,
+  /** Session→real-pubkey attestation token (v2 realtime). NEVER published: it is
+   *  embedded inside the encrypted op/presence payload. */
+  sessionAttestation: 34581,
 } as const;
 
 // ── Data Structures ─────────────────────────────────────

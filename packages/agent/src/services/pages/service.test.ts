@@ -34,8 +34,11 @@ import {
   setDocTitle,
   saveDocMetadata,
   fetchAllDocMetadata,
+  enableGroupSharing,
+  fetchRoster,
 } from "./service";
 import { PAGES_KINDS } from "./types";
+import { collabRoom, rosterDTag } from "./sharedDoc";
 import { pubkeyFromHex } from "./viewKey";
 
 const OWNER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -523,5 +526,86 @@ describe("fetchPage — metadata viewKey fallback", () => {
     expect(page?.title).toBe("Via metadata");
     expect(page?.isEncrypted).toBe(false);
     expect(page?.viewKey).toBe("11".repeat(32));
+  });
+});
+
+describe("v2 group sharing", () => {
+  const VK = "44".repeat(32);
+  const original = `${PAGES_KINDS.document}:${OWNER}:d1`;
+
+  it("enableGroupSharing re-publishes under the viewKey and writes the roster", async () => {
+    routeQuerySync({ metadata: () => [] });
+    const res = await enableGroupSharing({
+      address: original,
+      content: "# T\n\nx",
+      mode: "open",
+      viewKey: VK,
+    });
+    expect(res.address).toBe(original); // address is unchanged (root), unlike legacy edit-key shares
+    expect(res.viewKey).toBe(VK);
+    expect(res.mode).toBe("open");
+
+    const events = (nostrRuntime.publish as any).mock.calls.map((c: any[]) => c[1]);
+    const content = events.find((e: any) => e.kind === PAGES_KINDS.document);
+    // v2 content: d-tag + room a-tag, viewKey-encrypted, signed by the owner.
+    expect(content.tags).toEqual([["d", "d1"], ["a", collabRoom(VK)]]);
+    expect(content.content).toBe("vk-enc");
+    expect(content.pubkey).toBe(OWNER);
+
+    const roster = events.find((e: any) => e.kind === PAGES_KINDS.docMetadata);
+    expect(roster.tags).toEqual([["d", original]]);
+  });
+
+  it("fetchRoster decodes a viewKey-encrypted roster", async () => {
+    routeQuerySync({ metadata: () => [metaEvent(rosterDTag(OWNER, "d1"), "ct-roster")] });
+    (nip44SelfDecrypt as any).mockResolvedValue(
+      JSON.stringify({ mode: "open", members: [{ pubkey: "ed", role: "editor" }] }),
+    );
+    const roster = await fetchRoster(OWNER, "d1", VK);
+    expect(roster).toEqual({
+      v: 2,
+      mode: "open",
+      title: undefined,
+      tags: [],
+      members: [{ pubkey: "ed", role: "editor" }],
+    });
+  });
+
+  it("fetchPage resolves the newest decryptable version across authors (open mode)", async () => {
+    const ownerEvent = {
+      id: "o",
+      pubkey: OWNER,
+      kind: PAGES_KINDS.document,
+      created_at: 10,
+      sig: "s",
+      content: "ct-owner",
+      tags: [["d", "d1"], ["a", collabRoom(VK)]],
+    };
+    const editorEvent = {
+      id: "e",
+      pubkey: "ed",
+      kind: PAGES_KINDS.document,
+      created_at: 20,
+      sig: "s",
+      content: "ct-ed",
+      tags: [["d", "d1"], ["a", collabRoom(VK)]],
+    };
+    // The content query for an open roster is by #a (room), and routeQuerySync's
+    // fallback returns `docs` for non-metadata kinds.
+    routeQuerySync({
+      metadata: () => [metaEvent(rosterDTag(OWNER, "d1"), "ct-roster")],
+      docs: [ownerEvent, editorEvent],
+    });
+    (nip44SelfDecrypt as any).mockImplementation((_s: unknown, ct: string) => {
+      if (ct === "ct-roster") return Promise.resolve(JSON.stringify({ mode: "open", members: [] }));
+      if (ct === "ct-ed") return Promise.resolve("# Editor\n\nnewer");
+      return Promise.resolve("# Owner\n\nolder");
+    });
+
+    const page = await fetchPage(OWNER, "d1", VK);
+    expect(page?.address).toBe(original);
+    expect(page?.pubkey).toBe("ed");
+    expect(page?.content).toBe("# Editor\n\nnewer");
+    expect(page?.title).toBe("Editor");
   });
 });

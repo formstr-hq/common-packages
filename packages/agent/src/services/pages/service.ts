@@ -18,6 +18,21 @@ import {
   type SharedPageEntry,
 } from "./types";
 import { generateViewKey, encryptWithViewKey, decryptWithViewKey, hexToBytes } from "./viewKey";
+import {
+  authorSet,
+  collabRoom,
+  contentTags,
+  decodeRosterEvent,
+  isOpenRoster,
+  parseRosterPayload,
+  parseRootAddress,
+  rosterDTag,
+  rootAddress,
+  selectTip,
+  type DocMember,
+  type DocMode,
+  type DocRoster,
+} from "./sharedDoc";
 
 const RELAYS = () => relayManager.getRelaysForModule("pages");
 
@@ -47,7 +62,8 @@ export async function savePage(params: SavePageParams): Promise<PageDocument> {
   const template: EventTemplate = {
     kind: PAGES_KINDS.document,
     created_at: Math.floor(Date.now() / 1000),
-    tags: [["d", dTag]],
+    // Shared docs add `["a", room]` (v2); personal docs keep the bare `d` tag.
+    tags: contentTags(dTag, params.viewKey),
     content: encrypted,
   };
 
@@ -137,7 +153,36 @@ export async function fetchPage(
   docId: string,
   viewKey?: string,
 ): Promise<PageDocument | null> {
-  const event = await nostrRuntime.fetchOne(RELAYS(), {
+  const relays = RELAYS();
+
+  // v2 group document: a viewKey means resolve the tip across every authorized
+  // author's slot (roster + mode), not just one author's newest event.
+  if (viewKey) {
+    const tip = await resolveContentTip(pubkey, docId, viewKey, relays);
+    if (tip) {
+      let content = tip.content;
+      let decrypted = false;
+      try {
+        content = await decryptWithViewKey(viewKey, tip.content);
+        decrypted = true;
+      } catch {
+        /* return ciphertext if the viewKey is wrong */
+      }
+      return {
+        id: docId,
+        address: rootAddress(pubkey, docId),
+        title: decrypted ? extractTitle(content) : `Document ${docId}`,
+        content,
+        pubkey: tip.pubkey,
+        createdAt: tip.created_at,
+        isEncrypted: !decrypted,
+        viewKey,
+        event: tip,
+      };
+    }
+  }
+
+  const event = await nostrRuntime.fetchOne(relays, {
     kinds: [PAGES_KINDS.document],
     authors: [pubkey],
     "#d": [docId],
@@ -181,6 +226,81 @@ export async function fetchPage(
     viewKey,
     event,
   };
+}
+
+// ── v2 group resolution ─────────────────────────────────
+
+/**
+ * Fetch the newest roster for a document, decrypting with the viewKey.
+ *
+ * The owner's roster is stored in the same kind-34579 slot as the legacy
+ * self-encrypted metadata, so read both encodings: v2 writes are viewKey-
+ * encrypted, v1 writes self-encrypted. Whichever decrypts first wins.
+ */
+export async function fetchRoster(
+  owner: string,
+  d: string,
+  viewKey: string,
+): Promise<DocRoster | null> {
+  const signer = await signerManager.getSigner();
+  const events = await nostrRuntime.querySync(RELAYS(), {
+    kinds: [PAGES_KINDS.docMetadata],
+    authors: [owner],
+    "#d": [rosterDTag(owner, d)],
+  } as Filter);
+  if (events.length === 0) return null;
+  const newest = events.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+
+  const fromViewKey = await decodeRosterEvent(newest, viewKey);
+  if (fromViewKey) return fromViewKey;
+  try {
+    return parseRosterPayload(await nip44SelfDecrypt(signer, newest.content));
+  } catch {
+    return null;
+  }
+}
+
+/** True when `event.content` decrypts with the viewKey (authorized + not spam). */
+async function decryptsWithViewKey(event: Event, viewKey: string): Promise<boolean> {
+  try {
+    await decryptWithViewKey(viewKey, event.content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The document tip across authors: roster → author set (restricted) or the
+ * capability room (open) → newest decryptable content event. Returns null when
+ * there is no roster and no readable owner event.
+ */
+async function resolveContentTip(
+  owner: string,
+  d: string,
+  viewKey: string,
+  relays: string[],
+): Promise<Event | null> {
+  const roster = await fetchRoster(owner, d, viewKey);
+  const filter = isOpenRoster(roster)
+    ? ({ kinds: [PAGES_KINDS.document], "#a": [collabRoom(viewKey)] } as Filter)
+    : ({
+        kinds: [PAGES_KINDS.document],
+        authors: authorSet(owner, roster),
+        "#d": [d],
+      } as Filter);
+
+  let candidates: Event[] = [];
+  try {
+    candidates = await nostrRuntime.querySync(relays, filter);
+  } catch {
+    return null;
+  }
+  const readable: Event[] = [];
+  for (const event of candidates) {
+    if (await decryptsWithViewKey(event, viewKey)) readable.push(event);
+  }
+  return selectTip(readable);
 }
 
 // ── Delete (NIP-09) ─────────────────────────────────────
@@ -332,6 +452,138 @@ export async function sharePage(params: SharePageParams): Promise<ShareResult> {
   return generateShareLink(newAddress, viewKeyHex, editKeyHex);
 }
 
+// ── v2 group sharing (multi-writer / realtime) ──────────
+
+export interface GroupShareParams {
+  address: string;
+  /** The current Markdown snapshot to publish under the viewKey. */
+  content: string;
+  mode?: DocMode;
+  /** Initial editor/viewer roster (restricted mode). */
+  members?: DocMember[];
+  /** Reuse an existing viewKey instead of minting one (idempotent re-share). */
+  viewKey?: string;
+}
+
+export interface GroupShareResult extends ShareResult {
+  mode: DocMode;
+  members: DocMember[];
+}
+
+/** d-tag of a `33457:owner:d` address; tolerates colons in the identifier. */
+function splitAddress(address: string): { owner: string; d: string } | null {
+  const parsed = parseRootAddress(address);
+  return parsed ? { owner: parsed.owner, d: parsed.d } : null;
+}
+
+/**
+ * Publish the owner's own version of a group document, encrypted with the shared
+ * viewKey and tagged `["a", room]` so open-mode readers find it without knowing
+ * the owner's key. Signed by the owner's real signer (v2 keeps per-author slots;
+ * only legacy edit-key shares sign with a shared key).
+ */
+export async function publishGroupContent(
+  owner: string,
+  d: string,
+  viewKey: string,
+  content: string,
+): Promise<Event> {
+  const signer = await signerManager.getSigner();
+  if ((await signer.getPublicKey()) !== owner) {
+    throw new Error("Only the document owner can publish the root content");
+  }
+  const signed = await signer.signEvent({
+    kind: PAGES_KINDS.document,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: contentTags(d, viewKey),
+    content: await encryptWithViewKey(viewKey, content),
+  });
+  await nostrRuntime.publish(RELAYS(), signed);
+  return signed;
+}
+
+/**
+ * Write the owner's viewKey-encrypted roster (kind 34579, d = root address).
+ * Owner-only. Strictly supersedes the version it read from so a same-second
+ * rewrite cannot be dropped by a relay's replaceable-slot check.
+ */
+export async function saveRoster(
+  owner: string,
+  d: string,
+  viewKey: string,
+  roster: DocRoster,
+): Promise<void> {
+  const signer = await signerManager.getSigner();
+  if ((await signer.getPublicKey()) !== owner) {
+    throw new Error("Only the document owner can write the roster");
+  }
+  const dTag = rosterDTag(owner, d);
+  const prevEvent = await fetchNewestDocMetadataEvent(dTag);
+  const content = await encryptWithViewKey(viewKey, JSON.stringify(roster));
+  const signed = await signer.signEvent({
+    kind: PAGES_KINDS.docMetadata,
+    created_at: Math.max(Math.floor(Date.now() / 1000), (prevEvent?.created_at ?? 0) + 1),
+    tags: [["d", dTag]],
+    content,
+  });
+  await nostrRuntime.publish(RELAYS(), signed);
+}
+
+/**
+ * Turn the user's own document into a v2 group document: re-publish the owner's
+ * content under a viewKey and write a roster. `restricted` (default) seeds the
+ * editor list; `open` is the capability model (anyone with the link can write).
+ * The address is unchanged — the share link is the root naddr + viewKey.
+ */
+export async function enableGroupSharing(params: GroupShareParams): Promise<GroupShareResult> {
+  const ref = splitAddress(params.address);
+  if (!ref) throw new Error(`Not a valid document address: ${params.address}`);
+  const signer = await signerManager.getSigner();
+  if ((await signer.getPublicKey()) !== ref.owner) {
+    throw new Error("Only the document owner can share this document");
+  }
+
+  const viewKey = params.viewKey ?? generateViewKey().hex;
+  const mode = params.mode ?? "restricted";
+  const members = params.members ?? [];
+
+  await publishGroupContent(ref.owner, ref.d, viewKey, params.content);
+  await saveRoster(ref.owner, ref.d, viewKey, { v: 2, mode, tags: [], members });
+
+  const link = generateShareLink(params.address, viewKey);
+  return { ...link, mode, members };
+}
+
+/** Replace the roster's member list, preserving mode/title/tags. Owner-only. */
+export async function updateRosterMembers(
+  owner: string,
+  d: string,
+  viewKey: string,
+  members: DocMember[],
+  mode?: DocMode,
+): Promise<void> {
+  const current = await fetchRoster(owner, d, viewKey);
+  await saveRoster(owner, d, viewKey, {
+    v: 2,
+    mode: mode ?? current?.mode ?? "restricted",
+    title: current?.title,
+    tags: current?.tags ?? [],
+    members,
+  });
+}
+
+/** Insert or update a member (idempotent by pubkey). */
+export function upsertMember(members: DocMember[], pubkey: string, role: DocMember["role"]): DocMember[] {
+  const next = members.filter((m) => m.pubkey !== pubkey);
+  next.push({ pubkey, role });
+  return next;
+}
+
+/** Remove a member by pubkey. */
+export function removeMember(members: DocMember[], pubkey: string): DocMember[] {
+  return members.filter((m) => m.pubkey !== pubkey);
+}
+
 // ── Shared-with-me docs (kind-34579 metadata entries with a viewKey) ──
 
 /**
@@ -397,22 +649,31 @@ export async function fetchSharedPages(): Promise<PageSummary[]> {
   const entries = await fetchSharedList();
   const out: PageSummary[] = [];
   for (const [address, viewKey, editKey] of entries) {
-    const [, pubkey, dTag] = address.split(":");
-    if (!pubkey || !dTag) continue;
+    const ref = parseRootAddress(address);
+    if (!ref) continue;
+    const { owner, d: dTag } = ref;
     // The owner's own view-only shares keep the owner's address — they already
     // appear under "my pages" (upstream skips own-pubkey events the same way).
-    if (pubkey === userPubkey) continue;
-    const doc = await fetchPage(pubkey, dTag, viewKey);
+    if (owner === userPubkey) continue;
+    const doc = await fetchPage(owner, dTag, viewKey);
     if (!doc) continue;
+    // v2: write access is a roster role (or open mode), not an editKey.
+    let canEdit = !!editKey;
+    if (!canEdit) {
+      const roster = await fetchRoster(owner, dTag, viewKey).catch(() => null);
+      canEdit =
+        isOpenRoster(roster) ||
+        !!roster?.members.some((m) => m.pubkey === userPubkey && m.role === "editor");
+    }
     out.push({
       id: dTag,
-      address,
+      address: rootAddress(owner, dTag),
       title: doc.title,
-      pubkey,
+      pubkey: owner,
       createdAt: doc.createdAt,
       isEncrypted: doc.isEncrypted,
       shared: true,
-      canEdit: !!editKey,
+      canEdit,
       viewKey,
     });
   }

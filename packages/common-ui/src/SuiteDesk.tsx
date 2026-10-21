@@ -196,7 +196,7 @@ export const SuiteDesk = forwardRef<SuiteDeskHandle, SuiteDeskProps>(function Su
       aria-current={app.id === currentId ? 'page' : undefined}
       onClick={(event) => onNavigate?.(app, event)}
     >
-      <span className="fs-desk__icon" aria-hidden="true">
+      <span className="fs-desk__icon" data-mark={app.id} aria-hidden="true">
         {APP_MARKS[app.id]}
       </span>
       {sub ? (

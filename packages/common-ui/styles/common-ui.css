@@ -1,0 +1,362 @@
+/**
+ * The app desk — a small drawer of apps, anchored to the hidden mark in a logo.
+ *
+ * Consumers import this file once:
+ *   import "@formstr/common-ui/styles.css";
+ *
+ * Every selector is namespaced with `fs-desk` so it can drop into MUI, Ant
+ * Design, Tailwind, or plain React without leaking into the host app.
+ */
+
+.fs-desk {
+  --fs-desk-bg: #fffdf9;
+  --fs-desk-ink: #161a18;
+  --fs-desk-muted: #5c6660;
+  --fs-desk-line: rgba(22, 26, 24, 0.12);
+  --fs-desk-line-strong: rgba(22, 26, 24, 0.2);
+  --fs-desk-hover: rgba(22, 26, 24, 0.05);
+  --fs-desk-shadow: 0 24px 70px rgba(16, 18, 17, 0.18), 0 2px 8px rgba(16, 18, 17, 0.08);
+  --fs-desk-radius: 16px;
+  --fs-desk-caret: 50%;
+
+  position: fixed;
+  z-index: 2147483000;
+  width: min(320px, calc(100vw - 24px));
+  background: var(--fs-desk-bg);
+  color: var(--fs-desk-ink);
+  border: 1px solid var(--fs-desk-line-strong);
+  border-radius: var(--fs-desk-radius);
+  box-shadow: var(--fs-desk-shadow);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  outline: none;
+  animation: fs-desk-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top center;
+}
+
+.fs-desk[data-theme='dark'] {
+  --fs-desk-bg: #171a18;
+  --fs-desk-ink: #f2f4f1;
+  --fs-desk-muted: #9aa49e;
+  --fs-desk-line: rgba(242, 244, 241, 0.12);
+  --fs-desk-line-strong: rgba(242, 244, 241, 0.22);
+  --fs-desk-hover: rgba(242, 244, 241, 0.06);
+  --fs-desk-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-color-scheme: dark) {
+  .fs-desk[data-theme='auto'] {
+    --fs-desk-bg: #171a18;
+    --fs-desk-ink: #f2f4f1;
+    --fs-desk-muted: #9aa49e;
+    --fs-desk-line: rgba(242, 244, 241, 0.12);
+    --fs-desk-line-strong: rgba(242, 244, 241, 0.22);
+    --fs-desk-hover: rgba(242, 244, 241, 0.06);
+    --fs-desk-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.fs-desk *,
+.fs-desk *::before,
+.fs-desk *::after {
+  box-sizing: border-box;
+}
+
+.fs-desk__caret {
+  position: absolute;
+  top: -6px;
+  left: var(--fs-desk-caret);
+  width: 11px;
+  height: 11px;
+  background: var(--fs-desk-bg);
+  border-left: 1px solid var(--fs-desk-line-strong);
+  border-top: 1px solid var(--fs-desk-line-strong);
+  border-radius: 2px 0 0 0;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.fs-desk--above .fs-desk__caret {
+  top: auto;
+  bottom: -6px;
+  transform: translateX(-50%) rotate(225deg);
+}
+
+.fs-desk__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 12px 6px;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fs-desk-muted);
+}
+
+.fs-desk__head-mark {
+  color: var(--fs-desk-muted);
+  flex: 0 0 auto;
+}
+
+.fs-desk__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px 8px 10px;
+}
+
+.fs-desk__tile {
+  --fs-desk-ink-local: var(--fs-app-ink, var(--fs-desk-ink));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 9px;
+  border-radius: 10px;
+  color: var(--fs-desk-ink);
+  text-decoration: none;
+  min-width: 0;
+}
+
+.fs-desk__tile:hover {
+  background: var(--fs-desk-hover);
+}
+
+.fs-desk__tile[data-current='true'] {
+  background: color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 28%, transparent);
+}
+
+.fs-desk__tile[data-current='true']::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--fs-desk-ink-local, var(--fs-desk-ink));
+}
+
+.fs-desk__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fs-desk-ink-local, var(--fs-desk-ink));
+  background: color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 20%, transparent);
+  flex: 0 0 auto;
+}
+
+.fs-desk__icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.fs-desk__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fs-desk a:focus-visible,
+.fs-desk button:focus-visible {
+  outline: 2px solid var(--fs-desk-ink-local, var(--fs-desk-ink));
+  outline-offset: 2px;
+}
+
+/* Dark mode ink for the accents. */
+.fs-desk[data-theme='dark'] .fs-desk__tile,
+.fs-desk[data-theme='dark'] .fs-desk__subitem {
+  --fs-desk-ink-local: var(--fs-app-ink-dark, var(--fs-desk-ink));
+}
+
+@media (prefers-color-scheme: dark) {
+  .fs-desk[data-theme='auto'] .fs-desk__tile,
+  .fs-desk[data-theme='auto'] .fs-desk__subitem {
+    --fs-desk-ink-local: var(--fs-app-ink-dark, var(--fs-desk-ink));
+  }
+}
+
+
+/* Community group: one icon that opens Pollerama + Standards underneath. */
+.fs-desk__tile--group {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fs-desk-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.fs-desk__tile--group[data-current='true']::after {
+  display: none;
+}
+
+.fs-desk__chevron {
+  position: absolute;
+  top: 5px;
+  right: 7px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--fs-desk-muted);
+  transition: transform 160ms ease;
+}
+
+.fs-desk__tile--group[aria-expanded='true'] .fs-desk__chevron {
+  transform: rotate(90deg);
+}
+
+.fs-desk__subgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 2px 8px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--fs-desk-line);
+}
+
+.fs-desk__subitem {
+  --fs-desk-ink-local: var(--fs-app-ink, var(--fs-desk-ink));
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border-radius: 9px;
+  color: var(--fs-desk-ink);
+  text-decoration: none;
+  min-width: 0;
+}
+
+.fs-desk__subitem:hover {
+  background: var(--fs-desk-hover);
+}
+
+.fs-desk__subitem[data-current='true'] {
+  background: color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fs-desk-ink-local, var(--fs-desk-ink)) 28%, transparent);
+}
+
+.fs-desk__subitem[data-current='true']::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--fs-desk-ink-local, var(--fs-desk-ink));
+}
+
+.fs-desk__subitem .fs-desk__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.fs-desk__subitem .fs-desk__icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.fs-desk__subtext {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fs-desk__subitem .fs-desk__label {
+  text-align: left;
+  font-size: 11px;
+}
+
+.fs-desk__subtag {
+  font-size: 8px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fs-desk-muted);
+  font-weight: 650;
+}
+
+/* Mobile: the same drawer, as a bottom sheet. */
+@media (max-width: 639px) {
+  .fs-desk {
+    left: 0 !important;
+    right: 0;
+    top: auto !important;
+    bottom: 0;
+    width: auto;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    animation-name: fs-desk-up;
+  }
+
+  .fs-desk__caret {
+    display: none;
+  }
+
+  .fs-desk__grid {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+}
+
+@keyframes fs-desk-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fs-desk-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+/* The hidden marks use this to keep a slow, quiet pulse. */
+@keyframes fs-suite-pulse {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.fs-suite-pulse {
+  animation: fs-suite-pulse 2.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-desk,
+  .fs-desk *,
+  .fs-desk *::before,
+  .fs-desk *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -5,6 +5,7 @@ Shared packages used across Formstr / Nostr ecosystem apps.
 | Package | npm | What it is |
 | --- | --- | --- |
 | `@formstr/signer` | [![npm](https://img.shields.io/npm/v/@formstr/signer)](https://www.npmjs.com/package/@formstr/signer) | Nostr signer with login UI for NIP-07, NIP-46, NIP-49 and NIP-55. |
+| `@formstr/common-ui` | [![npm](https://img.shields.io/npm/v/@formstr/common-ui)](https://www.npmjs.com/package/@formstr/common-ui) | Shared UI for the Formstr suite — the app desk, suite marks, and future common components. |
 | `@formstr/local-relay` | [![npm](https://img.shields.io/npm/v/@formstr/local-relay)](https://www.npmjs.com/package/@formstr/local-relay) | A local Nostr relay for development and tests. |
 | `@formstr/calendar-sdk` | [![npm](https://img.shields.io/npm/v/@formstr/calendar-sdk)](https://www.npmjs.com/package/@formstr/calendar-sdk) | Headless SDK for the NIP-52 calendar protocol. |
 | `@formstr/kanban-sdk` | [![npm](https://img.shields.io/npm/v/@formstr/kanban-sdk)](https://www.npmjs.com/package/@formstr/kanban-sdk) | Headless SDK for Nostr Kanban boards (public + NIP-100E private). |
@@ -17,6 +18,7 @@ Shared packages used across Formstr / Nostr ecosystem apps.
 
 ```
 packages/
+  common-ui/         @formstr/common-ui
   signer/            @formstr/signer
   local-relay/       @formstr/local-relay
   calendar-sdk/      @formstr/calendar-sdk

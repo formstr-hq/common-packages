@@ -113,6 +113,55 @@ function buildKanbanTools(): ToolDef[] {
   );
 
   server.registerTool(
+    "list_kanban_comments",
+    {
+      description:
+        "List the comments on a card (pass `cardId`) or on the whole board (omit it), oldest " +
+        "first. Private boards only. Each comment carries its id, card, author pubkey, " +
+        "timestamp and `replyTo` parent — an agent polls this to notice new instructions on " +
+        "cards assigned to it.",
+      inputSchema: {
+        board: z.string().describe("board coordinate, kind:pubkey:d"),
+        cardId: z.string().optional().describe("card id; omit for every comment on the board"),
+      },
+    },
+    async ({ board: coordinate, cardId }: { board: string; cardId?: string }) => {
+      const board = await loadBoard(coordinate);
+      if (!board) return fail(`No kanban board at ${coordinate}.`, "NOT_FOUND");
+      if (!board.isPrivate) {
+        return fail(
+          "Comments are currently supported on private boards only — public boards have none to read.",
+          "BAD_INPUT",
+        );
+      }
+      const comments = (await kanban.listComments(board, cardId)).map((c) => ({
+        id: c.id,
+        cardId: c.cardId,
+        author: c.authorPubkey,
+        content: c.content,
+        replyTo: c.replyTo,
+        mentions: c.mentions,
+        createdAt: c.createdAt,
+      }));
+      return ok(
+        comments.length
+          ? `${comments.length} comment(s):\n\n${table(
+              comments.map((c) => ({
+                id: c.id,
+                card: c.cardId,
+                author: c.author,
+                at: new Date(c.createdAt * 1000).toISOString(),
+                content: c.content,
+              })),
+              ["id", "card", "author", "at", "content"],
+            )}`
+          : "No comments.",
+        { comments },
+      );
+    },
+  );
+
+  server.registerTool(
     "list_kanban_inbox",
     {
       description:

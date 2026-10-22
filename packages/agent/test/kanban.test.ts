@@ -40,6 +40,7 @@ const kanban = vi.hoisted(() => ({
   updateCard: vi.fn(),
   moveCard: vi.fn(),
   addComment: vi.fn(),
+  listComments: vi.fn(),
   deleteCard: vi.fn(),
   deleteBoard: vi.fn(),
   columnFor: vi.fn(),
@@ -85,8 +86,8 @@ beforeEach(() => {
 });
 
 describe("kanban tools", () => {
-  it("exposes 16 tools, 9 of them gated", () => {
-    expect(kanbanTools).toHaveLength(16);
+  it("exposes 17 tools, 9 of them gated", () => {
+    expect(kanbanTools).toHaveLength(17);
     expect(kanbanTools.filter((t) => t.write)).toHaveLength(9);
   });
 
@@ -133,6 +134,29 @@ describe("kanban tools", () => {
     expect(res.ok).toBe(true);
     expect(res.data.assignee).toBe(ME);
     expect(res.data.cards).toHaveLength(1);
+  });
+
+  it("list_kanban_comments returns a card's comments from a private board", async () => {
+    kanban.resolveBoard.mockResolvedValue({ ...board, isPrivate: true });
+    kanban.listComments.mockResolvedValue([
+      { id: "m1", cardId: "c1", authorPubkey: ME, content: "hi", mentions: [], createdAt: 100 },
+    ]);
+    const res = await register(ctx).get("list_kanban_comments")!.handler({ board: BOARD, cardId: "c1" });
+    expect(res.ok).toBe(true);
+    expect(kanban.listComments).toHaveBeenCalledWith(expect.anything(), "c1");
+    expect(res.data.comments).toEqual([
+      expect.objectContaining({ id: "m1", cardId: "c1", author: ME, content: "hi" }),
+    ]);
+  });
+
+  it("list_kanban_comments refuses a public board and an unknown board", async () => {
+    kanban.resolveBoard.mockResolvedValue(board);
+    const pub = await register(ctx).get("list_kanban_comments")!.handler({ board: BOARD });
+    expect(pub.ok).toBe(false);
+    expect(kanban.listComments).not.toHaveBeenCalled();
+    kanban.resolveBoard.mockResolvedValue(null);
+    const none = await register(ctx).get("list_kanban_comments")!.handler({ board: BOARD });
+    expect(none.ok).toBe(false);
   });
 
   it("move_kanban_card refuses without confirm:true", async () => {

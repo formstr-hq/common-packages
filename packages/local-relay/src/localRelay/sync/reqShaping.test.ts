@@ -83,9 +83,10 @@ describe("classifyPushback", () => {
   it.each([
     ["rate-limited: too many messages, retry in 2s", { type: "rate-limit", retryMs: 2000 }],
     ["ERROR: read bandwidth budget exhausted (1048570 bytes/min per IP) (retry in 30ms)", { type: "rate-limit", retryMs: 30 }],
-    ["ERROR: too many concurrent REQs", { type: "too-many-subs" }],
-    ["Subscription rejected: Too many subscriptions: Number of subscriptions must be less than or equal to 20", { type: "too-many-subs" }],
-    ["Subscription error: Maximum concurrent subscription count reached", { type: "too-many-subs" }],
+    ["ERROR: too many concurrent REQs", { type: "too-many-subs", concurrent: true }],
+    ["Subscription rejected: Too many subscriptions: Number of subscriptions must be less than or equal to 10", { type: "too-many-subs", limit: 10 }],
+    ["blocked: Blocked by too many concurrent REQs", { type: "too-many-subs", concurrent: true }],
+    ["Subscription error: Maximum concurrent subscription count reached", { type: "too-many-subs", concurrent: true }],
     ["ERROR: bad req: error parsing authors: total filter items too large", { type: "too-large" }],
     ["message too large (324687 > 262144)", { type: "too-large" }],
     ["auth-required: please authenticate before sending REQs", { type: "auth-required" }],

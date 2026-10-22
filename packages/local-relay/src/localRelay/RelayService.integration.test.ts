@@ -452,14 +452,14 @@ describe("RelayService — growing interests", () => {
     await settle();
     const sock = f.last("wss://u1");
     sock.open();
-    for (let n = 2; n <= 6; n++) {
+    for (let n = 2; n <= 4; n++) {
       h.update(reactions(n));
       await settle();
     }
-    // 1 base + 4 deltas, then the 5th growth reopens everything as one REQ.
+    // 1 base + 2 deltas, then the 3rd growth reopens everything as one REQ.
     const last = reqOn(sock).at(-1)!;
-    expect(last[2]["#e"]).toHaveLength(6);
-    expect(closeOn(sock)).toHaveLength(5);
+    expect(last[2]["#e"]).toHaveLength(4);
+    expect(closeOn(sock)).toHaveLength(3);
   });
 
   it("reopens normally when an update changes the filter's shape", async () => {

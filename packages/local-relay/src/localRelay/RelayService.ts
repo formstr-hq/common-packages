@@ -21,6 +21,7 @@ import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
 import type { RelayConnectionOptions } from "./sync/RelayConnection";
 import { combineFilters, mergeInfo } from "./sync/reqShaping";
+import { normalizeRelayUrl, normalizeRelays } from "./sync/relayUrl";
 import type { RelayHealth } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
 import { DeliveryOutbox } from "./sync/DeliveryOutbox";
@@ -70,7 +71,10 @@ const ONLINE_WINDOW_MS = 30_000;
  * Extra upstream parts an interest may grow before it is consolidated back
  * into a single subscription (one close + reopen with the full filter).
  */
-const MAX_INTEREST_PARTS = 5;
+// Every part is its own long-lived subscription on each relay, so this stays
+// small: with several growing interests (reactions, zaps, reposts…) a larger
+// value filled relays' subscription caps and forced constant slot rotation.
+const MAX_INTEREST_PARTS = 3;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -208,28 +212,31 @@ export class RelayService {
     this.db = new EventDB(opts.now);
     this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory, opts.relayLimits);
     this.host = new WorkerHost(opts.channel, this.db, {
-      onSetUserRelays: (relays) => {
+      onSetUserRelays: (input) => {
+        const relays = normalizeRelays(input);
         const changed = !sameRelaySet(this.userRelays, relays);
         this.userRelays = relays;
         this.onRelaySetChanged(changed);
       },
-      onSetSearchRelays: (relays) => {
+      onSetSearchRelays: (input) => {
+        const relays = normalizeRelays(input);
         const changed = !sameRelaySet(this.searchRelays, relays);
         this.searchRelays = relays;
         this.onRelaySetChanged(changed);
       },
-      onSetDmRelays: (relays) => {
+      onSetDmRelays: (input) => {
+        const relays = normalizeRelays(input);
         const changed = !sameRelaySet(this.dmRelays, relays);
         this.dmRelays = relays;
         this.onRelaySetChanged(changed);
       },
-      onAddGossipRelay: (url) => this.addGossipRelay(url),
-      onRemoveGossipRelay: (url) => this.removeGossipRelay(url),
+      onAddGossipRelay: (url) => this.addGossipRelay(normalizeRelayUrl(url)),
+      onRemoveGossipRelay: (url) => this.removeGossipRelay(normalizeRelayUrl(url)),
       onObserve: (subId, filters, sync, relays) =>
-        this.observe(subId, filters, sync, relays),
+        this.observe(subId, filters, sync, relays && normalizeRelays(relays)),
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event, relays) =>
-        this.publishUpstream(pubId, event, relays),
+        this.publishUpstream(pubId, event, relays && normalizeRelays(relays)),
       onRelayHealth: (reqId) =>
         this.host.postRelayHealth(reqId, this.relayHealth()),
       onSeenOn: (reqId, eventId) =>
@@ -692,7 +699,7 @@ export class RelayService {
     if (!event) return [];
     const out: string[] = [];
     for (const tag of event.tags) {
-      if (tag[0] === "relay" && tag[1]) out.push(tag[1]);
+      if (tag[0] === "relay" && tag[1]) out.push(normalizeRelayUrl(tag[1]));
     }
     return out;
   }
@@ -857,7 +864,7 @@ export class RelayService {
     for (const tag of event.tags) {
       if (tag[0] !== "r" || !tag[1]) continue;
       // An unmarked "r" tag is both read and write.
-      if (!tag[2] || tag[2] === dir) out.push(tag[1]);
+      if (!tag[2] || tag[2] === dir) out.push(normalizeRelayUrl(tag[1]));
     }
     return out;
   }

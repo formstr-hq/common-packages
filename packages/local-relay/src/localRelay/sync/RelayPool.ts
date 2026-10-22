@@ -18,6 +18,7 @@
 import type { Event, Filter } from "../core/types";
 import type { EventTemplate } from "nostr-tools";
 import { SocketFactory, webSocketFactory } from "./Socket";
+import { normalizeRelays } from "./relayUrl";
 import {
   RelayConnection,
   RelayConnectionHandlers,
@@ -56,6 +57,8 @@ export interface RelayHealth {
   gossip: boolean;
   /** REQs currently open on the socket. */
   openSubscriptions?: number;
+  /** Open REQs still loading (no EOSE yet). */
+  inFlightSubscriptions?: number;
   /** REQs waiting for a free slot. */
   queuedSubscriptions?: number;
   /** Current cap on open REQs (lowered when the relay pushed back). */
@@ -146,7 +149,7 @@ export class RelayPool {
     options: PoolSubscribeOptions = {}
   ): string {
     const subId = `s${this.subCounter++}`;
-    const targets = Array.from(new Set(relays));
+    const targets = normalizeRelays(relays);
     const sub: LogicalSub = {
       relays: targets,
       handlers,
@@ -206,7 +209,7 @@ export class RelayPool {
    * once — the source of truth for the publish-diagnostics UI.
    */
   publish(relays: string[], event: Event, options: PublishOptions = {}): void {
-    const targets = Array.from(new Set(relays));
+    const targets = normalizeRelays(relays);
     for (const url of targets) this.connection(url).publish(event);
 
     if (!options.onResult || targets.length === 0) {
@@ -232,7 +235,7 @@ export class RelayPool {
 
   /** Live connection state for a set of relays (health view). */
   relayHealth(relays?: string[]): RelayHealth[] {
-    const urls = relays && relays.length ? Array.from(new Set(relays)) : Array.from(this.connections.keys());
+    const urls = relays && relays.length ? normalizeRelays(relays) : Array.from(this.connections.keys());
     return urls.map((relay) => {
       const c = this.connections.get(relay);
       const stats = c?.stats;
@@ -244,6 +247,7 @@ export class RelayPool {
         gossip: false, // RelayService tags discovered relays; the pool can't.
         ...(stats && {
           openSubscriptions: stats.open,
+          inFlightSubscriptions: stats.inFlight,
           queuedSubscriptions: stats.queued,
           subscriptionCap: stats.cap,
           throttledUntil: stats.pausedUntil,
@@ -254,7 +258,7 @@ export class RelayPool {
 
   /** Drop and forget connections so the next use builds a fresh socket. */
   resetRelays(relays: string[]): void {
-    for (const url of relays) {
+    for (const url of normalizeRelays(relays)) {
       const c = this.connections.get(url);
       if (!c) continue;
       c.destroy();

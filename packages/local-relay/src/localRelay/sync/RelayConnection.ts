@@ -52,14 +52,21 @@ export interface RelayConnectionOptions {
   /**
    * Max REQs open on this socket at once; the rest wait in a queue (where
    * compatible lookups merge). Lowered automatically when the relay says
-   * "too many subscriptions". Default 20 — common relay limits are 20–50, and
-   * long-lived feed/DM/notification subs need room beside one-off lookups.
+   * "too many subscriptions" (to the relay's stated number when it gives one).
+   * Default 30.
    */
   maxSubscriptions?: number;
-  /** Sustained REQ rate per socket (token bucket refill). Default 5/s. */
+  /**
+   * Max REQs sent but not yet finished (no EOSE) at once. This is what most
+   * "too many concurrent REQs" relays limit — some block the connection outright
+   * when a burst exceeds it. Lowered automatically (to 4 at least) when a relay
+   * says "too many concurrent REQs". Default 24.
+   */
+  maxInFlight?: number;
+  /** Sustained REQ rate per socket (token bucket refill). Default 20/s. */
   reqsPerSecond?: number;
   /**
-   * Token bucket size: REQs that may go out back-to-back. Default 20, so a cold
+   * Token bucket size: REQs that may go out back-to-back. Default 40, so a cold
    * start (every feed + profile lookup at once) isn't throttled from the first
    * second; relays that object get paced down by the pushback handling.
    */
@@ -112,14 +119,36 @@ interface LogicalSub {
 const MAX_PUSHBACK_RETRIES = 5;
 /**
  * A caught-up REQ must have been open this long before it can be rotated out to
- * free a slot, so rotation can't turn into constant CLOSE/REQ churn.
+ * free a slot. Bounds rotation churn (and back-and-forth swapping) to one per
+ * slot per this interval.
  */
-const ROTATE_MIN_OPEN_MS = 15_000;
+const ROTATE_MIN_OPEN_MS = 20_000;
+/**
+ * During a connection's first moments (a cold start: every feed, profile and
+ * list lookup at once) rotation is allowed after only this long, so first paint
+ * isn't stuck behind long-lived subs; afterwards ROTATE_MIN_OPEN_MS applies.
+ */
+const ROTATE_COLD_MIN_OPEN_MS = 5_000;
+const COLD_START_MS = 30_000;
+/**
+ * When the one waiting is itself a rotated sub (more long-lived subs than slots),
+ * they share slots on this slower cycle instead of swapping every few seconds.
+ */
+const ROTATE_SHARE_MS = 30_000;
+/** Floor for the adaptive REQ pacing after rate-limits. */
+const MIN_REQS_PER_SECOND = 2;
+/** Floor for the adaptive loading-REQ limit. */
+const MIN_IN_FLIGHT = 4;
+/** A REQ with no EOSE after this long stops counting as in flight. */
+const IN_FLIGHT_TIMEOUT_MS = 8_000;
 /** Overlap when resuming with `since`, for events that arrive slightly late. */
 const RESUME_SLACK_S = 60;
-/** Floor and ceiling for a rate-limit pause. */
+/**
+ * Floor and ceiling for a rate-limit pause. Relays typically ask for 1–2s; a
+ * long pause starves every feed that relay serves, so escalation stays modest.
+ */
 const MIN_COOLDOWN_MS = 1000;
-const MAX_COOLDOWN_MS = 60_000;
+const MAX_COOLDOWN_MS = 15_000;
 /** Rate-limit strikes are forgotten after this long without a new one. */
 const STRIKE_DECAY_MS = 30_000;
 
@@ -155,6 +184,10 @@ export class RelayConnection {
   private wireCounter = 0;
   /** Current cap on open REQs (starts at maxSubscriptions, lowered on pushback). */
   private subCap: number;
+  /** Current cap on loading REQs (starts at maxInFlight, lowered on pushback). */
+  private inFlightCap: number;
+  /** Current REQ pacing (starts at reqsPerSecond, halved on rate-limits). */
+  private reqRate: number;
   private tokens: number;
   private tokensAt: number;
   /** No REQs go out before this time (relay asked us to slow down). */
@@ -200,23 +233,37 @@ export class RelayConnection {
       autoReconnect: options.autoReconnect ?? true,
       baseBackoffMs: options.baseBackoffMs ?? 1000,
       maxBackoffMs: options.maxBackoffMs ?? 30_000,
-      maxSubscriptions: options.maxSubscriptions ?? 20,
-      reqsPerSecond: options.reqsPerSecond ?? 5,
-      reqBurst: options.reqBurst ?? 20,
+      maxSubscriptions: options.maxSubscriptions ?? 30,
+      maxInFlight: options.maxInFlight ?? 24,
+      reqsPerSecond: options.reqsPerSecond ?? 20,
+      reqBurst: options.reqBurst ?? 40,
       maxFilterItems: options.maxFilterItems ?? 300,
       maxReqBytes: options.maxReqBytes ?? 60_000,
       stableConnectionMs: options.stableConnectionMs ?? 10_000,
       now: options.now ?? (() => Date.now()),
     };
     this.subCap = this.opts.maxSubscriptions;
+    this.inFlightCap = this.opts.maxInFlight;
+    this.reqRate = this.opts.reqsPerSecond;
     this.tokens = this.opts.reqBurst;
     this.tokensAt = this.opts.now();
   }
 
   /** Queue/throttle state for diagnostics. */
-  get stats(): { open: number; queued: number; cap: number; pausedUntil: number } {
+  get stats(): {
+    open: number;
+    inFlight: number;
+    inFlightCap: number;
+    reqRate: number;
+    queued: number;
+    cap: number;
+    pausedUntil: number;
+  } {
     return {
       open: this.openCount(),
+      inFlight: this.inFlightCount(this.opts.now()),
+      inFlightCap: this.inFlightCap,
+      reqRate: this.reqRate,
       queued: this.queue.length,
       cap: this.subCap,
       pausedUntil: this.pausedUntil,
@@ -568,6 +615,25 @@ export class RelayConnection {
     else this.queue.splice(firstLow, 0, wire.id);
   }
 
+  /** REQs still loading (sent, no EOSE yet, not given up on). */
+  private inFlightCount(now: number): number {
+    let n = 0;
+    for (const w of this.wires.values())
+      if (w.state === "open" && w.eosedAt === null && now - w.openedAt < IN_FLIGHT_TIMEOUT_MS) n++;
+    return n;
+  }
+
+  /** When the oldest in-flight REQ times out of the in-flight count. */
+  private nextInFlightExpiry(): number | null {
+    let at: number | null = null;
+    for (const w of this.wires.values()) {
+      if (w.state !== "open" || w.eosedAt !== null) continue;
+      const t = w.openedAt + IN_FLIGHT_TIMEOUT_MS;
+      if (at === null || t < at) at = t;
+    }
+    return at;
+  }
+
   private openCount(): number {
     let n = 0;
     for (const w of this.wires.values()) if (w.state === "open") n++;
@@ -594,7 +660,7 @@ export class RelayConnection {
     this.tokensAt = now;
     this.tokens = Math.min(
       this.opts.reqBurst,
-      this.tokens + (elapsed / 1000) * this.opts.reqsPerSecond,
+      this.tokens + (elapsed / 1000) * this.reqRate,
     );
   }
 
@@ -615,8 +681,14 @@ export class RelayConnection {
         if (next !== null) this.schedulePump(next - now);
         return;
       }
+      if (this.inFlightCount(now) >= this.inFlightCap) {
+        // An EOSE re-pumps; the timeout covers a relay that never answers.
+        const expiry = this.nextInFlightExpiry();
+        if (expiry !== null) this.schedulePump(expiry - now);
+        return;
+      }
       if (this.tokens < 1) {
-        return this.schedulePump(((1 - this.tokens) / this.opts.reqsPerSecond) * 1000);
+        return this.schedulePump(((1 - this.tokens) / this.reqRate) * 1000);
       }
       const wire = this.wires.get(this.queue[0])!;
       this.unqueue(wire);
@@ -649,33 +721,43 @@ export class RelayConnection {
     return out.length ? out : null;
   }
 
+  /** How long a caught-up REQ must have been open to give its slot to `head`. */
+  private rotateAfterMs(head: WireReq | undefined): number {
+    if (head && head.resumeSince !== null) return ROTATE_SHARE_MS;
+    const cold = this.openedAt > 0 && this.opts.now() - this.openedAt < COLD_START_MS;
+    return cold ? ROTATE_COLD_MIN_OPEN_MS : ROTATE_MIN_OPEN_MS;
+  }
+
   /** Is this open REQ caught up (EOSE seen) and old enough to give up its slot? */
-  private rotatable(wire: WireReq, now: number): boolean {
+  private rotatable(wire: WireReq, now: number, minOpenMs: number): boolean {
     return (
       wire.state === "open" &&
       !wire.low &&
       wire.eosedAt !== null &&
-      now - wire.openedAt >= ROTATE_MIN_OPEN_MS
+      now - wire.openedAt >= minOpenMs
     );
   }
 
   /**
    * Free a slot for the queue head by closing the longest-open caught-up REQ;
-   * it re-queues at the back and resumes with `since`. Never rotates to make
-   * room for another rotated REQ (that would just swap them back and forth).
+   * it re-queues behind what's already waiting and resumes with `since`.
+   * This also runs when the head is itself a rotated REQ — refusing then would
+   * stall the relay's whole queue once every slot holds a long-lived sub — but
+   * then only on the slower ROTATE_SHARE_MS cycle, so oversubscribed long-lived
+   * subs take turns instead of churning.
    */
   private rotateOne(now: number): boolean {
-    const head = this.wires.get(this.queue[0]);
-    if (!head || head.resumeSince !== null) return false;
+    if (!this.queue.length) return false;
+    const minOpen = this.rotateAfterMs(this.wires.get(this.queue[0]));
     let victim: WireReq | null = null;
     for (const w of this.wires.values()) {
-      if (this.rotatable(w, now) && (!victim || w.openedAt < victim.openedAt)) victim = w;
+      if (this.rotatable(w, now, minOpen) && (!victim || w.openedAt < victim.openedAt)) victim = w;
     }
     if (!victim) return false;
     this.write(["CLOSE", victim.id]);
     victim.state = "queued";
     victim.resumeSince = Math.floor(now / 1000) - RESUME_SLACK_S;
-    this.queue.push(victim.id);
+    this.enqueueWire(victim);
     return true;
   }
 
@@ -684,7 +766,7 @@ export class RelayConnection {
     let at: number | null = null;
     for (const w of this.wires.values()) {
       if (w.state !== "open" || w.low || w.eosedAt === null) continue;
-      const t = w.openedAt + ROTATE_MIN_OPEN_MS;
+      const t = w.openedAt + this.rotateAfterMs(this.wires.get(this.queue[0]));
       if (at === null || t < at) at = t;
     }
     return at;
@@ -752,13 +834,37 @@ export class RelayConnection {
     return false;
   }
 
+  /**
+   * React to "too many": a stated number becomes the cap; otherwise back off
+   * just below the current level — the loading-REQ limit for the "concurrent"
+   * wording, the open-subscription cap otherwise.
+   */
+  private applySubLimit(push: { limit?: number; concurrent?: boolean }): void {
+    const now = this.opts.now();
+    // A stated limit keeps one in reserve: a CLOSE and the REQ replacing it can
+    // race on the relay's side, which at exactly the limit is a rejection.
+    const stated = push.limit !== undefined ? Math.max(1, push.limit - 1) : undefined;
+    if (push.concurrent) {
+      const current = stated ?? this.inFlightCount(now) - 1;
+      this.inFlightCap = Math.max(MIN_IN_FLIGHT, Math.min(this.inFlightCap, current));
+    } else {
+      const current = stated ?? this.openCount() - 1;
+      this.subCap = Math.max(1, Math.min(this.subCap, current));
+    }
+  }
+
+  /** A relay said "too many messages": pace this socket slower from now on. */
+  private slowDown(): void {
+    this.reqRate = Math.max(MIN_REQS_PER_SECOND, this.reqRate / 2);
+  }
+
   /** Pause REQs to this relay, escalating on repeated pushback. */
   private cooldown(retryMs?: number): void {
     const now = this.opts.now();
     if (now - this.lastStrikeAt > STRIKE_DECAY_MS) this.strikes = 0;
     this.strikes++;
     this.lastStrikeAt = now;
-    const escalated = MIN_COOLDOWN_MS * 2 ** (this.strikes - 1);
+    const escalated = MIN_COOLDOWN_MS * 1.5 ** (this.strikes - 1);
     const wait = Math.min(MAX_COOLDOWN_MS, Math.max(MIN_COOLDOWN_MS, retryMs ?? 0, escalated));
     this.pausedUntil = Math.max(this.pausedUntil, now + wait);
   }
@@ -815,11 +921,12 @@ export class RelayConnection {
       wire.retries++;
       this.queue.unshift(wire.id);
       this.cooldown(push.retryMs);
+      if (!/bandwidth|bytes/i.test(message)) this.slowDown();
     } else if (push.type === "too-many-subs" && retryable) {
       wire.state = "queued";
       wire.retries++;
       this.queue.unshift(wire.id);
-      this.subCap = Math.max(1, this.openCount());
+      this.applySubLimit(push);
       this.cooldown();
     } else if (push.type === "too-large" && retryable && this.splitInPlace(wire)) {
       // Replaced by two smaller queued REQs.
@@ -843,8 +950,11 @@ export class RelayConnection {
     const retryable = !!last && last.state === "open" && last.retries < MAX_PUSHBACK_RETRIES;
     if (push.type === "rate-limit") {
       this.cooldown(push.retryMs);
+      // Message-rate limits slow our pacing; a bandwidth budget (bytes we
+      // download) isn't helped by sending fewer REQs per second.
+      if (!/bandwidth|bytes/i.test(message)) this.slowDown();
     } else if (push.type === "too-many-subs") {
-      this.subCap = Math.max(1, this.openCount() - 1);
+      this.applySubLimit(push);
       if (retryable) this.requeue(last!);
       this.cooldown();
     } else if (push.type === "too-large" && retryable) {

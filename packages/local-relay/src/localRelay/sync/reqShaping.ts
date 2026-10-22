@@ -167,8 +167,12 @@ export function splitFilters(
 export type Pushback =
   /** Slow down: pause this relay (optionally for the relay's stated time). */
   | { type: "rate-limit"; retryMs?: number }
-  /** Too many open subscriptions on this socket. */
-  | { type: "too-many-subs" }
+  /**
+   * Too many subscriptions (with the relay's stated max, if given). `concurrent`
+   * marks the "too many concurrent REQs" family, which limits REQs still loading
+   * rather than total open subscriptions.
+   */
+  | { type: "too-many-subs"; limit?: number; concurrent?: boolean }
   /** The REQ was too large to accept. */
   | { type: "too-large" }
   | { type: "auth-required" }
@@ -201,8 +205,17 @@ export function classifyPushback(message: string): Pushback {
     /too many (subscriptions|concurrent|open|reqs?\b)|maximum concurrent|max(imum)? (number of )?subscriptions|subscription (limit|count)/.test(
       m,
     )
-  )
-    return { type: "too-many-subs" };
+  ) {
+    // "…must be less than or equal to 10", "max subscriptions: 20", "limit of 32"
+    const n = /(?:less than or equal to|at most|max(?:imum)?(?: number of)?(?: subscriptions)?(?: is)?:?|limit(?: of| is)?:?)\s*(\d+)/i.exec(message);
+    const limit = n ? parseInt(n[1], 10) : undefined;
+    const concurrent = /concurrent/.test(m);
+    return {
+      type: "too-many-subs",
+      ...(limit && limit > 0 ? { limit } : {}),
+      ...(concurrent ? { concurrent } : {}),
+    };
+  }
   if (/too large|too big|too long|items too large|exceeds? (the )?(max|limit)/.test(m))
     return { type: "too-large" };
   if (

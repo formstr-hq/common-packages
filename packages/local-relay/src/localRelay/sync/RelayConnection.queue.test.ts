@@ -48,6 +48,51 @@ describe("RelayConnection queue: subscription cap", () => {
   });
 });
 
+describe("RelayConnection queue: in-flight limit", () => {
+  it("keeps at most maxInFlight REQs loading, sending the next as each finishes", () => {
+    const { f, conn, reqs } = setup({ maxInFlight: 2, maxSubscriptions: 10 });
+    for (let i = 0; i < 4; i++) conn.req(`s${i}`, [{ kinds: [i], limit: 10 }]);
+    f.last(URL).open();
+    expect(reqs().map((m) => m[1])).toEqual(["s0", "s1"]);
+    f.last(URL).emit(["EOSE", "s0"]); // s0 stays open (live) but is no longer loading
+    expect(reqs().map((m) => m[1])).toEqual(["s0", "s1", "s2"]);
+  });
+
+  it("stops counting a REQ the relay never answers after a timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, conn, reqs, advance } = setup({ maxInFlight: 1 });
+      conn.req("silent", [{ kinds: [1], limit: 10 }]);
+      conn.req("next", [{ kinds: [2], limit: 10 }]);
+      f.last(URL).open();
+      expect(reqs().map((m) => m[1])).toEqual(["silent"]);
+      advance(8_000);
+      vi.advanceTimersByTime(8_000);
+      expect(reqs().map((m) => m[1])).toEqual(["silent", "next"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adopts the subscription limit a relay states", () => {
+    const { f, conn } = setup({ maxSubscriptions: 30, maxInFlight: 30 });
+    for (let i = 0; i < 12; i++) conn.req(`s${i}`, [{ kinds: [i], limit: 10 }]);
+    f.last(URL).open();
+    f.last(URL).emit(["NOTICE", "Subscription rejected: Too many subscriptions: Number of subscriptions must be less than or equal to 10"]);
+    expect(conn.stats.cap).toBe(9); // one in reserve below the stated 10
+  });
+
+  it("halves REQ pacing when a relay says it's getting too many messages", () => {
+    const { f, conn } = setup({ reqsPerSecond: 20 });
+    conn.req("s", [{ kinds: [1], limit: 1 }]);
+    f.last(URL).open();
+    f.last(URL).emit(["NOTICE", "rate-limited: too many messages, retry in 1s"]);
+    expect(conn.stats.reqRate).toBe(10);
+    f.last(URL).emit(["NOTICE", "ERROR: read bandwidth budget exhausted (retry in 30ms)"]);
+    expect(conn.stats.reqRate).toBe(10); // bandwidth limits don't change pacing
+  });
+});
+
 describe("RelayConnection queue: priority", () => {
   it("sends app requests ahead of queued background (low) ones", () => {
     const { f, conn, reqs } = setup({ maxSubscriptions: 1 });
@@ -185,13 +230,23 @@ describe("RelayConnection queue: relay pushback", () => {
     }
   });
 
+  it("lowers the loading-REQ limit on a 'too many concurrent REQs' NOTICE", () => {
+    const { f, conn } = setup({ maxSubscriptions: 30, maxInFlight: 16 });
+    for (let i = 0; i < 10; i++) conn.req(`s${i}`, [{ kinds: [i], limit: 10 }]);
+    f.last(URL).open();
+    f.last(URL).emit(["NOTICE", "ERROR: too many concurrent REQs"]);
+    expect(conn.stats.inFlightCap).toBe(9);
+    expect(conn.stats.cap).toBe(30); // total open cap untouched
+    expect(f.last(URL).sent).toContainEqual(["CLOSE", "s9"]);
+  });
+
   it("lowers the cap and re-queues the last REQ on a 'too many subscriptions' NOTICE", () => {
     vi.useFakeTimers();
     try {
       const { f, conn, reqs, advance } = setup({ maxSubscriptions: 10 });
       for (let i = 0; i < 4; i++) conn.req(`s${i}`, [{ kinds: [i], limit: 10 }]);
       f.last(URL).open();
-      f.last(URL).emit(["NOTICE", "ERROR: too many concurrent REQs"]);
+      f.last(URL).emit(["NOTICE", "Too many subscriptions"]);
       expect(conn.stats.cap).toBe(3);
       expect(f.last(URL).sent).toContainEqual(["CLOSE", "s3"]);
       advance(5000);
@@ -281,7 +336,7 @@ describe("RelayConnection queue: rotating caught-up subscriptions", () => {
       conn.req("live", [{ kinds: [1], authors: [pk(1)] }]);
       f.last(URL).open();
       f.last(URL).emit(["EOSE", "live"]);
-      advance(16_000);
+      advance(6_000);
 
       conn.req("lookup", [{ ids: [pk(9)] }]);
       expect(f.last(URL).sent).toContainEqual(["CLOSE", "live"]);
@@ -292,7 +347,7 @@ describe("RelayConnection queue: rotating caught-up subscriptions", () => {
       conn.close("lookup");
       const resumed = reqs().at(-1)!;
       expect(resumed[1]).toBe("live");
-      expect(resumed[2].since).toBe(Math.floor((T0 + 16_000) / 1000) - 60);
+      expect(resumed[2].since).toBe(Math.floor((T0 + 6_000) / 1000) - 60);
       expect(eoses.filter((s) => s === "live")).toHaveLength(1); // no second EOSE to the app
     } finally {
       vi.useRealTimers();
@@ -324,7 +379,7 @@ describe("RelayConnection queue: rotating caught-up subscriptions", () => {
       conn.req("page", [{ kinds: [1], authors: [pk(1)], until: 5, limit: 20 }]);
       f.last(URL).open();
       f.last(URL).emit(["EOSE", "page"]);
-      advance(16_000);
+      advance(6_000);
       conn.req("lookup", [{ ids: [pk(9)] }]);
       f.last(URL).emit(["EOSE", "lookup"]);
       conn.close("lookup");
@@ -332,6 +387,34 @@ describe("RelayConnection queue: rotating caught-up subscriptions", () => {
       // never re-sent (nothing new can match `until: 5`).
       expect(reqs().filter((m) => m[1] === "page")).toHaveLength(1);
       expect(conn.stats.open).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never stalls when the next in line is itself a rotated sub", () => {
+    vi.useFakeTimers();
+    try {
+      const { f, conn, reqs, advance } = setup({ maxSubscriptions: 2 });
+      advance(T0);
+      conn.req("a", [{ kinds: [1], authors: [pk(1)] }]);
+      conn.req("b", [{ kinds: [2], authors: [pk(2)] }]);
+      f.last(URL).open();
+      f.last(URL).emit(["EOSE", "a"]);
+      f.last(URL).emit(["EOSE", "b"]);
+      advance(6_000);
+      conn.req("x", [{ kinds: [7], "#e": [pk(8)] }]); // a new request rotates a out
+      f.last(URL).emit(["EOSE", "x"]);
+      // Slots: b, x — both long-lived and caught up. Next in line: rotated a.
+      advance(6_000);
+      vi.advanceTimersByTime(6_000);
+      // A rotated sub only displaces one open 30s+ — no 5-second swapping…
+      expect(reqs().filter((m) => m[1] === "a")).toHaveLength(1);
+      advance(30_000);
+      vi.advanceTimersByTime(30_000);
+      // …but it does get back in rather than stalling forever.
+      expect(reqs().filter((m) => m[1] === "a")).toHaveLength(2);
+      expect(reqs().filter((m) => m[1] === "a").at(-1)![2].since).toBeDefined();
     } finally {
       vi.useRealTimers();
     }

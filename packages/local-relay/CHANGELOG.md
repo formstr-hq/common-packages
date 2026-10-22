@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.1
+
+### Fixed
+Found by checking every Pollerama feed on cold starts against 0.6.5, not just
+counting REQs:
+- **Rotation deadlock.** Rotation refused to run when the next REQ in line was
+  itself a rotated subscription, so once every slot held a long-lived sub a
+  relay's whole queue could stop (feeds sat empty). It now always runs, on a
+  slower 30s cycle when long-lived subs are oversubscribed, so they take turns
+  instead of churning.
+- **Two limits, not one.** Relays limit REQs still loading ("too many concurrent
+  REQs" — relay.nostr.wirednet.jp blocks the connection when a burst exceeds it)
+  separately from total open subscriptions (relay.formstr.app: 10). New
+  `maxInFlight` (default 24) caps loading REQs; `maxSubscriptions` (default 30)
+  caps open ones. Both adapt per relay: a stated number ("less than or equal to
+  10") is adopted with one in reserve, the "concurrent" wording lowers the
+  in-flight cap, and "too many messages" halves that relay's REQ rate.
+- **Cold starts no longer queue for seconds.** Pacing raised to burst 40 / 20 per
+  second; caught-up subs can rotate after 5s during a connection's first 30s
+  (20s afterwards); rate-limit pauses honour the relay's "retry in" and escalate
+  gently to at most 15s (was 60s, which starved every feed on that relay).
+- **One socket per relay.** `wss://relay.damus.io` and `wss://relay.damus.io/`
+  were separate connections — doubling load on exactly the relays that limit per
+  IP. Relay URLs are now normalized everywhere (`normalizeRelayUrl`).
+- Growing interests consolidate after 2 extra parts (was 4), keeping long-lived
+  subscriptions under relay caps.
+
+### Added
+- `RelayHealth` also reports `inFlightSubscriptions`.
+
 ## 0.7.0
 
 ### Fixed

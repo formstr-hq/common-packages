@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 ### Fixed
 - **Stop getting rate-limited and blocked by relays.** Measured in Pollerama: ~5,600

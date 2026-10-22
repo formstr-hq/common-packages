@@ -21,7 +21,10 @@ export interface RelayQueryPlanOptions {
   additionalRelays?: string[];
 }
 
-const DEFAULTS = { maxRelaysPerAuthor: 10, maxRelays: 20 };
+// Three write relays per author is the usual outbox redundancy. Ten put the big
+// shared relays into nearly every subscription and was a major source of the
+// load that got us rate-limited.
+const DEFAULTS = { maxRelaysPerAuthor: 3, maxRelays: 20 };
 
 /**
  * Build a relay → authors plan. Every input author is guaranteed to appear under

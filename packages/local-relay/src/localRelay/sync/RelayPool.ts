@@ -54,6 +54,14 @@ export interface RelayHealth {
   /** True if this is a discovered (gossip-pool) relay, not a user relay. The
    *  pool itself is source-agnostic and reports `false`; RelayService tags it. */
   gossip: boolean;
+  /** REQs currently open on the socket. */
+  openSubscriptions?: number;
+  /** REQs waiting for a free slot. */
+  queuedSubscriptions?: number;
+  /** Current cap on open REQs (lowered when the relay pushed back). */
+  subscriptionCap?: number;
+  /** Epoch ms until which REQs are paused because the relay rate-limited us. */
+  throttledUntil?: number;
 }
 
 export interface PublishOptions {
@@ -80,6 +88,8 @@ const DEFAULT_PUBLISH_TIMEOUT_MS = 5000;
 export interface PoolSubscribeOptions {
   /** Max wait before forcing logical EOSE even if relays haven't all replied. */
   eoseDeadlineMs?: number;
+  /** Background work: queued behind app-requested subscriptions on each relay. */
+  lowPriority?: boolean;
 }
 
 interface LogicalSub {
@@ -150,7 +160,8 @@ export class RelayPool {
     const deadlineMs = options.eoseDeadlineMs ?? DEFAULT_EOSE_DEADLINE_MS;
     sub.deadline = setTimeout(() => this.fireEose(subId), deadlineMs);
 
-    for (const url of targets) this.connection(url).req(subId, filters);
+    for (const url of targets)
+      this.connection(url).req(subId, filters, { low: options.lowPriority });
     return subId;
   }
 
@@ -224,12 +235,19 @@ export class RelayPool {
     const urls = relays && relays.length ? Array.from(new Set(relays)) : Array.from(this.connections.keys());
     return urls.map((relay) => {
       const c = this.connections.get(relay);
+      const stats = c?.stats;
       return {
         relay,
         connected: c?.connected ?? false,
         connecting: c?.connecting ?? false,
         reconnecting: c?.reconnecting ?? false,
         gossip: false, // RelayService tags discovered relays; the pool can't.
+        ...(stats && {
+          openSubscriptions: stats.open,
+          queuedSubscriptions: stats.queued,
+          subscriptionCap: stats.cap,
+          throttledUntil: stats.pausedUntil,
+        }),
       };
     });
   }

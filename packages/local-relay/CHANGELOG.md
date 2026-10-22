@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Stop getting rate-limited and blocked by relays.** Measured in Pollerama: ~5,600
+  REQs/min across 52 relays, up to 91 open subscriptions on one socket and single
+  REQs up to 700 KB, drawing `rate-limited`, `too many subscriptions`,
+  `bandwidth budget exhausted` and `message too large` within a minute.
+  `RelayConnection` now runs a per-relay REQ queue:
+  - caps open subscriptions per socket (default 20, lowered automatically when a
+    relay says "too many") and paces REQs with a token bucket (burst 20, 5/s);
+  - merges compatible waiting lookups into one REQ — single-field filters without
+    a `limit`, `ids` lookups, and replaceable-kind lookups by author — and routes
+    each result to the subscriptions it matches; "latest N" queries never merge;
+  - splits oversized filters (over 300 values or 60 KB) into several REQs, and
+    reports EOSE only once every part has finished;
+  - obeys pushback: rate-limit CLOSED/NOTICE pauses the relay (honouring
+    "retry in Ns", escalating on repeats) and re-queues the REQ instead of
+    treating it as done; "too large" splits it and retries;
+  - rotates caught-up long-lived subscriptions out when a request is waiting and
+    every slot is taken, resuming them later with `since` so nothing is
+    re-downloaded; reconnects resume caught-up subscriptions the same way, and go
+    through the queue instead of re-sending every REQ at once;
+  - only resets reconnect backoff after a connection has stayed up 10s.
+- **Growing an interest no longer re-requests everything.** An `update()` that only
+  adds values (more ids as a feed scrolls) opens a subscription for just the new
+  values; after 5 such parts the interest is consolidated into one.
+- **Enrichment ignores malformed `e`/`q` tag values**, which made relays reject the
+  whole batched REQ ("uneven size input to from_hex"), and is queued behind
+  app-requested subscriptions.
+- `maxRelaysPerAuthor` default lowered from 10 to 3.
+
+### Added
+- `RelayServiceOptions.relayLimits` (`RelayConnectionOptions`) to tune the above.
+- `RelayHealth` reports `openSubscriptions`, `queuedSubscriptions`,
+  `subscriptionCap` and `throttledUntil`.
+
 ## 0.6.5
 
 ### Fixed

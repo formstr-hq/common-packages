@@ -418,6 +418,63 @@ describe("RelayService — interests drive the network (app cannot)", () => {
   });
 });
 
+describe("RelayService — growing interests", () => {
+  const id = (n: number) => n.toString(16).padStart(64, "0");
+  const reactions = (n: number) => [{ kinds: [7], "#e": Array.from({ length: n }, (_, i) => id(i)) }];
+
+  it("asks only for the added values when an update just grows the filter", async () => {
+    const { f, client } = await wire();
+    const h = client.observe(reactions(3), { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    expect(reqOn(sock)).toHaveLength(1);
+
+    h.update(reactions(5));
+    await settle();
+    expect(closeOn(sock)).toHaveLength(0); // the first three stay subscribed
+    const reqs = reqOn(sock);
+    expect(reqs).toHaveLength(2);
+    expect(reqs[1][2]).toEqual({ kinds: [7], "#e": [id(3), id(4)] });
+
+    h.update(reactions(5)); // no change → no traffic
+    await settle();
+    expect(reqOn(sock)).toHaveLength(2);
+
+    h.unobserve(); // every part closes
+    await settle();
+    expect(closeOn(sock)).toHaveLength(2);
+  });
+
+  it("consolidates into one subscription after several growth steps", async () => {
+    const { f, client } = await wire();
+    const h = client.observe(reactions(1), { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    for (let n = 2; n <= 6; n++) {
+      h.update(reactions(n));
+      await settle();
+    }
+    // 1 base + 4 deltas, then the 5th growth reopens everything as one REQ.
+    const last = reqOn(sock).at(-1)!;
+    expect(last[2]["#e"]).toHaveLength(6);
+    expect(closeOn(sock)).toHaveLength(5);
+  });
+
+  it("reopens normally when an update changes the filter's shape", async () => {
+    const { f, client } = await wire();
+    const h = client.observe(reactions(2), { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    h.update([{ kinds: [7], "#e": [id(0)] }]); // shrank → not a pure growth
+    await settle();
+    expect(closeOn(sock)).toHaveLength(1);
+    expect(reqOn(sock).at(-1)![2]).toEqual({ kinds: [7], "#e": [id(0)] });
+  });
+});
+
 describe("RelayService — NIP-50 search routing", () => {
   it("uses dedicated search relays before author/outbox routing and filters leaks", async () => {
     const { f, service, client } = await wire();
@@ -662,14 +719,30 @@ describe("RelayService — edge branches", () => {
 
     sock.emit(["EVENT", sub, makeEvent({ id: "a".repeat(64), kind: 1, pubkey: "alice", tags: [["e", "f".repeat(64)]] })]);
     await new Promise((r) => setTimeout(r, 60)); // flush 1 → enrich timer scheduled
-    sock.emit(["EVENT", sub, makeEvent({ id: "b".repeat(64), kind: 1, pubkey: "alice", tags: [["e", "g".repeat(64)]] })]);
+    sock.emit(["EVENT", sub, makeEvent({ id: "b".repeat(64), kind: 1, pubkey: "alice", tags: [["e", "e".repeat(64)]] })]);
     await new Promise((r) => setTimeout(r, 60)); // flush 2 → timer already pending (no reschedule)
     await new Promise((r) => setTimeout(r, 220)); // enrich debounce elapses → one batched fetch
 
     const enrichReq = reqOn(sock).find((m) => m[1] !== sub);
     expect(enrichReq).toBeDefined();
     const ids = enrichReq!.slice(2).flatMap((flt: any) => flt.ids ?? []);
-    expect(ids).toEqual(expect.arrayContaining(["f".repeat(64), "g".repeat(64)])); // both refs in one fetch
+    expect(ids).toEqual(expect.arrayContaining(["f".repeat(64), "e".repeat(64)])); // both refs in one fetch
+  });
+
+  it("never enriches malformed e/q tag values (a relay rejects the whole batch over one)", async () => {
+    const { f, client } = await wire();
+    client.observe([{ kinds: [1], authors: ["alice"] }], { onEvent: () => {} });
+    await settle();
+    const sock = f.last("wss://u1");
+    sock.open();
+    const sub = reqOn(sock)[0][1];
+    sock.emit(["EVENT", sub, makeEvent({
+      id: "a".repeat(64), kind: 1, pubkey: "alice",
+      tags: [["e", "f".repeat(64)], ["e", "abc"], ["q", "g".repeat(64)], ["e", "F".repeat(64)]],
+    })]);
+    await new Promise((r) => setTimeout(r, 300));
+    const ids = reqOn(sock).filter((m) => m[1] !== sub).flatMap((m) => m.slice(2).flatMap((flt: any) => flt.ids ?? []));
+    expect(ids).toEqual(["f".repeat(64)]);
   });
 
   it("skips the enrichment fetch when no user relays are configured", async () => {

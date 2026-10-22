@@ -29,6 +29,7 @@ export { generateFilterHash } from "./localRelay/core/matchFilter";
 // ---- the worker-side relay assembly ----
 export { RelayService } from "./localRelay/RelayService";
 export type { RelayServiceOptions } from "./localRelay/RelayService";
+export type { RelayConnectionOptions } from "./localRelay/sync/RelayConnection";
 
 // ---- transport (channel + client + frames) ----
 export type { Channel } from "./localRelay/transport/channel";

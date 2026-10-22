@@ -19,6 +19,8 @@ import { Channel } from "./transport/channel";
 import { WorkerHost } from "./transport/WorkerHost";
 import type { Diagnostics } from "./transport/frames";
 import { RelayPool } from "./sync/RelayPool";
+import type { RelayConnectionOptions } from "./sync/RelayConnection";
+import { combineFilters, mergeInfo } from "./sync/reqShaping";
 import type { RelayHealth } from "./sync/RelayPool";
 import { SyncEngine, SyncHandle, defaultVerify } from "./sync/SyncEngine";
 import { DeliveryOutbox } from "./sync/DeliveryOutbox";
@@ -64,6 +66,42 @@ const DM_INBOX_KIND = 10050;
  */
 const ONLINE_WINDOW_MS = 30_000;
 
+/**
+ * Extra upstream parts an interest may grow before it is consolidated back
+ * into a single subscription (one close + reopen with the full filter).
+ */
+const MAX_INTEREST_PARTS = 5;
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * If `next` only ADDS values to `prev` — same filters, each varying along its one
+ * mergeable field with the old values all still present — return just the new
+ * values as filters (empty when nothing was added). Otherwise null, meaning the
+ * interest changed shape and must be reopened. This is what keeps a feed that
+ * re-declares "reactions for these 40 notes" → "…these 45 notes" from
+ * re-requesting all 45 from every relay.
+ */
+function growthDelta(prev: Filter[], next: Filter[]): Filter[] | null {
+  if (prev.length !== next.length) return null;
+  const delta: Filter[] = [];
+  for (let i = 0; i < next.length; i++) {
+    const a = mergeInfo([prev[i]]);
+    const b = mergeInfo([next[i]]);
+    if (!a || !b || a.key !== b.key) {
+      if (JSON.stringify(prev[i]) === JSON.stringify(next[i])) continue;
+      return null;
+    }
+    const field = b.field as keyof Filter;
+    const old = new Set((prev[i][field] as string[] | undefined) ?? []);
+    const nextValues = (next[i][field] as string[] | undefined) ?? [];
+    if (Array.from(old).some((v) => !nextValues.includes(v))) return null;
+    const added = nextValues.filter((v) => !old.has(v));
+    if (added.length) delta.push(combineFilters([{ ...next[i], [field]: added }], b));
+  }
+  return delta;
+}
+
 /** Order-independent equality of two relay-url lists (treated as sets). */
 function sameRelaySet(a: string[], b: string[]): boolean {
   const setA = new Set(a);
@@ -84,6 +122,12 @@ export interface RelayServiceOptions {
   maxGossipRelays?: number;
   /** Max wait for a relay's publish OK before it's marked timeout/failed. */
   publishTimeoutMs?: number;
+  /**
+   * Per-relay request limits: open-subscription cap, REQ pacing, filter size
+   * caps, reconnect stability (see RelayConnectionOptions). Defaults are tuned
+   * to stay under common relay limits.
+   */
+  relayLimits?: RelayConnectionOptions;
   /** Tuning for the durable delivery outbox (retry backoff + give-up cap). */
   outbox?: {
     baseBackoffMs?: number;
@@ -121,7 +165,18 @@ export class RelayService {
    *  `relays` are optional per-interest read-relay hints (see openSync). */
   private interests = new Map<
     string,
-    { filters: Filter[]; sync: boolean; relays?: string[] }
+    {
+      filters: Filter[];
+      sync: boolean;
+      relays?: string[];
+      /**
+       * The filter sets actually opened upstream for this interest. Normally
+       * just `[filters]`; when an update only ADDS values (more ids/authors as a
+       * feed scrolls), the new values open as an extra part instead of closing
+       * and re-requesting everything (see `observe`).
+       */
+      parts: Filter[][];
+    }
   >();
   /** Live upstream subscriptions, deduped by filter-hash across interests.
    *  `relays` is the union of the per-interest relay hints for this scope, so a
@@ -151,7 +206,7 @@ export class RelayService {
     this.publishTimeoutMs = opts.publishTimeoutMs;
     this.maxGossipRelays = opts.maxGossipRelays ?? DEFAULT_MAX_GOSSIP_RELAYS;
     this.db = new EventDB(opts.now);
-    this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory);
+    this.pool = new RelayPool(opts.socketFactory ?? webSocketFactory, opts.relayLimits);
     this.host = new WorkerHost(opts.channel, this.db, {
       onSetUserRelays: (relays) => {
         const changed = !sameRelaySet(this.userRelays, relays);
@@ -268,7 +323,18 @@ export class RelayService {
     sync: boolean,
     relays?: string[],
   ): void {
-    this.interests.set(subId, { filters, sync, relays });
+    const prev = this.interests.get(subId);
+    let parts: Filter[][] = [filters];
+    if (
+      prev &&
+      prev.sync === sync &&
+      sameRelaySet(prev.relays ?? [], relays ?? []) &&
+      prev.parts.length < MAX_INTEREST_PARTS
+    ) {
+      const delta = growthDelta(prev.filters, filters);
+      if (delta) parts = delta.length ? [...prev.parts, delta] : prev.parts;
+    }
+    this.interests.set(subId, { filters, sync, relays, parts });
     this.reconcile();
   }
 
@@ -286,20 +352,22 @@ export class RelayService {
     // Union the per-interest relay hints across every interest that shares a
     // filter-hash, so one upstream sub reads from the combined hint set.
     const desired = new Map<string, { filters: Filter[]; relays: string[] }>();
-    for (const { filters, sync, relays } of Array.from(
+    for (const { parts, sync, relays } of Array.from(
       this.interests.values(),
     )) {
       if (!sync) continue;
-      const key = generateFilterHash(filters, []);
-      const entry = desired.get(key);
-      if (!entry) {
-        desired.set(key, {
-          filters,
-          relays: relays ? Array.from(new Set(relays)) : [],
-        });
-      } else if (relays) {
-        for (const r of relays)
-          if (!entry.relays.includes(r)) entry.relays.push(r);
+      for (const filters of parts) {
+        const key = generateFilterHash(filters, []);
+        const entry = desired.get(key);
+        if (!entry) {
+          desired.set(key, {
+            filters,
+            relays: relays ? Array.from(new Set(relays)) : [],
+          });
+        } else if (relays) {
+          for (const r of relays)
+            if (!entry.relays.includes(r)) entry.relays.push(r);
+        }
       }
     }
     // Open newly-wanted scopes, or REOPEN one whose relay-hint set changed (a
@@ -379,7 +447,9 @@ export class RelayService {
   private enqueueEnrichment(events: Event[]): void {
     for (const event of events) {
       for (const tag of event.tags) {
-        if ((tag[0] === "e" || tag[0] === "q") && tag[1]) {
+        // Only well-formed ids: a junk tag value in a batched REQ makes the
+        // relay reject the whole batch ("uneven size input to from_hex").
+        if ((tag[0] === "e" || tag[0] === "q") && tag[1] && HEX64.test(tag[1])) {
           const id = tag[1];
           if (!this.enrichRequested.has(id) && !this.db.getById(id))
             this.enrichIds.add(id);
@@ -438,7 +508,7 @@ export class RelayService {
           this.db.recordSeen(event.id, relay);
         },
         onEose: () => this.pool.unsubscribe(id),
-      });
+      }, { lowPriority: true });
     }
 
     // More than one batch's worth queued up — drain on the next tick.

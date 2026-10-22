@@ -54,11 +54,11 @@ describe("buildRelayQueryPlan", () => {
     expect(count).toBe(2);
   });
 
-  it("fans a single author out to at most 10 relays by default", () => {
+  it("fans a single author out to at most 3 relays by default", () => {
     const writes = Array.from({ length: 12 }, (_, i) => `wss://r${i + 1}`);
     const plan = buildRelayQueryPlan(["alice"], [], () => writes);
 
-    expect(Array.from(plan.keys())).toEqual(writes.slice(0, 10));
+    expect(Array.from(plan.keys())).toEqual(writes.slice(0, 3));
     for (const authors of plan.values()) expect(authors.has("alice")).toBe(true);
   });
 

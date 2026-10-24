@@ -1,10 +1,15 @@
 import { createBlossomAuthorization } from "./blossom.js";
 import { METADATA_KIND } from "./constants.js";
+import { AllServersFailedError, BlossomHttpError, RangeNotSatisfiedError, UploadRefusedError, type ServerFailure } from "./errors.js";
+import { decryptRange, streamDecrypt, type ByteReader } from "./stream.js";
+import { keyringEntries } from "./drive-key.js";
+import { tagValue } from "./events.js";
+import { toBlobFile, type BlobFile, type FileEntry } from "./file-entry.js";
 import { decryptFileBytes, encryptFile } from "./crypto.js";
 import { throwIfAborted } from "./encoding.js";
-import { createFileMetadata, createSharedFileMetadata, decryptFileMetadata, decryptFolderMetadata } from "./metadata.js";
-import { assertFile, type File, type Folder } from "./schema.js";
-import type { DownloadFileContext, EncryptedFile, FileFetchHandle, FetchFilesContext, FetchFoldersContext, FolderEntry, FolderFetchHandle, ShareFileContext, ShareFileResult, UploadBlobContext, UploadFileContext, UploadFileInputs, UploadFileResult } from "./types.js";
+import { createFileMetadata, decryptFileEntry, decryptFolderMetadata, keyringConversationKeys, randomDTag } from "./metadata.js";
+import type { File, Folder } from "./schema.js";
+import type { DownloadFileContext, EncryptedFile, FileFetchHandle, FetchFilesContext, FetchFoldersContext, FolderEntry, FolderFetchHandle, UploadBlobContext, UploadFileContext, UploadFileInputs, UploadFileResult, UploadOutcome } from "./types.js";
 import type { Event, Filter } from "nostr-tools";
 
 function emitProgress(
@@ -17,47 +22,60 @@ function emitProgress(
 }
 
 interface FetchMetadataContext {
-  dataLayer: FetchFilesContext["dataLayer"];
-  metadataConversationKey: Uint8Array;
+  store: FetchFilesContext["store"];
+  keyring: FetchFilesContext["keyring"];
+  filter?: Filter;
   onEose?: () => void;
   onError?: (error: unknown) => void;
   relayHints?: string[];
 }
 
 function fetchMetadata<T, R>(
-  filter: Filter,
   subtype: "files" | "folder",
   context: FetchMetadataContext,
-  decrypt: (content: string, key: Uint8Array) => T,
+  decrypt: (event: Event, keys: Uint8Array[]) => T,
   toResult: (value: T, event: Event, d: string) => R,
   onValues: (values: R[]) => void,
+  isLive: (value: R) => boolean = () => true,
 ): FileFetchHandle {
+  // Keyed by `d` alone, not (author, d): after a Drive Key rotation the same file is republished under
+  // the new key and must replace the old event, exactly as the app's file index does.
   const entries = new Map<string, { createdAt: number; eventId: string; value?: R }>();
-  const metadataFilter: Filter = { ...filter, kinds: [METADATA_KIND], "#t": [subtype] };
+  const keys = keyringConversationKeys(context.keyring);
+  const metadataFilter: Filter = {
+    ...context.filter,
+    kinds: [METADATA_KIND],
+    authors: context.filter?.authors ?? keyringEntries(context.keyring).map((entry) => entry.publicKey),
+    // Not filtered by `#t` for files: some legacy events predate the tag. Other subtypes (shares,
+    // bookkeeping) carry a different `t` and are skipped below.
+    ...(subtype === "folder" ? { "#t": ["folder"] } : {}),
+  };
   let stopped = false;
   const emit = () => onValues([...entries.values()]
     .sort((a, b) => b.createdAt - a.createdAt || b.eventId.localeCompare(a.eventId))
-    .flatMap((entry) => entry.value === undefined ? [] : [entry.value]));
-  const handle = context.dataLayer.observe(
+    .flatMap((entry) => entry.value !== undefined && isLive(entry.value) ? [entry.value] : []));
+  const handle = context.store.observe(
     [metadataFilter],
     {
       onEvent(event) {
-        if (stopped) return;
-        if (event.kind !== METADATA_KIND || !event.tags.some((tag) => tag[0] === "t" && tag[1] === subtype)) return;
-        const d = event.tags.find((tag) => tag[0] === "d")?.[1];
+        if (stopped || event.kind !== METADATA_KIND) return;
+        const type = tagValue(event, "t");
+        if (type !== undefined && type !== subtype) return;
+        const d = tagValue(event, "d");
         if (!d) return;
-        const key = `${event.pubkey}:${d}`;
-        const current = entries.get(key);
-        if (current && (current.createdAt > event.created_at || (current.createdAt === event.created_at && current.eventId >= event.id))) return;
+        const current = entries.get(d);
+        // Equal created_at: relays keep the LOWEST id (NIP-01), so the listing must too or it disagrees with them.
+        if (current && (current.createdAt > event.created_at || (current.createdAt === event.created_at && current.eventId <= event.id))) return;
+        // Recorded even when it fails to decrypt, so an older decryptable version cannot resurrect
+        // a file the newest event superseded.
         const entry: { createdAt: number; eventId: string; value?: R } = { createdAt: event.created_at, eventId: event.id };
-        entries.set(key, entry);
+        entries.set(d, entry);
         try {
-          entry.value = toResult(decrypt(event.content, context.metadataConversationKey), event, d);
-          emit();
+          entry.value = toResult(decrypt(event, keys), event, d);
         } catch (error) {
           context.onError?.(error);
-          emit();
         }
+        emit();
       },
       onEose: () => context.onEose?.(),
     },
@@ -66,42 +84,120 @@ function fetchMetadata<T, R>(
   return { stop: () => { stopped = true; handle.unobserve(); } };
 }
 
-export function fetchFiles(filter: Filter, context: FetchFilesContext): FileFetchHandle {
-  return fetchMetadata<File, File>(filter, "files", context, decryptFileMetadata, (file) => file, context.onFiles);
+export function fetchFiles(context: FetchFilesContext): FileFetchHandle {
+  return fetchMetadata<FileEntry, FileEntry>(
+    "files",
+    context,
+    (event, keys) => decryptFileEntry(event, keys),
+    (entry) => entry,
+    context.onFiles,
+    (entry) => !entry.deleted,
+  );
 }
 
-export function fetchFolders(filter: Filter, context: FetchFoldersContext): FolderFetchHandle {
-  return fetchMetadata<Folder, FolderEntry>(filter, "folder", context, decryptFolderMetadata, (folder, _event, d) => ({ ...folder, id: d }), context.onFolders);
+export function fetchFolders(context: FetchFoldersContext): FolderFetchHandle {
+  return fetchMetadata<Folder, FolderEntry>(
+    "folder",
+    context,
+    (event, keys) => decryptFolderMetadata(event.content, keys),
+    (folder, event, d) => ({ ...folder, id: d, createdAt: event.created_at }),
+    context.onFolders,
+  );
 }
 
-export async function uploadEncryptedFile(encryptedFile: EncryptedFile, context: UploadBlobContext): Promise<void> {
+// Statuses a retry cannot fix: skip the remaining same-server attempts (a foregone conclusion three times).
+const PERMANENT_STATUSES = new Set([401, 403, 413, 415]);
+
+function isPermanent(error: unknown): boolean {
+  return error instanceof BlossomHttpError && PERMANENT_STATUSES.has(error.status);
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Uploads the one concatenated blob, reporting honestly what happened per server.
+ *
+ * Per server: an optional BUD-06 preflight (`transport.canAccept`) — a definitive refusal skips that
+ * server without sending the body, anything inconclusive proceeds to the real PUT — then up to
+ * `attempts` PUTs. One BUD-02 authorization is signed once and replayed across servers (it is
+ * server-agnostic), so falling back costs no extra signer prompt.
+ *
+ * `fallback` stops at the first success; `replicate` tries them all. At least one must succeed or
+ * AllServersFailedError carries every server's failure. Abort errors propagate immediately.
+ */
+export async function uploadEncryptedFile(encryptedFile: EncryptedFile, context: UploadBlobContext): Promise<UploadOutcome> {
   if (context.servers.length === 0) throw new Error("At least one Blossom server is required");
-  const totalBytes = encryptedFile.bytes.byteLength * context.servers.length;
+  const now = context.now ?? (() => Math.floor(Date.now() / 1000));
   const authorization = context.authorization ?? await createBlossomAuthorization(
     context.signer,
     "upload",
     [encryptedFile.blobHash],
     context.authorizationContent ?? "Upload encrypted file",
     context.authorizationExpiresIn ?? 300,
-    context.now ?? (() => Math.floor(Date.now() / 1000)),
+    now,
   );
+  const strategy = context.strategy ?? "fallback";
+  const attempts = Math.max(1, context.attempts ?? 3);
+  const sleep = context.sleep ?? defaultSleep;
+  const landed: string[] = [];
+  const failures: ServerFailure[] = [];
+  const totalBytes = encryptedFile.bytes.byteLength * (strategy === "replicate" ? context.servers.length : 1);
   let completedBytes = 0;
+
   for (const server of context.servers) {
     throwIfAborted(context.signal);
-    await context.transport.upload({
-      server,
-      bytes: encryptedFile.bytes,
-      authorization,
-      signal: context.signal,
-      onBytes: (current) => emitProgress(context.onProgress, "upload", completedBytes + current, totalBytes),
-    });
-    completedBytes += encryptedFile.bytes.byteLength;
-    emitProgress(context.onProgress, "upload", completedBytes, totalBytes);
+    if (strategy === "fallback" && landed.length > 0) break;
+
+    if (context.transport.canAccept) {
+      const verdict = await context.transport.canAccept({
+        server,
+        size: encryptedFile.bytes.byteLength,
+        sha256: encryptedFile.blobHash,
+        type: "application/octet-stream",
+        authorization,
+        signal: context.signal,
+      });
+      if (!verdict.ok) {
+        failures.push({ server, refused: true, error: new UploadRefusedError(verdict.reason || "Server refused this upload", verdict.status) });
+        continue;
+      }
+    }
+
+    let lastError: unknown;
+    let succeeded = false;
+    for (let attempt = 1; attempt <= attempts && !succeeded; attempt += 1) {
+      throwIfAborted(context.signal);
+      try {
+        await context.transport.upload({
+          server,
+          bytes: encryptedFile.bytes,
+          authorization,
+          signal: context.signal,
+          onBytes: (current) => emitProgress(context.onProgress, "upload", completedBytes + current, totalBytes),
+        });
+        succeeded = true;
+      } catch (error) {
+        if (context.signal?.aborted) throw error;
+        lastError = error;
+        if (isPermanent(error) || attempt === attempts) break;
+        await sleep(context.retryDelayMs ?? 3000);
+      }
+    }
+    if (succeeded) {
+      landed.push(server);
+      completedBytes += encryptedFile.bytes.byteLength;
+      emitProgress(context.onProgress, "upload", completedBytes, totalBytes);
+    } else {
+      failures.push({ server, refused: false, error: lastError });
+    }
   }
+
+  if (landed.length === 0) throw new AllServersFailedError(failures);
+  return { landed, failures };
 }
 
-export async function downloadFile(file: File, context: DownloadFileContext): Promise<Blob> {
-  assertFile(file);
+export async function downloadFile(source: File | FileEntry | BlobFile, context: DownloadFileContext): Promise<Blob> {
+  const file = toBlobFile(source);
   const expectedSize = file.size + Math.max(1, Math.ceil(file.size / file.chunkSize)) * 16;
   const authorization = context.authorization
     ?? (context.signer
@@ -143,16 +239,18 @@ export async function uploadFile(
   context: UploadFileContext,
 ): Promise<UploadFileResult> {
   const encryptedFile = await encryptFile(source, { chunkSize: inputs.chunkSize });
-  const metadata = createFileMetadata({
+  const d = inputs.d ?? randomDTag();
+  const uploadedAt = inputs.uploadedAt ?? Date.now();
+  const build =(servers: string[]) => createFileMetadata({
     name: inputs.name,
     type: inputs.type,
     parent: inputs.parent,
-    servers: inputs.servers,
-    metadataConversationKey: inputs.metadataConversationKey,
+    servers,
+    keyring: context.keyring,
     ...(inputs.previewHash ? { previewHash: inputs.previewHash } : {}),
-    uploadedAt: inputs.uploadedAt,
+    uploadedAt,
     client: inputs.client,
-    d: inputs.d,
+    d,
     createdAt: inputs.createdAt,
     size: encryptedFile.size,
     encryptionKey: encryptedFile.encryptionKey,
@@ -160,17 +258,79 @@ export async function uploadFile(
     blobHash: encryptedFile.blobHash,
     chunkSize: encryptedFile.chunkSize,
   });
-  await uploadEncryptedFile(encryptedFile, { ...context, servers: inputs.servers });
+  build(inputs.servers); // validate before any bytes leave the machine
+  const upload = await uploadEncryptedFile(encryptedFile, { ...context, servers: inputs.servers });
   throwIfAborted(context.signal);
-  const { event, result: publishResult } = await context.dataLayer.publish(metadata.event);
+  // `servers` records where the blob actually is — a server that failed or refused is not listed.
+  const metadata = build(upload.landed);
+  const event = metadata.event;
+  const publishResult = await context.store.publishEvent(event);
   if (!publishResult.ok) throw new Error("No relay accepted the file metadata event");
-  return { encryptedFile, metadata, event, publishResult };
+  return { upload, encryptedFile, metadata, event, publishResult };
 }
 
-export async function shareFile(file: File, context: ShareFileContext): Promise<ShareFileResult> {
-  const { dataLayer, ...options } = context;
-  const shared = createSharedFileMetadata(file, options);
-  const { event: signedEvent, result: publishResult } = await dataLayer.publish(shared.event);
-  if (!publishResult.ok) throw new Error("No relay accepted the shared file metadata event");
-  return { ...shared, signedEvent, publishResult };
+async function downloadAuthorization(file: BlobFile, context: DownloadFileContext): Promise<string | undefined> {
+  if (context.authorization) return context.authorization;
+  if (!context.signer) return undefined;
+  return createBlossomAuthorization(
+    context.signer,
+    "get",
+    [file.blobHash],
+    context.authorizationContent ?? "Download encrypted file",
+    context.authorizationExpiresIn ?? 300,
+    context.now ?? (() => Math.floor(Date.now() / 1000)),
+  );
+}
+
+/**
+ * Streams a file's plaintext segments: opens the blob on the first server that answers (falling back
+ * on open failure), then decrypts frame by frame with streamDecrypt. A failure MID-stream is not
+ * retried on another server — bytes were already yielded; the caller restarts. Throws on truncation,
+ * overrun and hash mismatch; discard anything written before such a throw.
+ */
+export async function* downloadFileStream(source: File | FileEntry | BlobFile, context: DownloadFileContext): AsyncGenerator<Uint8Array> {
+  const file = toBlobFile(source);
+  if (!context.transport.downloadStream) throw new Error("This Blossom transport cannot stream downloads");
+  const authorization = await downloadAuthorization(file, context);
+  const errors: unknown[] = [];
+  let reader: ByteReader | undefined;
+  for (const server of file.servers) {
+    throwIfAborted(context.signal);
+    try {
+      reader = await context.transport.downloadStream({ server, hash: file.blobHash, authorization, signal: context.signal });
+      break;
+    } catch (error) {
+      if (context.signal?.aborted) throw error;
+      errors.push(error);
+    }
+  }
+  if (!reader) throw new AggregateError(errors, "Unable to open the encrypted blob on any Blossom server");
+  yield* streamDecrypt(reader, file);
+}
+
+/**
+ * Reads plaintext bytes [start, end] fetching only the covering segments. Tries each server; if the
+ * ones that answer all ignore Range, throws RangeNotSatisfiedError so the caller can fall back to
+ * downloadFileStream — misaligned bytes are never decoded.
+ */
+export async function readFileRange(source: File | FileEntry | BlobFile, start: number, end: number, context: DownloadFileContext): Promise<Uint8Array> {
+  const file = toBlobFile(source);
+  if (!context.transport.downloadRange) throw new Error("This Blossom transport cannot fetch ranges");
+  const downloadRange = context.transport.downloadRange.bind(context.transport);
+  const authorization = await downloadAuthorization(file, context);
+  const errors: unknown[] = [];
+  let ignored = false;
+  for (const server of file.servers) {
+    throwIfAborted(context.signal);
+    try {
+      return await decryptRange(file, start, end, ({ start: from, end: to }) =>
+        downloadRange({ server, hash: file.blobHash, start: from, end: to, authorization, signal: context.signal }));
+    } catch (error) {
+      if (context.signal?.aborted || error instanceof RangeError) throw error;
+      if (error instanceof RangeNotSatisfiedError) ignored = true;
+      errors.push(error);
+    }
+  }
+  if (ignored && errors.every((e) => e instanceof RangeNotSatisfiedError)) throw new RangeNotSatisfiedError();
+  throw new AggregateError(errors, "Unable to read a valid range from any Blossom server");
 }

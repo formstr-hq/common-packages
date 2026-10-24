@@ -178,7 +178,8 @@ readable.
 
 `create_form` fields: each is `{ type, label, required?, options?, validation?, … }`. Supported
 types: `short`, `paragraph`, `choice`, `dropdown`, `number`, `date`, `time`, `grid`, `file`,
-`signature`, `section`. Optional: `description`, `publicForm`, `encrypted`,
+`signature`, `section` (the full names, e.g. `shortText`, `radioButton`, `fileUpload`, also work;
+an unrecognized type falls back to short text). Optional: `description`, `publicForm`, `encrypted`,
 `allowedResponders`, `collaborators`, `notifyNpubs`, `titleImageUrl`, `coverImageUrl`,
 `thankYouText`.
 

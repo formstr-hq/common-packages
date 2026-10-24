@@ -1,6 +1,6 @@
 {
   "name": "@formstr/agent",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Formstr service layer + 82-tool registry (DOM-free; runs in browser and Node)",
   "license": "MIT",
   "publishConfig": {

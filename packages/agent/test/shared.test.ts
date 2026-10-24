@@ -60,6 +60,40 @@ describe("shared transforms", () => {
     expect(rating.maxStars).toBe(10);
   });
 
+  it("accepts the documented short type names", () => {
+    const types = aiFieldsToFormFields(
+      ["short", "paragraph", "choice", "dropdown", "number", "date", "time", "grid", "file", "signature", "section"].map(
+        (type) => ({ label: type, type }),
+      ),
+    ).map((f) => f.type);
+    expect(types).toEqual([
+      "shortText",
+      "paragraph",
+      "radioButton",
+      "dropdown",
+      "number",
+      "date",
+      "time",
+      "multipleChoiceGrid",
+      "fileUpload",
+      "signature",
+      "section",
+    ]);
+  });
+
+  it("keeps the options of a choice field", () => {
+    const [f] = aiFieldsToFormFields([{ label: "Pick", type: "choice", options: ["A", "B"] }]);
+    expect(f.type).toBe("radioButton");
+    expect(f.options).toEqual([
+      { id: "o0", label: "A" },
+      { id: "o1", label: "B" },
+    ]);
+  });
+
+  it("does not treat Object.prototype keys as aliases", () => {
+    expect(aiFieldsToFormFields([{ label: "x", type: "constructor" }])[0].type).toBe("shortText");
+  });
+
   it("coerces unknown field types to shortText", () => {
     expect(aiFieldsToFormFields([{ label: "x", type: "bogus" }])[0].type).toBe("shortText");
   });

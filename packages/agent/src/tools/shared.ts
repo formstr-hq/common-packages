@@ -26,15 +26,29 @@ interface AiField {
 
 const ANSWER_TYPES = new Set<string>(Object.values(AnswerType));
 
-/** Pre-rename enum strings still produced by old callers/AI prompts. */
-const LEGACY_TYPE_ALIASES: Record<string, AnswerType> = {
+/**
+ * Other names callers use for the same types: the pre-rename enum string, and
+ * the short names AGENTS.md and the create_form description advertise
+ * (`short`, `choice`, `grid`, `file`, …). Without these, `choice` fell through
+ * to short text and a multiple-choice question came out as a text box.
+ */
+const TYPE_ALIASES: Record<string, AnswerType> = {
   multiChoiceGrid: AnswerType.multipleChoiceGrid,
+  short: AnswerType.shortText,
+  text: AnswerType.shortText,
+  long: AnswerType.paragraph,
+  choice: AnswerType.radioButton,
+  radio: AnswerType.radioButton,
+  checkbox: AnswerType.checkboxes,
+  select: AnswerType.dropdown,
+  grid: AnswerType.multipleChoiceGrid,
+  file: AnswerType.fileUpload,
 };
 
 /** Coerce an arbitrary type string to a known AnswerType, defaulting to short text. */
 function coerceType(type: string | undefined): AnswerType {
   if (!type) return AnswerType.shortText;
-  if (LEGACY_TYPE_ALIASES[type]) return LEGACY_TYPE_ALIASES[type];
+  if (Object.hasOwn(TYPE_ALIASES, type)) return TYPE_ALIASES[type];
   return ANSWER_TYPES.has(type) ? (type as AnswerType) : AnswerType.shortText;
 }
 

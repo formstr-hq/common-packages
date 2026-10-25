@@ -216,6 +216,13 @@ export async function addComment(board: KanbanBoard, cardId: string, content: st
   return sdk.createComment(board, cardId, { content });
 }
 
+/** Comments for one card, or the whole board when `cardId` is omitted; oldest first. */
+export async function listComments(board: KanbanBoard, cardId?: string) {
+  const sdk = await getKanbanSdk();
+  const comments = await sdk.fetchComments(board, cardId);
+  return [...comments].sort((a, b) => a.createdAt - b.createdAt);
+}
+
 export async function deleteCard(card: KanbanCard): Promise<void> {
   const sdk = await getKanbanSdk();
   await sdk.deleteCard(card);

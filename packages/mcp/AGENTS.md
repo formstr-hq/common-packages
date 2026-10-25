@@ -327,6 +327,7 @@ replaceable event addressed by `coordinate` = `kind:pubkey:d` — public (`30301
 | `list_kanban_boards` | — | Boards the user owns, administers, or holds a key for. **Start here.** |
 | `list_kanban_cards` | `board` | All cards on one board (by coordinate). |
 | `list_my_kanban_cards` | — | Cards assigned to the user across every board. |
+| `list_kanban_comments` | `board` | Comments on one card (`cardId`) or the whole board, oldest first. **Private boards only.** Poll this to notice new instructions on assigned cards. |
 | `list_kanban_inbox` | — | Assigned cards still in the first column — the **pick-up queue**. Optional `board` to scope it. |
 | `create_kanban_board` | `title` | Always on. **Private by default** — pass `private:false` for a public board. Optional `columns`, `description`. |
 | `create_kanban_card` | `board`, `title` | Always on. Optional `status`, `description`, `assignees`, `labels`. |

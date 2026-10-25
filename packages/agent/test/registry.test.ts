@@ -4,9 +4,9 @@ import { GATED_TOOLS } from "../src/safety";
 import { toolRegistry } from "../src/tools";
 
 describe("toolRegistry", () => {
-  it("exposes all 82 tools with unique names", () => {
-    expect(toolRegistry).toHaveLength(82);
-    expect(new Set(toolRegistry.map((t) => t.name)).size).toBe(82);
+  it("exposes all 83 tools with unique names", () => {
+    expect(toolRegistry).toHaveLength(83);
+    expect(new Set(toolRegistry.map((t) => t.name)).size).toBe(83);
   });
 
   it("every entry has a description and inputSchema", () => {

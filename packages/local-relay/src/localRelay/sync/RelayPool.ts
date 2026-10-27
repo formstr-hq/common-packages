@@ -93,6 +93,8 @@ export interface PoolSubscribeOptions {
   eoseDeadlineMs?: number;
   /** Background work: queued behind app-requested subscriptions on each relay. */
   lowPriority?: boolean;
+  /** User-initiated read: queued ahead of standing subscriptions on each relay. */
+  urgent?: boolean;
 }
 
 interface LogicalSub {
@@ -164,7 +166,10 @@ export class RelayPool {
     sub.deadline = setTimeout(() => this.fireEose(subId), deadlineMs);
 
     for (const url of targets)
-      this.connection(url).req(subId, filters, { low: options.lowPriority });
+      this.connection(url).req(subId, filters, {
+        low: options.lowPriority,
+        urgent: options.urgent,
+      });
     return subId;
   }
 

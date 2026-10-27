@@ -31,7 +31,8 @@ export interface WorkerHostHooks {
     subId: string,
     filters: Filter[],
     sync: boolean,
-    relays?: string[]
+    relays?: string[],
+    urgent?: boolean
   ) => void;
   /** A standing interest was dropped — the worker reconciles its connections. */
   onUnobserve?: (subId: string) => void;
@@ -108,7 +109,7 @@ export class WorkerHost {
         // Local subscription (cache replay + live tail) for this interest...
         this.relayCore.handle(["REQ", m.subId, ...m.filters]);
         // ...and hand the interest to the worker's autonomous sync (if requested).
-        this.hooks.onObserve?.(m.subId, m.filters, m.sync, m.relays);
+        this.hooks.onObserve?.(m.subId, m.filters, m.sync, m.relays, m.urgent);
         break;
       case "unobserve":
         this.relayCore.handle(["CLOSE", m.subId]);

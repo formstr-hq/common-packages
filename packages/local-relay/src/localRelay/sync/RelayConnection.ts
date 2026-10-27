@@ -98,6 +98,8 @@ interface WireReq {
   retries: number;
   /** Background work (enrichment) waits behind everything the app asked for. */
   low: boolean;
+  /** User-initiated read: goes ahead of standing app work. */
+  urgent: boolean;
   /** When this REQ last went on the wire, and when it first reached EOSE. */
   openedAt: number;
   eosedAt: number | null;
@@ -135,6 +137,12 @@ const COLD_START_MS = 30_000;
  * they share slots on this slower cycle instead of swapping every few seconds.
  */
 const ROTATE_SHARE_MS = 30_000;
+/**
+ * A user-initiated read waiting at the head may preempt a caught-up long-lived
+ * sub almost immediately, instead of waiting the normal 20s minimum. Urgent
+ * reads are rare (opening a note, showing poll results), so the churn is bounded.
+ */
+const ROTATE_URGENT_MS = 1_000;
 /** Floor for the adaptive REQ pacing after rate-limits. */
 const MIN_REQS_PER_SECOND = 2;
 /** Floor for the adaptive loading-REQ limit. */
@@ -322,8 +330,13 @@ export class RelayConnection {
     };
   }
 
-  req(subId: string, filters: Filter[], opts: { low?: boolean } = {}): void {
+  req(
+    subId: string,
+    filters: Filter[],
+    opts: { low?: boolean; urgent?: boolean } = {},
+  ): void {
     const low = !!opts.low;
+    const urgent = !low && !!opts.urgent;
     if (this.logical.has(subId)) this.close(subId);
     const sub: LogicalSub = { wires: new Set(), done: new Set(), eosed: false };
     this.logical.set(subId, sub);
@@ -339,6 +352,7 @@ export class RelayConnection {
         target &&
         target.state === "queued" &&
         target.low === low &&
+        target.urgent === urgent &&
         mergedSize([...target.members.values()].flat().concat(filters), info) <=
           this.opts.maxFilterItems
       ) {
@@ -359,6 +373,7 @@ export class RelayConnection {
         merge: info,
         retries: 0,
         low,
+        urgent,
         openedAt: 0,
         eosedAt: null,
         resumeSince: null,
@@ -604,8 +619,20 @@ export class RelayConnection {
     return id;
   }
 
-  /** Queue a new wire REQ: app requests ahead of any background (low) ones. */
+  /**
+   * Queue a new wire REQ. Order is urgent → normal → background (low), so a
+   * user action (open a note, show results) does not sit behind hundreds of
+   * standing feed/profile reads.
+   */
   private enqueueWire(wire: WireReq): void {
+    if (wire.urgent) {
+      const firstNotUrgent = this.queue.findIndex(
+        (id) => !this.wires.get(id)?.urgent,
+      );
+      if (firstNotUrgent === -1) this.queue.push(wire.id);
+      else this.queue.splice(firstNotUrgent, 0, wire.id);
+      return;
+    }
     if (wire.low) {
       this.queue.push(wire.id);
       return;
@@ -723,6 +750,7 @@ export class RelayConnection {
 
   /** How long a caught-up REQ must have been open to give its slot to `head`. */
   private rotateAfterMs(head: WireReq | undefined): number {
+    if (head?.urgent) return ROTATE_URGENT_MS;
     if (head && head.resumeSince !== null) return ROTATE_SHARE_MS;
     const cold = this.openedAt > 0 && this.opts.now() - this.openedAt < COLD_START_MS;
     return cold ? ROTATE_COLD_MIN_OPEN_MS : ROTATE_MIN_OPEN_MS;
@@ -808,6 +836,7 @@ export class RelayConnection {
         merge: null,
         retries: wire.retries + 1,
         low: wire.low,
+        urgent: wire.urgent,
         openedAt: 0,
         eosedAt: null,
         resumeSince: wire.resumeSince,

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.2
+
+### Fixed
+Found by CPU-profiling the worker while switching Pollerama feeds with the cache
+already populated. Cache replay is synchronous in principle, but the worker was
+CPU-saturated, so even a cached feed took seconds to paint:
+- **Filter matching no longer scans large arrays per event.** `matchFilter` used
+  `filter.authors.includes(pubkey)` / `ids.includes(id)` for every candidate
+  event, which is O(authors) per event for follow lists and web-of-trust sets.
+  Filters are now compiled once (Sets for ids/authors/kinds, pre-parsed tag
+  values) and cached per filter object. This was the largest single hotspot
+  (~2.5s of a 12s profile).
+- **Duplicates are no longer re-verified.** The same event arrives from several
+  relays and again on every re-declared interest. The sync paths now check the
+  store first and skip Schnorr verification + ingestion when the event is
+  already held (recording provenance only). This removes ~5s of redundant
+  signature work from the same profile.
+- **`reconcile()` no longer re-hashes every interest on every tick.** Normalised
+  filters and the completed filter hash are cached by identity, so a steady
+  state costs no sorting/stringify work (~1.1s in the profile).
+
 ## 0.7.1
 
 ### Fixed

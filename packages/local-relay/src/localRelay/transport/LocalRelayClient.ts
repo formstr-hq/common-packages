@@ -67,17 +67,18 @@ export class LocalRelayClient {
   observe(
     filters: Filter[],
     handlers: SubscribeHandlers,
-    options: { localOnly?: boolean; relays?: string[] } = {}
+    options: { localOnly?: boolean; relays?: string[]; urgent?: boolean } = {}
   ): { id: string; update: (filters: Filter[]) => void; unobserve: () => void } {
     const id = `c${this.counter++}`;
     const sync = !options.localOnly;
     const relays = options.relays;
+    const urgent = options.urgent;
     this.subs.set(id, { handlers });
-    this.send({ kind: "observe", subId: id, filters, sync, relays });
+    this.send({ kind: "observe", subId: id, filters, sync, relays, urgent });
     return {
       id,
       update: (next) =>
-        this.send({ kind: "observe", subId: id, filters: next, sync, relays }),
+        this.send({ kind: "observe", subId: id, filters: next, sync, relays, urgent }),
       unobserve: () => this.unobserve(id),
     };
   }

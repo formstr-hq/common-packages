@@ -173,6 +173,8 @@ export class RelayService {
       filters: Filter[];
       sync: boolean;
       relays?: string[];
+      /** User-initiated, latency-sensitive read (see openSync). */
+      urgent?: boolean;
       /**
        * The filter sets actually opened upstream for this interest. Normally
        * just `[filters]`; when an update only ADDS values (more ids/authors as a
@@ -187,7 +189,12 @@ export class RelayService {
    *  hint added by a later interest reopens the sub against the wider set. */
   private upstream = new Map<
     string,
-    { filters: Filter[]; relays: string[]; handle: SyncHandle | null }
+    {
+      filters: Filter[];
+      relays: string[];
+      urgent: boolean;
+      handle: SyncHandle | null;
+    }
   >();
   private paused = false;
   private verify: (event: Event) => boolean;
@@ -232,8 +239,8 @@ export class RelayService {
       },
       onAddGossipRelay: (url) => this.addGossipRelay(normalizeRelayUrl(url)),
       onRemoveGossipRelay: (url) => this.removeGossipRelay(normalizeRelayUrl(url)),
-      onObserve: (subId, filters, sync, relays) =>
-        this.observe(subId, filters, sync, relays && normalizeRelays(relays)),
+      onObserve: (subId, filters, sync, relays, urgent) =>
+        this.observe(subId, filters, sync, relays && normalizeRelays(relays), urgent),
       onUnobserve: (subId) => this.unobserve(subId),
       onPublish: (pubId, event, relays) =>
         this.publishUpstream(pubId, event, relays && normalizeRelays(relays)),
@@ -255,6 +262,7 @@ export class RelayService {
       ingest: (events) => this.ingest(events),
       getWriteRelays: (pk) => this.getWriteRelays(pk),
       verify: opts.verify,
+      has: (id) => this.db.getById(id) !== undefined,
       recordSeen: (id, relay) => this.db.recordSeen(id, relay),
     });
     this.storage = opts.storage ?? null;
@@ -329,6 +337,7 @@ export class RelayService {
     filters: Filter[],
     sync: boolean,
     relays?: string[],
+    urgent?: boolean,
   ): void {
     const prev = this.interests.get(subId);
     let parts: Filter[][] = [filters];
@@ -341,7 +350,7 @@ export class RelayService {
       const delta = growthDelta(prev.filters, filters);
       if (delta) parts = delta.length ? [...prev.parts, delta] : prev.parts;
     }
-    this.interests.set(subId, { filters, sync, relays, parts });
+    this.interests.set(subId, { filters, sync, relays, urgent, parts });
     this.reconcile();
   }
 
@@ -358,8 +367,11 @@ export class RelayService {
     if (this.paused) return;
     // Union the per-interest relay hints across every interest that shares a
     // filter-hash, so one upstream sub reads from the combined hint set.
-    const desired = new Map<string, { filters: Filter[]; relays: string[] }>();
-    for (const { parts, sync, relays } of Array.from(
+    const desired = new Map<
+      string,
+      { filters: Filter[]; relays: string[]; urgent: boolean }
+    >();
+    for (const { parts, sync, relays, urgent } of Array.from(
       this.interests.values(),
     )) {
       if (!sync) continue;
@@ -370,29 +382,36 @@ export class RelayService {
           desired.set(key, {
             filters,
             relays: relays ? Array.from(new Set(relays)) : [],
+            urgent: !!urgent,
           });
-        } else if (relays) {
-          for (const r of relays)
-            if (!entry.relays.includes(r)) entry.relays.push(r);
+        } else {
+          if (urgent) entry.urgent = true;
+          if (relays) {
+            for (const r of relays)
+              if (!entry.relays.includes(r)) entry.relays.push(r);
+          }
         }
       }
     }
     // Open newly-wanted scopes, or REOPEN one whose relay-hint set changed (a
-    // later interest widened it) so the sub targets the current relays.
-    for (const [key, { filters, relays }] of Array.from(desired.entries())) {
+    // later interest widened it) so the sub targets the current relays. An
+    // urgency upgrade also re-declares, which moves its queued REQs to the front.
+    for (const [key, { filters, relays, urgent }] of Array.from(desired.entries())) {
       const existing = this.upstream.get(key);
       if (!existing) {
         this.upstream.set(key, {
           filters,
           relays,
-          handle: this.openSync(filters, relays),
+          urgent,
+          handle: this.openSync(filters, relays, urgent),
         });
-      } else if (!sameRelaySet(existing.relays, relays)) {
+      } else if (!sameRelaySet(existing.relays, relays) || (urgent && !existing.urgent)) {
         existing.handle?.close();
         this.upstream.set(key, {
           filters,
           relays,
-          handle: this.openSync(filters, relays),
+          urgent,
+          handle: this.openSync(filters, relays, urgent),
         });
       }
     }
@@ -510,6 +529,10 @@ export class RelayService {
       // that may live on relays the user isn't subscribed to.
       const id = this.pool.subscribe(relays, filters, {
         onEvent: (event, relay) => {
+          if (this.db.getById(event.id)) {
+            this.db.recordSeen(event.id, relay);
+            return;
+          }
           if (!this.verify(event)) return;
           this.ingest([event], false);
           this.db.recordSeen(event.id, relay);
@@ -535,7 +558,11 @@ export class RelayService {
    * reads — so a fetch reaches relays the app knows hold the data without
    * mutating the global gossip pool.
    */
-  private openSync(filters: Filter[], hintRelays: string[] = []): SyncHandle {
+  private openSync(
+    filters: Filter[],
+    hintRelays: string[] = [],
+    urgent = false,
+  ): SyncHandle {
     const handles: SyncHandle[] = [];
     for (const filter of filters) {
       const kinds = filter.kinds ?? [];
@@ -546,11 +573,15 @@ export class RelayService {
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
             onEvent: (event, relay) => {
+              if (this.db.getById(event.id)) {
+                this.db.recordSeen(event.id, relay);
+                return;
+              }
               if (!this.verify(event) || !matchFilter(event, filter)) return;
               this.ingest([event]);
               this.db.recordSeen(event.id, relay);
             },
-          });
+          }, { urgent });
           handles.push({ close: () => this.pool.unsubscribe(id) });
         }
       } else if (filter.authors && filter.authors.length) {
@@ -561,6 +592,7 @@ export class RelayService {
             authors: filter.authors,
             userRelays: this.userRelays,
             additionalRelays: hintRelays,
+            urgent,
           }),
         );
       } else {
@@ -571,11 +603,15 @@ export class RelayService {
         if (relays.length) {
           const id = this.pool.subscribe(relays, [filter], {
             onEvent: (event, relay) => {
+              if (this.db.getById(event.id)) {
+                this.db.recordSeen(event.id, relay);
+                return;
+              }
               if (!this.verify(event)) return;
               this.ingest([event]);
               this.db.recordSeen(event.id, relay);
             },
-          });
+          }, { urgent });
           handles.push({ close: () => this.pool.unsubscribe(id) });
         }
       }

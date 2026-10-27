@@ -116,6 +116,21 @@ describe("RelayConnection queue: priority", () => {
     conn.close("busy");
     expect(reqs()[1]).toEqual(["REQ", "app", { ids: [pk(1)] }]);
   });
+
+  it("sends a user-initiated urgent read ahead of queued standing work", () => {
+    const { f, conn, reqs } = setup({ maxSubscriptions: 1 });
+    conn.req("busy", [{ kinds: [1], limit: 5 }]);
+    conn.req("feed1", [{ kinds: [1], authors: [pk(1)], limit: 20 }]);
+    conn.req("feed2", [{ kinds: [1068], limit: 20 }]);
+    f.last(URL).open();
+    expect(reqs().map((m) => m[1])).toEqual(["busy"]);
+    // Opening a note from a notification / revealing poll results.
+    conn.req("urgent", [{ ids: [pk(9)] }], { urgent: true });
+    conn.close("busy");
+    expect(reqs().map((m) => m[1])).toEqual(["busy", "urgent"]);
+    conn.close("urgent");
+    expect(reqs().map((m) => m[1])).toEqual(["busy", "urgent", "feed1"]);
+  });
 });
 
 describe("RelayConnection queue: merging", () => {

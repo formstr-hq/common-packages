@@ -81,6 +81,12 @@ export type ToWorker =
        * polluting the global gossip pool.
        */
       relays?: string[];
+      /**
+       * User-initiated, latency-sensitive read (open a note from a notification,
+       * show poll results). Its upstream REQs jump ahead of standing feed work
+       * in each relay's queue and may preempt a caught-up long-lived sub.
+       */
+      urgent?: boolean;
     }
   /** Drop a standing interest (worker reconciles its connections). */
   | { kind: "unobserve"; subId: string }

@@ -24,6 +24,14 @@ export interface SyncEngineDeps {
   getWriteRelays: (pubkey: string) => string[];
   /** Signature verification; defaults to nostr-tools verifyEvent. */
   verify?: (event: Event) => boolean;
+  /**
+   * Cheap store lookup. When it returns true the event is already held, so we
+   * can skip Schnorr verification and ingestion entirely. The same event
+   * arrives from several relays (and again on every re-declared interest);
+   * re-verifying each copy was the worker's largest CPU cost in the 0.7.1
+   * feed-stall profile.
+   */
+  has?: (eventId: string) => boolean;
   /** Record which relay an ingested event was seen on (provenance). */
   recordSeen?: (eventId: string, relay: string) => void;
 }
@@ -35,6 +43,8 @@ export type FetchSpec = Filter & {
   /** Explicit per-query relays, always queried outside outbox relay caps. */
   additionalRelays?: string[];
   eoseDeadlineMs?: number;
+  /** User-initiated read: jump the per-relay queue ahead of standing feeds. */
+  urgent?: boolean;
 };
 
 export interface SyncHandle {
@@ -55,7 +65,13 @@ export class SyncEngine {
   * `close()`. `onEose` fires once when every relay bucket has completed.
   */
   fetch(spec: FetchSpec, onEose?: () => void): SyncHandle {
-    const { userRelays, additionalRelays = [], eoseDeadlineMs, ...baseFilter } = spec;
+    const {
+      userRelays,
+      additionalRelays = [],
+      eoseDeadlineMs,
+      urgent,
+      ...baseFilter
+    } = spec;
     const plan = buildRelayQueryPlan(spec.authors, userRelays, this.deps.getWriteRelays, {
       additionalRelays,
     });
@@ -109,13 +125,18 @@ export class SyncEngine {
         [filter],
         {
           onEvent: (event, relay) => {
+            // Already held: record provenance, but never re-verify/re-ingest.
+            if (this.deps.has?.(event.id)) {
+              this.deps.recordSeen?.(event.id, relay);
+              return;
+            }
             if (!this.verify(event)) return; // drop forged/garbage
             buffer.push({ event, relay });
             scheduleFlush();
           },
           onEose: onBucketEose,
         },
-        { eoseDeadlineMs }
+        { eoseDeadlineMs, urgent }
       );
       subIds.push(id);
     }

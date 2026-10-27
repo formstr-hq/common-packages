@@ -52,6 +52,13 @@ export interface ObserveOptions {
    * global gossip pool.
    */
   relays?: string[];
+  /**
+   * User-initiated, latency-sensitive read (opening a note from a notification,
+   * revealing poll results). Its upstream REQs jump the per-relay queue ahead of
+   * standing feed/profile work. Cache replay is unaffected (it always comes
+   * first), so this only matters when the data has to come from the network.
+   */
+  urgent?: boolean;
 }
 
 export interface ObserveHandle {

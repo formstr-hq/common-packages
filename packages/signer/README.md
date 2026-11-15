@@ -35,6 +35,43 @@ const active = signer.getActiveSigner()!;
 const signed = await active.signEvent({ kind: 1, content: 'gm', tags: [], created_at: 0 });
 ```
 
+## Browser extension detection
+
+`hasNostrExtension(): boolean` checks that `window.nostr` exposes callable
+`getPublicKey` and `signEvent` methods without invoking either. It returns
+`false` outside a browser. Availability does not guarantee permission to sign;
+extension requests can still be rejected by the user.
+
+`watchNostrExtension(onChange): () => void` immediately reports availability,
+then checks every 500ms and whenever the window gains focus. It reports only
+changes after the initial notification, including late injection after page load,
+site access being enabled, and provider removal. Outside a browser it reports
+`false` once and schedules nothing.
+
+The built-in login UI starts observation in `attachLoginListeners()` and stops
+it in `detach()`. Status updates preserve inputs and the selected tab; the
+extension login action remains available for retries. Custom UIs can use:
+
+```ts
+import { hasNostrExtension, watchNostrExtension } from '@formstr/signer';
+
+const stopWatching = watchNostrExtension((available) => {
+  status.textContent = available
+    ? 'Extension ready'
+    : 'Install a NIP-07 extension or enable access to this website, then retry.';
+});
+
+async function connectExtension() {
+  if (!hasNostrExtension()) {
+    throw new Error('Enable extension access to this website, then retry.');
+  }
+  await signer.loginWithExtension();
+}
+
+// Call when the custom login UI closes/unmounts:
+stopWatching(); // removes the polling interval and focus listener
+```
+
 ## Account model
 
 A `StoredAccount` is the persisted record for one identity. Accounts survive page reloads via the configured `StorageAdapter`. Listing, switching, and removing are independent of unlock state.

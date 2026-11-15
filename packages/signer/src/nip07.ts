@@ -15,11 +15,46 @@ export interface WindowNostr {
   };
 }
 
+function isNostrProvider(provider: unknown): provider is WindowNostr {
+  const nostr = provider as Partial<WindowNostr> | null | undefined;
+  return typeof nostr?.getPublicKey === 'function' && typeof nostr?.signEvent === 'function';
+}
+
+/** Check capabilities without prompting the extension or requesting permissions. */
+export function hasNostrExtension(): boolean {
+  if (typeof window === 'undefined') return false;
+  return isNostrProvider((window as { nostr?: unknown }).nostr);
+}
+
+/** Observe late injection, removal, and site-access changes until cleaned up. */
+export function watchNostrExtension(onChange: (available: boolean) => void): () => void {
+  let available = hasNostrExtension();
+  onChange(available);
+  if (typeof window === 'undefined') return () => {};
+  const browser = window;
+  const check = (): void => {
+    const next = hasNostrExtension();
+    if (next !== available) {
+      available = next;
+      onChange(next);
+    }
+  };
+  const timer = browser.setInterval(check, 500);
+  browser.addEventListener('focus', check);
+  return () => {
+    browser.clearInterval(timer);
+    browser.removeEventListener('focus', check);
+  };
+}
+
 export function getWindowNostr(): WindowNostr {
-  const nostr = (globalThis as { nostr?: WindowNostr }).nostr;
-  if (!nostr) {
+  // Preserve support for explicitly supplied global providers outside browsers.
+  const nostr = typeof window === 'undefined'
+    ? (globalThis as { nostr?: unknown }).nostr
+    : (window as { nostr?: unknown }).nostr;
+  if (!isNostrProvider(nostr)) {
     throw new Error(
-      '@formstr/signer: NIP-07 extension not found (globalThis.nostr is undefined)',
+      '@formstr/signer: NIP-07 extension unavailable. Install a NIP-07 extension or enable its access to the current website, then retry.',
     );
   }
   return nostr;

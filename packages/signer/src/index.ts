@@ -21,7 +21,13 @@ export {
   generateAccount,
   type GeneratedAccount,
 } from './nip49.js';
-export { ExtensionSigner, getWindowNostr, type WindowNostr } from './nip07.js';
+export {
+  ExtensionSigner,
+  getWindowNostr,
+  hasNostrExtension,
+  watchNostrExtension,
+  type WindowNostr,
+} from './nip07.js';
 export {
   AndroidSigner,
   loginWithAndroidSigner,

@@ -1,9 +1,16 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import QRCode from 'qrcode';
-import { renderLoginHtml, attachLoginListeners } from '../src/ui/index.js';
+import { renderLoginHtml, attachLoginListeners as attach } from '../src/ui/index.js';
 import type { Signer } from '../src/core/signer.js';
 import type { StoredAccount } from '../src/core/types.js';
+
+const bindings: ReturnType<typeof attach>[] = [];
+const attachLoginListeners: typeof attach = (...args) => {
+  const binding = attach(...args);
+  bindings.push(binding);
+  return binding;
+};
 
 interface MockSigner {
   createAccount: ReturnType<typeof vi.fn>;
@@ -53,6 +60,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const binding of bindings.splice(0)) binding.detach();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   root.remove();
 });
 
@@ -312,6 +323,9 @@ describe('attachLoginListeners', () => {
   });
 
   describe('extension flow', () => {
+    beforeEach(() => {
+      vi.stubGlobal('nostr', { getPublicKey: vi.fn(), signEvent: vi.fn() });
+    });
     it('calls loginWithExtension and fires onLogin', async () => {
       const account = fakeAccount('extension');
       const signer = makeSignerStub();
@@ -853,5 +867,107 @@ describe('attachLoginListeners', () => {
       ).toBe(true);
       expect(onError).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('reactive extension login', () => {
+  const status = () => root.querySelector<HTMLElement>('[data-region="extension-status"]')!;
+  const click = () => root.querySelector<HTMLButtonElement>('[data-action="extension-login"]')!.click();
+  const inject = () => vi.stubGlobal('nostr', { getPublicKey: vi.fn(), signEvent: vi.fn() });
+
+  it('rejects unavailable providers through onError and allows immediate retry after injection', async () => {
+    vi.stubGlobal('nostr', {});
+    const stub = makeSignerStub();
+    const account = fakeAccount('extension');
+    stub.loginWithExtension.mockResolvedValue(account);
+    const onError = vi.fn();
+    const onLogin = vi.fn();
+    attachLoginListeners(root, asSigner(stub), { onError, onLogin });
+    expect(status().textContent).toContain('No usable NIP-07');
+    expect(root.querySelector<HTMLButtonElement>('[data-action="extension-login"]')!.disabled).toBe(false);
+    click();
+    expect(stub.loginWithExtension).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('enable its access') }));
+    expect(root.querySelector('[data-region="error"]')!.textContent).not.toContain('TypeError');
+    inject();
+    click();
+    await flush();
+    expect(onLogin).toHaveBeenCalledWith(account);
+    expect(root.querySelector<HTMLElement>('[data-region="error"]')!.hidden).toBe(true);
+  });
+
+  it('updates status in place without changing other tabs or their input values', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('nostr', undefined);
+    const binding = attachLoginListeners(root, asSigner(makeSignerStub()));
+    binding.selectTab('bunker');
+    const uri = root.querySelector<HTMLTextAreaElement>('[name="uri"]')!;
+    uri.value = 'bunker://entered';
+    const node = status();
+    inject();
+    vi.advanceTimersByTime(500);
+    expect(status()).toBe(node);
+    expect(node.textContent).toContain('extension detected');
+    expect(uri.value).toBe('bunker://entered');
+    expect(root.querySelector<HTMLElement>('[data-panel="bunker"]')!.hidden).toBe(false);
+    vi.stubGlobal('nostr', undefined);
+    window.dispatchEvent(new Event('focus'));
+    expect(node.textContent).toContain('No usable NIP-07');
+    binding.detach();
+    expect(vi.getTimerCount()).toBe(0);
+    inject();
+    window.dispatchEvent(new Event('focus'));
+    vi.advanceTimersByTime(1000);
+    expect(node.textContent).toContain('No usable NIP-07');
+  });
+
+  it('rechecks availability at click time when a previously detected provider disappears', () => {
+    inject();
+    const stub = makeSignerStub();
+    const onError = vi.fn();
+    attachLoginListeners(root, asSigner(stub), { onError });
+    expect(status().textContent).toContain('extension detected');
+    vi.stubGlobal('nostr', undefined);
+    click();
+    expect(stub.loginWithExtension).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports existing custom markup without the new status region', () => {
+    root.querySelector('[data-region="extension-status"]')!.remove();
+    const binding = attachLoginListeners(root, asSigner(makeSignerStub()));
+    expect(binding).toBeTruthy();
+    binding.detach();
+  });
+
+  it('replaces a binding on the same root without duplicating watchers or handlers', async () => {
+    vi.useFakeTimers();
+    inject();
+    const stub = makeSignerStub();
+    stub.loginWithExtension.mockResolvedValue(fakeAccount('extension'));
+    const first = attachLoginListeners(root, asSigner(stub));
+    const second = attachLoginListeners(root, asSigner(stub));
+    first.detach();
+    expect(vi.getTimerCount()).toBe(1);
+    click();
+    await Promise.resolve();
+    expect(stub.loginWithExtension).toHaveBeenCalledTimes(1);
+    second.detach();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not update errors or call login callbacks after detach during a pending login', async () => {
+    inject();
+    const stub = makeSignerStub();
+    let reject!: (error: Error) => void;
+    stub.loginWithExtension.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const onError = vi.fn();
+    const binding = attachLoginListeners(root, asSigner(stub), { onError });
+    click();
+    binding.detach();
+    reject(new Error('late rejection'));
+    await flush();
+    expect(onError).not.toHaveBeenCalled();
+    expect(root.querySelector<HTMLElement>('[data-region="error"]')!.hidden).toBe(true);
   });
 });

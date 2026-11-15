@@ -58,7 +58,7 @@ describe('NIP-07 (window.nostr extension)', () => {
   it('loginWithExtension throws when window.nostr is unavailable', async () => {
     g.nostr = undefined;
     const s = createSigner({ storage: makeMockStorage() });
-    await expect(s.loginWithExtension()).rejects.toThrow(/NIP-07 extension not found/);
+    await expect(s.loginWithExtension()).rejects.toThrow(/NIP-07 extension unavailable/);
   });
 
   it('loginWithExtension creates an extension-method account with the pubkey from the extension', async () => {

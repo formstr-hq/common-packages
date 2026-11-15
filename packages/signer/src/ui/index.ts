@@ -1,3 +1,4 @@
+import { getWindowNostr, hasNostrExtension, watchNostrExtension } from '../nip07.js';
 import QRCode from 'qrcode';
 import type { AbstractSimplePool } from 'nostr-tools/abstract-pool';
 import type { Signer } from '../core/signer.js';
@@ -116,7 +117,7 @@ export function renderLoginHtml(options: RenderLoginOptions = {}): string {
         </form>
       </section>
       <section class="nostr-signer__panel nostr-signer__panel--extension" data-panel="extension" hidden>
-        <p class="nostr-signer__hint">Requires a NIP-07 browser extension (nos2x, Alby, etc.).</p>
+        <p class="nostr-signer__hint" data-region="extension-status" role="status">No usable NIP-07 extension detected. Install an extension or enable its access to this website, then retry.</p>
         <button class="nostr-signer__button nostr-signer__button--primary" type="button" data-action="extension-login">Sign in with extension</button>
       </section>
       <section class="nostr-signer__panel nostr-signer__panel--bunker" data-panel="bunker" hidden>
@@ -165,12 +166,16 @@ export function renderLoginHtml(options: RenderLoginOptions = {}): string {
 </div>`;
 }
 
+const loginBindings = new WeakMap<HTMLElement, LoginUiBinding>();
+
 export function attachLoginListeners(
   rootEl: HTMLElement,
   signer: Signer,
   handlers: LoginUiHandlers = {},
 ): LoginUiBinding {
+  loginBindings.get(rootEl)?.detach();
   const detachers: Array<() => void> = [];
+  let detached = false;
   let nostrConnectAbort: AbortController | null = null;
   let nip55WebAbort: AbortController | null = null;
 
@@ -311,14 +316,24 @@ export function attachLoginListeners(
     }
   });
 
+  // Update only the status node so values in other tabs remain untouched.
+  const extensionStatus = q<HTMLElement>('[data-region="extension-status"]');
+  detachers.push(watchNostrExtension((available) => {
+    if (!extensionStatus) return;
+    extensionStatus.textContent = available
+      ? 'NIP-07 extension detected. Your extension will ask for permission to sign in.'
+      : 'No usable NIP-07 extension detected. Install an extension or enable its access to this website, then retry.';
+  }));
+
   // ---- extension ----
   on(q('[data-action="extension-login"]'), 'click', async () => {
     clearError();
     try {
+      if (!hasNostrExtension()) getWindowNostr();
       const account = await signer.loginWithExtension();
-      handlers.onLogin?.(account);
+      if (!detached) handlers.onLogin?.(account);
     } catch (err) {
-      showError(err as Error);
+      if (!detached) showError(err as Error);
     }
   });
 
@@ -447,12 +462,17 @@ export function attachLoginListeners(
     resetNostrConnect();
   });
 
-  return {
+  const binding: LoginUiBinding = {
     detach: () => {
+      if (detached) return;
+      detached = true;
+      loginBindings.delete(rootEl);
       nostrConnectAbort?.abort();
       nip55WebAbort?.abort();
       for (const d of detachers) d();
     },
     selectTab,
   };
+  loginBindings.set(rootEl, binding);
+  return binding;
 }

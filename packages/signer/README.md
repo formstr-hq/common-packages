@@ -35,6 +35,28 @@ const active = signer.getActiveSigner()!;
 const signed = await active.signEvent({ kind: 1, content: 'gm', tags: [], created_at: 0 });
 ```
 
+### Blanket permissions (`defaultPerms`)
+
+A remote signer normally prompts for each new operation. To get one approval up
+front for everything an app always does, set `defaultPerms` — the NIP-46 perm
+list is then sent on every `connect` (both `bunker://` and `nostrconnect://`),
+and the signer caches the grant against the client pubkey:
+
+```ts
+const signer = createSigner({
+  appName: 'My App',
+  // method[:params] — request blanket decrypt + the kinds this app signs
+  defaultPerms: ['nip44_encrypt', 'nip44_decrypt', 'sign_event:13', 'sign_event:5'],
+});
+```
+
+A per-call `perms` argument wins outright, and an explicit `[]` means "request
+nothing". This affects NIP-46 only: **NIP-55 has no equivalent** — the browser
+(NIP-55 web) flow cannot call the signer in the background at all, and the
+Android plugin's `permissions` argument is honoured only by its Content
+Resolver path, which requires the user to have ticked "remember my choice" per
+request in the signer app.
+
 ## Account model
 
 A `StoredAccount` is the persisted record for one identity. Accounts survive page reloads via the configured `StorageAdapter`. Listing, switching, and removing are independent of unlock state.

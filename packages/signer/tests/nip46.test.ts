@@ -106,6 +106,49 @@ describe('NIP-46 (bunker URI flow)', () => {
     ]);
   });
 
+  it('sends the host default perms when the caller passes none', async () => {
+    const pool = new MockPool();
+    const bunker = new MockBunker({ pool, relays: [RELAY] });
+    const s = createSigner({
+      storage: makeMockStorage(),
+      defaultPerms: ['nip44_decrypt', 'sign_event:13'],
+    });
+    await s.loginWithBunkerUri(bunker.buildBunkerUri(), { pool: pool.asPool() });
+    expect(bunker.lastConnectParams).toEqual([
+      bunker.bunkerPubkey,
+      '',
+      'nip44_decrypt,sign_event:13',
+    ]);
+  });
+
+  it('lets an explicit per-call list override the host default', async () => {
+    const pool = new MockPool();
+    const bunker = new MockBunker({ pool, relays: [RELAY] });
+    const s = createSigner({
+      storage: makeMockStorage(),
+      defaultPerms: ['nip44_decrypt'],
+    });
+    await s.loginWithBunkerUri(bunker.buildBunkerUri(), {
+      pool: pool.asPool(),
+      perms: ['sign_event:5'],
+    });
+    expect(bunker.lastConnectParams).toEqual([bunker.bunkerPubkey, '', 'sign_event:5']);
+  });
+
+  it('an explicit empty list means "request nothing", overriding the default', async () => {
+    const pool = new MockPool();
+    const bunker = new MockBunker({ pool, relays: [RELAY] });
+    const s = createSigner({
+      storage: makeMockStorage(),
+      defaultPerms: ['nip44_decrypt'],
+    });
+    await s.loginWithBunkerUri(bunker.buildBunkerUri(), {
+      pool: pool.asPool(),
+      perms: [],
+    });
+    expect(bunker.lastConnectParams).toEqual([bunker.bunkerPubkey, '', '']);
+  });
+
   it('round-trips nip44 in both directions between the bunker-backed signer and a peer', async () => {
     const pool = new MockPool();
     const userSecretKey = generateSecretKey();
@@ -478,6 +521,55 @@ describe('NIP-46 (nostrconnect QR flow)', () => {
       expect(params.get('url')).toBe('https://config.example');
       expect(params.get('image')).toBe('https://config.example/icon.png');
       void qs; // silence unused
+      ac.abort();
+      await loginPromise;
+    });
+
+    it('carries the host default perms in the nostrconnect URI', async () => {
+      const pool = new MockPool();
+      const s = createSigner({
+        storage: makeMockStorage(),
+        appName: 'config-app',
+        defaultPerms: ['nip44_decrypt', 'sign_event:13'],
+      });
+      const onUri = vi.fn();
+      const ac = new AbortController();
+      const loginPromise = s
+        .loginWithNostrConnect({
+          relays: [RELAY],
+          onUri,
+          pool: pool.asPool(),
+          signal: ac.signal,
+        })
+        .catch(() => undefined);
+      const uri: string = onUri.mock.calls[0][0];
+      expect(new URLSearchParams(uri.split('?')[1]).get('perms')).toBe(
+        'nip44_decrypt,sign_event:13',
+      );
+      ac.abort();
+      await loginPromise;
+    });
+
+    it('an explicit per-call perms list overrides the host default', async () => {
+      const pool = new MockPool();
+      const s = createSigner({
+        storage: makeMockStorage(),
+        appName: 'config-app',
+        defaultPerms: ['nip44_decrypt'],
+      });
+      const onUri = vi.fn();
+      const ac = new AbortController();
+      const loginPromise = s
+        .loginWithNostrConnect({
+          relays: [RELAY],
+          onUri,
+          pool: pool.asPool(),
+          signal: ac.signal,
+          perms: ['sign_event:5'],
+        })
+        .catch(() => undefined);
+      const uri: string = onUri.mock.calls[0][0];
+      expect(new URLSearchParams(uri.split('?')[1]).get('perms')).toBe('sign_event:5');
       ac.abort();
       await loginPromise;
     });
